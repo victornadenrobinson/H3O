@@ -4,7 +4,9 @@ usage: python 00_mine_outcars.py old_inventory.csv new_inventory.csv [--workers 
 Candidate paths = old inventory rows whose path parses to a H-O composition, or contains a
 h3o/clathrate/c3 keyword (use --all to mine everything). Composition/elements come from the
 OUTCAR itself (VRHFIN + 'ions per type'); non-H/O runs are flagged in Other.
-Pressure: last 'external pressure' (kB) -> GPa. Run on a compute node.
+All runs are NVT, so pressure is a statistical average: P_GPa = mean of 'external pressure' (kB -> GPa)
+over the 2nd half of the run (first half = equilibration), with std and step count. Volume is fixed;
+V per atom is reported since density is the control variable. Reads whole files: use a compute node.
 """
 import argparse, os, re, subprocess, sys
 from multiprocessing import Pool
@@ -12,13 +14,24 @@ import pandas as pd
 from common import parse_composition, progress
 
 KEYS = ("h3o", "clathrate", "calthrate", "c3-", "/c3", "h2o", "h2-")
-HEAD_N, TAIL_N = 3000, 4000
+HEAD_N = 3000
 
 
 def stream(path, mode):
     cmd = ["gzip", "-dc", path] if path.endswith(".gz") else ["cat", path]
     p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p2 = subprocess.Popen([mode[0], "-n", str(mode[1])], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p1.stdout.close()
+    out = p2.communicate()[0].decode(errors="replace")
+    p1.wait()
+    return out
+
+
+def grep_lines(path):
+    cmd = ["gzip", "-dc", path] if path.endswith(".gz") else ["cat", path]
+    p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|volume of cell"], stdin=p1.stdout,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p1.stdout.close()
     out = p2.communicate()[0].decode(errors="replace")
     p1.wait()
@@ -38,13 +51,16 @@ def mine(path, root=""):
     try:
         head = stream(full, ("head", HEAD_N))
         el, cnt, T = parse_head(head)
-        tail = stream(full, ("tail", TAIL_N))
-        P = re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)
+        tail = grep_lines(full)
+        P = [float(x) for x in re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
+        P2 = P[len(P) // 2:]
         d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
         other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O"))
-        return dict(Path=path, True_T_K=T, True_P_GPa=float(P[-1]) * 0.1 if P else None,
-                    True_V_A3=float(V[-1]) if V else None, N_H=d.get("H", 0), N_O=d.get("O", 0),
+        return dict(Path=path, True_T_K=T, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
+                    P_std_GPa=(pd.Series(P2).std() * 0.1) if len(P2) > 1 else None, N_steps=len(P),
+                    True_V_A3=float(V[-1]) if V else None,
+                    V_per_atom=float(V[-1]) / sum(cnt) if V and cnt else None, N_H=d.get("H", 0), N_O=d.get("O", 0),
                     Other=other, N_ions=sum(cnt))
     except Exception as e:
         return dict(Path=path, Other=f"ERR:{e}")
