@@ -43,6 +43,19 @@ def main(inv_path, hull_path=None):
     df = load_inventory(inv_path)
     df.to_csv("inventory_binned.csv", index=False)
     print(f"{len(df)} runs; unknown composition: {(df.comp == 'unknown').sum()}")
+    print("\nP (GPa) percentiles:", df.True_P_GPa.quantile([0, .05, .25, .5, .75, .95, 1]).round(1).tolist())
+    print("T (K) percentiles:", df.True_T_K.quantile([0, .05, .25, .5, .75, .95, 1]).round(0).tolist())
+    print("P<=0 or V missing:", int((df.True_P_GPa <= 0).sum()), int(df.True_V_A3.isna().sum()))
+    print("\nruns per T bin (all):\n", df.T_bin.value_counts().sort_index().to_string())
+    print("\nruns per 100-GPa bin (all):\n", (np.floor(df.True_P_GPa / 100) * 100).astype(int).value_counts().sort_index().to_string())
+    print("\nruns per composition:\n", df.comp.value_counts().to_string())
+    print("\n=== ALL T x P(100 GPa bins), runs ===")
+    df["P100"] = (np.floor(df.True_P_GPa / 100) * 100).astype(int)
+    print(df.pivot_table(index="T_bin", columns="P100", values="Path", aggfunc="count", fill_value=0).to_string())
+    unk = df[df.comp == "unknown"]
+    if len(unk):
+        unk.Path.sample(min(30, len(unk)), random_state=0).to_csv("unknown_comp_sample.txt", index=False, header=False)
+        print("\nsample of unknown-composition paths -> unknown_comp_sample.txt")
     for T in ISOTHERMS:
         s = df[(df.T_bin == T) & df.True_P_GPa.between(P_MIN, P_MAX)]
         print(f"\n=== {T} K, {P_MIN:.0f}-{P_MAX:.0f} GPa (runs per comp x P bin) ===")
