@@ -8,6 +8,7 @@ Energy label = VASP free energy (force-consistent); E(sigma->0) kept in info['en
 Stress is stored as full 3x3 (ASE convention, eV/A^3, excludes the ions' kinetic term).
 """
 import argparse
+import hashlib
 import os
 from multiprocessing import Pool
 import numpy as np
@@ -16,6 +17,8 @@ from ase.io import read, write
 from common import progress, out, inp
 
 MIN_STEP_GAP = 50
+CACHE_VERSION = "v2-free-energy"   # bump when the frame content/label convention changes: invalidates all cached runs
+CACHE_DIR = None                   # set from --cache-dir; None disables caching
 
 
 def spread_order(n):
@@ -32,7 +35,34 @@ def spread_order(n):
     return order + [j for j in range(n) if j not in order]
 
 
+def cache_file(path, n, root):
+    """Cache entry for one OUTCAR: keyed by path, size, mtime, frame-selection params and label convention."""
+    if not CACHE_DIR:
+        return None
+    try:
+        st = os.stat(os.path.join(root, path))
+    except OSError:
+        return None
+    key = hashlib.sha1(f"{CACHE_VERSION}|{path}|{st.st_size}|{st.st_mtime_ns}|{n}|{MIN_STEP_GAP}".encode()).hexdigest()
+    return os.path.join(CACHE_DIR, key[:2], key + ".extxyz")
+
+
 def pick(path, n, root=""):
+    cf = cache_file(path, n, root)
+    if cf and os.path.exists(cf):
+        try:
+            return path, read(cf, index=":"), None
+        except Exception:
+            pass  # corrupt cache entry: fall through and recompute
+    res = _pick(path, n, root)
+    if cf and res[2] is None and res[1]:
+        os.makedirs(os.path.dirname(cf), exist_ok=True)
+        tmp = f"{cf}.{os.getpid()}.tmp"
+        write(tmp, res[1], format="extxyz"); os.replace(tmp, cf)
+    return res
+
+
+def _pick(path, n, root=""):
     try:
         frames = read(os.path.join(root, path), index=":", format="vasp-out")
     except Exception as e:
@@ -55,6 +85,11 @@ def pick(path, n, root=""):
         res["stress"] = a.get_stress(voigt=False)
         out.append(a)
     return path, out, None
+
+
+def _set_cache(d):
+    global CACHE_DIR
+    CACHE_DIR = d
 
 
 def pick_star(args):
@@ -87,17 +122,23 @@ if __name__ == "__main__":
     ap.add_argument("--pmin", type=float, default=200.0); ap.add_argument("--pmax", type=float, default=1450.0)
     ap.add_argument("--tmin", type=float, default=2000.0)
     ap.add_argument("--max-pstd", type=float, default=20.0)
+    ap.add_argument("--cache-dir", default=None, help="per-run frame cache (default: runs/cache); reruns only extract new/changed OUTCARs")
+    ap.add_argument("--no-cache", action="store_true", help="ignore and do not write the cache")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
     tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]
     a.max_runs = max(t[1] for t in tiers); a.per_run = max(t[2] for t in tiers)
     root = os.path.abspath(os.path.expanduser(a.root))
+    CACHE_DIR = None if a.no_cache else (os.path.expanduser(a.cache_dir) if a.cache_dir else out("cache"))
     df = select(pd.read_csv(inp(a.inv)), a)
     meta = df.set_index("Path")
+    if CACHE_DIR:
+        have = sum(1 for p in df.Path if (cf := cache_file(p, a.per_run, root)) and os.path.exists(cf))
+        print(f"cache {CACHE_DIR}: {have} of {len(df)} selected runs already cached")
     print(f"{len(df)} runs selected in {df.groupby(['comp_snap', 'T_bin']).ngroups} (composition, T) states")
     print(df.pivot_table(index="comp_snap", columns="T_bin", values="Path", aggfunc="count", fill_value=0).to_string())
     allf = []
-    with Pool(a.workers) as p:
+    with Pool(a.workers, initializer=_set_cache, initargs=(CACHE_DIR,)) as p:
         for path, fr, err in progress(p.imap(pick_star, [(x, a.per_run, root) for x in df.Path]), total=len(df), desc="extracting"):
             if err:
                 print("skip", path, err); continue
