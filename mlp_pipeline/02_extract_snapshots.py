@@ -5,6 +5,7 @@ Frames: evenly spaced from the 2nd half of each run, >= MIN_STEP_GAP MD steps ap
 Stress is stored as full 3x3 (ASE convention, eV/A^3).
 """
 import argparse
+import os
 from multiprocessing import Pool
 import numpy as np
 import pandas as pd
@@ -14,9 +15,9 @@ from common import progress
 MIN_STEP_GAP = 50
 
 
-def pick(path, n):
+def pick(path, n, root=""):
     try:
-        frames = read(path, index=":", format="vasp-out")
+        frames = read(os.path.join(root, path), index=":", format="vasp-out")
     except Exception as e:
         return path, [], str(e)
     L = len(frames)
@@ -35,7 +36,7 @@ def pick(path, n):
 
 
 def pick_star(args):
-    return pick(*args)
+    return pick(*args)  # (path, n, root)
 
 
 def select(df, a):
@@ -60,19 +61,21 @@ if __name__ == "__main__":
     ap.add_argument("inv"); ap.add_argument("out")
     ap.add_argument("--per-run", type=int, default=5)
     ap.add_argument("--workers", type=int, default=32)
+    ap.add_argument("--root", default="~/work", help="dir that inventory paths are relative to")
     ap.add_argument("--pmin", type=float, default=200.0); ap.add_argument("--pmax", type=float, default=1450.0)
     ap.add_argument("--tmin", type=float, default=2000.0)
     ap.add_argument("--max-runs", type=int, default=6, help="runs per (composition, T bin, 100 GPa bin)")
     ap.add_argument("--max-pstd", type=float, default=20.0)
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
+    root = os.path.abspath(os.path.expanduser(a.root))
     df = select(pd.read_csv(a.inv), a)
     meta = df.set_index("Path")
     print(f"{len(df)} runs selected in {df.groupby(['comp_snap', 'T_bin']).ngroups} (composition, T) states")
     print(df.pivot_table(index="comp_snap", columns="T_bin", values="Path", aggfunc="count", fill_value=0).to_string())
     allf = []
     with Pool(a.workers) as p:
-        for path, fr, err in progress(p.imap(pick_star, [(x, a.per_run) for x in df.Path]), total=len(df), desc="extracting"):
+        for path, fr, err in progress(p.imap(pick_star, [(x, a.per_run, root) for x in df.Path]), total=len(df), desc="extracting"):
             if err:
                 print("skip", path, err); continue
             m = meta.loc[path]
