@@ -100,6 +100,11 @@ def select(df, a):
     """Quality-filtered, state-balanced run selection. Uses the P-corrected inventory from 01 (inventory_binned.csv)."""
     d = df[df.good & (df.comp_snap != "unknown")]
     d = d[d.True_P_GPa.between(a.pmin, a.pmax) & (d.True_T_K >= a.tmin) & (d.P_std_GPa.fillna(0) <= a.max_pstd)]
+    if a.min_box:
+        box = d.True_V_A3 ** (1 / 3)
+        print(f"--min-box {a.min_box} A: dropping {int((box < a.min_box).sum())} of {len(d)} runs (cells smaller than the 9-12 A rule); "
+              f"box edge range kept {box[box >= a.min_box].min():.1f}-{box.max():.1f} A")
+        d = d[box >= a.min_box]
     lam = d.Path.str.contains("lambda_", case=False)
     keep = d.Path.str.contains(a.lambda_keep) if a.lambda_keep else pd.Series(False, index=d.index)
     d = d[~lam | keep]
@@ -124,6 +129,7 @@ if __name__ == "__main__":
     ap.add_argument("--max-pstd", type=float, default=20.0)
     ap.add_argument("--cache-dir", default=None, help="per-run frame cache (default: runs/cache); reruns only extract new/changed OUTCARs")
     ap.add_argument("--no-cache", action="store_true", help="ignore and do not write the cache")
+    ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
     tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]
@@ -144,7 +150,7 @@ if __name__ == "__main__":
                 print("skip", path, err); continue
             m = meta.loc[path]
             for f in fr:
-                f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa),
+                f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa), box_A=round(float(m.True_V_A3) ** (1 / 3), 3),
                               run_rank=int(m.run_rank))
             allf += fr
     for name, nr, nf in tiers:
