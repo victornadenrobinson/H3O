@@ -54,23 +54,26 @@ def main(a):
     frames = read(inp(a.data), index=":")
     meta = {}
     for f in frames:
-        s = f.info["source"]; m = meta.setdefault(s, dict(frames=0, comp=f.info.get("config_type", "?").rsplit("_", 1)[0], T=int(f.info.get("T_K", 0)), atoms=len(f)))
+        s = f.info["source"]; m = meta.setdefault(s, dict(frames=0, comp=f.info.get("config_type", "?").rsplit("_", 1)[0], T=int(f.info.get("T_K", 0)), atoms=len(f), box=f.get_volume() ** (1 / 3)))
         m["frames"] += 1
     root = os.path.abspath(os.path.expanduser(a.root))
     with Pool(a.workers) as p:
         rows = list(progress(p.imap(partial(one, root=root), list(meta), chunksize=4), total=len(meta), desc="headers"))
     df = pd.DataFrame(rows)
-    for k in ("frames", "comp", "T", "atoms"):
+    for k in ("frames", "comp", "T", "atoms", "box"):
         df[k] = df.source.map(lambda s: meta[s][k])
     key = ["ENCUT", "ISMEAR", "SIGMA", "PREC", "kmesh", "NKPTS", "gamma_only_build", "LASPH", "LREAL", "ISPIN", "potcars"]
     df[key] = df[key].astype(object).where(df[key].notna(), "-")
     df["settings"] = df[key].astype(str).agg(" | ".join, axis=1)
+    # effective sampling length: box edge (V^1/3) x largest k-mesh dimension (gamma-only -> 1): ~ size of the equivalent Gamma-point supercell
+    df["eff_L"] = [b * (max(int(x) for x in str(k).split("x")) if k not in ("-", None) and "x" in str(k) else 1) for b, k in zip(df.box, df.kmesh)]
     ids = {s: i for i, s in enumerate(df.settings.value_counts().index)}
     df["settings_id"] = df.settings.map(ids)
     df.to_csv(out("dft_settings.csv"), index=False)
     print(f"{len(df)} runs, {df.frames.sum()} frames, {len(ids)} distinct setting groups ({int(df.get('error', pd.Series()).notna().sum())} unreadable)\n")
     g = df.groupby("settings_id").agg(runs=("source", "size"), frames=("frames", "sum"), comps=("comp", lambda x: ",".join(sorted(set(x))[:6])),
-                                      T=("T", lambda x: f"{min(x)}-{max(x)}"), atoms=("atoms", lambda x: f"{min(x)}-{max(x)}"))
+                                      T=("T", lambda x: f"{min(x)}-{max(x)}"), atoms=("atoms", lambda x: f"{min(x)}-{max(x)}"),
+                                      box_A=("box", lambda x: f"{min(x):.1f}-{max(x):.1f}"), effL_A=("eff_L", lambda x: f"{min(x):.1f}-{max(x):.1f}"))
     g["settings"] = [df[df.settings_id == i].settings.iloc[0] for i in g.index]
     pd.set_option("display.width", 250); pd.set_option("display.max_colwidth", 120)
     print(g.to_string())
@@ -79,6 +82,10 @@ def main(a):
         v = df[k].astype(str).value_counts()
         if len(v) > 1:
             print(f"  {k}: " + ", ".join(f"{i} ({n})" for i, n in v.head(8).items()))
+    out_rule = df[(df.eff_L < 9) | (df.eff_L > 12.5)]
+    print(f"\nruns with effective sampling length outside 9-12.5 A: {len(out_rule)} of {len(df)} ({out_rule.frames.sum()} frames)")
+    if len(out_rule):
+        print(out_rule.groupby(["comp", "T"]).agg(runs=("source", "size"), L=("eff_L", lambda x: f"{x.min():.1f}-{x.max():.1f}")).to_string())
     print("\nexample sources of each minority group (id>0):")
     for i in sorted(ids.values())[1:6]:
         print(f"  [{i}] {df[df.settings_id == i].source.iloc[0]}")
