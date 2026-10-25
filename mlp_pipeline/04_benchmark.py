@@ -11,10 +11,17 @@ EV_A3_TO_GPA = 160.21766
 
 
 def get_calc_spec(spec, device="cuda"):
-    """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'lj'"""
+    """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'grace-ft:/path/final_model' | 'lj'"""
     if spec.startswith("mace-ft:"):
         from mace.calculators import MACECalculator
         return MACECalculator(model_paths=spec.split(":", 1)[1], device=device, default_dtype="float64")
+    if spec.startswith("grace-ft:"):   # exported gracemaker model dir (e.g. runs/grace/ft_s/final_model)
+        import tensorpotential.calculator as tc
+        kw = {"enable_uq": True} if os.environ.get("GRACE_UQ") else {}
+        try:
+            return tc.TPCalculator(os.path.expanduser(spec.split(":", 1)[1]), **kw)
+        except TypeError:
+            return tc.TPCalculator(os.path.expanduser(spec.split(":", 1)[1]))
     from smoke_test import get_calc
     kind, _, name = spec.partition(":")
     return get_calc(kind, name or None, device)
