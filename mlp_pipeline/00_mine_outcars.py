@@ -56,9 +56,41 @@ def parse_head(txt):
     return el, cnt, float(t.group(1)) if t else None
 
 
+def poscar_comp(full):
+    """Composition dict from POSCAR/CONTCAR (VASP5: elements line 6, counts line 7) in the run dir or its parent."""
+    import gzip
+    d0 = os.path.dirname(full)
+    for d in (d0, os.path.dirname(d0)):
+        for name in ("CONTCAR", "POSCAR", "CONTCAR.gz", "POSCAR.gz"):
+            f = os.path.join(d, name)
+            if not os.path.exists(f):
+                continue
+            try:
+                with (gzip.open(f, "rt") if f.endswith(".gz") else open(f)) as fh:
+                    L = [next(fh) for _ in range(7)]
+                el, cnt = L[5].split(), L[6].split()
+                if len(el) == len(cnt) and all(c.isdigit() for c in cnt) and all(e.isalpha() for e in el):
+                    out = {}
+                    for e, c in zip(el, cnt):
+                        out[e] = out.get(e, 0) + int(c)
+                    return out
+            except Exception:
+                continue
+    return {}
+
+
+def comp_dict(full, el, cnt):
+    d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
+    if not d:
+        d = poscar_comp(full)
+        if d and cnt and sum(d.values()) != sum(cnt):
+            d = {}  # POSCAR from a different cell size: not trustworthy
+    return d
+
+
 def mine_head(path, root=""):
     el, cnt, T = parse_head(stream(os.path.join(root, path), ("head", HEAD_N)))
-    d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
+    d = comp_dict(os.path.join(root, path), el, cnt)
     other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
     return dict(True_T_K=T, N_H=d.get("H", 0), N_O=d.get("O", 0), Other=other, N_ions=sum(cnt))
 
@@ -72,7 +104,7 @@ def mine(path, root=""):
         P = [float(x) for x in re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
         P2 = P[len(P) // 2:]
-        d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
+        d = comp_dict(full, el, cnt)
         other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
         return dict(Path=path, True_T_K=T, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
                     P_std_GPa=(pd.Series(P2).std() * 0.1) if len(P2) > 1 else None, N_steps=len(P),
