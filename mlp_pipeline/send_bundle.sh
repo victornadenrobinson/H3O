@@ -1,10 +1,10 @@
 #!/bin/bash
 # Send the newest data bundle to Young after checking the build log passed. Run on Perlmutter from the repo root.
 # usage: bash mlp_pipeline/send_bundle.sh [--dry-run]
-# env overrides: YOUNG=mmm0037@young-ng.rc.ucl.ac.uk  YOUNG_DIR=/lustre/scratch/mmm0037/H3O   (hostname is a guess: use the one you ssh to)
+# env overrides: YOUNG=mmm0037@young-ng.rc.ucl.ac.uk  YOUNG_DIR=/lustre/scratch/mmm0037/H3O  YOUNG_KEY=~/.ssh/id_young
 set -euo pipefail
 cd "$(dirname "$0")/.."
-YOUNG=${YOUNG:-mmm0037@young-ng.rc.ucl.ac.uk}
+YOUNG=${YOUNG:-mmm0037@young-ng.rc.ucl.ac.uk}   # login confirmed 2026-10-25 (login22.young.ucl.ac.uk)
 YOUNG_DIR=${YOUNG_DIR:-/lustre/scratch/mmm0037/H3O}
 LOG=runs/build.log
 [ -f "$LOG" ] || { echo "no $LOG: run build_all.sh first"; exit 1; }
@@ -14,7 +14,13 @@ fi
 B=$(ls -t runs/H3O_bundle_*.tar.gz 2>/dev/null | head -1); [ -n "$B" ] || { echo "no bundle in runs/"; exit 1; }
 SUM=$(sha256sum "$B" | cut -d' ' -f1)
 echo "bundle: $B ($(du -h "$B" | cut -f1)), sha256 $SUM"
-if [ "${1:-}" = "--dry-run" ]; then echo "dry run: would scp to $YOUNG:$YOUNG_DIR/"; exit 0; fi
-scp "$B" "$YOUNG:$YOUNG_DIR/"
-ssh "$YOUNG" "cd $YOUNG_DIR && echo '$SUM  $(basename "$B")' | sha256sum -c - && tar xzf $(basename "$B") && ls -la runs | head -20"
+if [ "${1:-}" = "--dry-run" ]; then echo "dry run: would upload to $YOUNG:$YOUNG_DIR/"; exit 0; fi
+# Upload via `ssh ... cat >` (not scp/sftp): a chatty remote ~/.bashrc corrupts scp's protocol stream but cannot touch data on stdin.
+KEY=${YOUNG_KEY:-$HOME/.ssh/id_young}; SSH="ssh -x -o BatchMode=no"; [ -f "$KEY" ] && SSH="$SSH -i $KEY"
+NAME=$(basename "$B")
+$SSH "$YOUNG" "mkdir -p $YOUNG_DIR && cat > $YOUNG_DIR/$NAME.part && mv $YOUNG_DIR/$NAME.part $YOUNG_DIR/$NAME" < "$B" >/dev/null
+REMOTE=$($SSH "$YOUNG" "sha256sum $YOUNG_DIR/$NAME" 2>/dev/null | grep -Eo '^[0-9a-f]{64}' | head -1)
+[ "$REMOTE" = "$SUM" ] || { echo "CHECKSUM MISMATCH: local $SUM remote ${REMOTE:-<none>}"; exit 1; }
+echo "uploaded, checksum verified. Unpacking..."
+$SSH "$YOUNG" "cd $YOUNG_DIR && tar xzf $NAME && ls runs | head -30" 2>/dev/null | grep -v -E "^(OK[0-9]|bashrc)"
 echo "sent and verified on Young."
