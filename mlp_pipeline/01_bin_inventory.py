@@ -26,8 +26,13 @@ def snap(r):
     return best if abs(r - best) / best <= SNAP_TOL else r
 
 
-def load_inventory(path):
+def load_inventory(path, include_lambda=False):
     df = pd.read_csv(path)
+    # lambda_* = TDI windows (1.0 = DFT, 0.0 = pair potential, in between = mixed Hamiltonian): not pure-DFT data
+    lam = df.Path.str.contains("lambda_", case=False)
+    if not include_lambda:
+        print(f"dropping {int(lam.sum())} lambda_* (TDI) runs; {int((~lam).sum())} remain")
+        df = df[~lam]
     for c in ("True_T_K", "True_P_GPa", "True_V_A3"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
@@ -64,8 +69,8 @@ def hull_targets(path):
     return pd.DataFrame(rows, columns=["T", "comp", "ratio", "P_GPa"])
 
 
-def main(inv_path, hull_path, min_steps):
-    df = load_inventory(inv_path)
+def main(inv_path, hull_path, min_steps, include_lambda=False):
+    df = load_inventory(inv_path, include_lambda)
     df["good"] = (df.get("N_steps", 1e9) >= min_steps)
     df.to_csv("inventory_binned.csv", index=False)
     print(f"{len(df)} H/O-only runs; {int((~df.good).sum())} have < {min_steps} steps (excluded from coverage)")
@@ -97,5 +102,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("inv"); ap.add_argument("hull", nargs="?")
     ap.add_argument("--min-steps", type=int, default=100)
+    ap.add_argument("--include-lambda", action="store_true", help="keep lambda_* TDI runs (not pure DFT)")
     a = ap.parse_args()
-    main(a.inv, a.hull, a.min_steps)
+    main(a.inv, a.hull, a.min_steps, a.include_lambda)
