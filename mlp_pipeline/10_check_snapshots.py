@@ -40,7 +40,7 @@ def frame_offsets(lines):
 def analyze(text):
     """Parse one chunk of frames and return mergeable partial statistics."""
     frames = read(StringIO(text), format="extxyz", index=":")
-    P = dict(n=len(frames), missing=Counter(), nonfinite=0, bad_shape=0, ids=[], fmax=[], dp=[], e_pa=[], sizes=Counter(), ct=Counter())
+    P = dict(n=len(frames), missing=Counter(), nonfinite=0, bad_shape=0, ids=[], fmax=[], dp=[], e_pa=[], sizes=Counter(), ct=Counter(), tb=Counter())
     for a in frames:
         res = a.calc.results if a.calc is not None else {}
         for k in ("energy", "forces", "stress"):
@@ -70,11 +70,12 @@ def analyze(text):
         if not np.all(a.pbc): P["missing"]["pbc not all True"] += 1
         P["ids"].append((a.info.get("source"), int(a.info.get("frame", -1))))
         P["sizes"][len(a)] += 1; P["ct"][a.info.get("config_type")] += 1
+        P["tb"][int(round(a.info.get("T_K", 0) / 1000.0) * 1000)] += 1
     return P
 
 
 def merge(parts):
-    M = dict(n=0, missing=Counter(), nonfinite=0, bad_shape=0, ids=[], fmax=[], dp=[], e_pa=[], sizes=Counter(), ct=Counter())
+    M = dict(n=0, missing=Counter(), nonfinite=0, bad_shape=0, ids=[], fmax=[], dp=[], e_pa=[], sizes=Counter(), ct=Counter(), tb=Counter())
     for P in parts:
         for k, v in P.items():
             if isinstance(v, Counter): M[k].update(v)
@@ -130,6 +131,7 @@ def check(path, pool, workers):
         if abs(np.median(d)) > 5: bad(f"stress sign/units look wrong: median offset {np.median(d):.1f} GPa")
         elif np.percentile(np.abs(d), 95) > 60: warn("some frames' instantaneous P differ >60 GPa from their run mean")
     if M["e_pa"]: print(f"  energy/atom (eV): {min(M['e_pa']):.2f} .. {max(M['e_pa']):.2f}")
+    print("  frames per temperature (nearest 1000 K):", dict(sorted(M["tb"].items())))
     print("  atoms/frame:", dict(sorted(M["sizes"].items())))
     print("  config_type (top 12):", dict(M["ct"].most_common(12)), f"... {len(M['ct'])} total")
     return set(ids), {os.path.dirname(s_ or "") for s_, _ in ids}
