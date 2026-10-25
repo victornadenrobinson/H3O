@@ -8,7 +8,7 @@ import argparse, glob, os, re, site, sys
 ap = argparse.ArgumentParser()
 ap.add_argument("out"); ap.add_argument("--train", required=True); ap.add_argument("--test", required=True)
 ap.add_argument("--model", default="GRACE-2L-SMAX-OMAT-medium")
-ap.add_argument("--cutoff", default="7.5"); ap.add_argument("--updates", type=int, default=400); ap.add_argument("--batch", type=int, default=2)
+ap.add_argument("--cutoff", default="6.0"); ap.add_argument("--updates", type=int, default=400); ap.add_argument("--batch", type=int, default=2)
 ap.add_argument("--wE", default="1"); ap.add_argument("--wF", default="5"); ap.add_argument("--wS", default="10")
 ap.add_argument("--lr", default="0.001"); ap.add_argument("--naive", action="store_true", help="train all weights instead of the frozen set")
 ap.add_argument("--template", default=None)
