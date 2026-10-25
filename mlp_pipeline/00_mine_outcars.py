@@ -123,6 +123,8 @@ if __name__ == "__main__":
     ap.add_argument("old"); ap.add_argument("new")
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--scan", nargs="+", default=None, metavar="DIR",
+                    help="ignore the old inventory: find every OUTCAR* under these dirs (paths stored relative to --root) and mine ALL of them")
     ap.add_argument("--fill", action="store_true", help="new csv already exists: only re-parse headers (T, composition) and update it")
     ap.add_argument("--root", default=None, help="dir that relative inventory paths are under (default: dir of old csv)")
     a = ap.parse_args()
@@ -139,7 +141,19 @@ if __name__ == "__main__":
         print(f"updated {a.new}; N_H+N_O==0 for {int(((df.N_H + df.N_O) == 0).sum())} of {len(df)}")
         print(df.assign(f=df.N_H.astype(str) + "H" + df.N_O.astype(str) + "O+" + df.Other.fillna("")).f.value_counts().head(25).to_string())
         sys.exit()
-    old = pd.read_csv(a.old)
+    if a.scan:
+        root0 = os.path.abspath(os.path.expanduser(a.root or os.path.dirname(os.path.abspath(a.new))))
+        found = []
+        for d in a.scan:
+            d = os.path.abspath(os.path.expanduser(d))
+            print("scanning", d, "...", flush=True)
+            r = subprocess.run(["find", d, "-type", "f", "-name", "OUTCAR*"], capture_output=True, text=True)
+            found += [os.path.relpath(p, root0) for p in r.stdout.split("\n") if p]
+        old = pd.DataFrame({"Path": sorted(set(found))})
+        a.all, a.root = True, root0
+        print(f"found {len(old)} OUTCAR files")
+    else:
+        old = pd.read_csv(a.old)
     paths = old.Path if a.all else old.Path[[parse_composition(p) is not None or any(k in p.lower() for k in KEYS) for p in old.Path]]
     root = os.path.abspath(a.root or os.path.dirname(os.path.abspath(a.old)))
     paths = list(paths)
