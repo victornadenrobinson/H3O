@@ -1,8 +1,10 @@
-"""Extract decorrelated frames from selected OUTCARs to extxyz.
+"""Extract decorrelated frames from selected OUTCARs to NESTED extxyz datasets (small <= medium <= large).
 
-usage: python 02_extract_snapshots.py inventory_binned.csv out.extxyz [--per-run 5] [--workers 32]
-Frames: evenly spaced from the 2nd half of each run, >= MIN_STEP_GAP MD steps apart.
-Stress is stored as full 3x3 (ASE convention, eV/A^3).
+usage: python 02_extract_snapshots.py inventory_binned.csv snapshots [--tiers s=1x1,m=3x3,l=6x5] [--workers 32] [--root ~/work]
+Writes snapshots_s.extxyz, snapshots_m.extxyz, snapshots_l.extxyz. A tier "RxF" = up to R runs per (composition, T bin,
+100 GPa bin) and up to F frames per run. Runs/frames are ranked by a spread-out order (middle first, then fill the gaps),
+so every smaller tier is a subset of the larger ones. Frames: 2nd half of each run, >= MIN_STEP_GAP MD steps apart.
+Stress is stored as full 3x3 (ASE convention, eV/A^3, excludes the ions' kinetic term).
 """
 import argparse
 import os
@@ -13,6 +15,20 @@ from ase.io import read, write
 from common import progress
 
 MIN_STEP_GAP = 50
+
+
+def spread_order(n):
+    """Order 0..n-1 so that every prefix is spread out (van der Corput, starting mid-range)."""
+    order, i = [], 0
+    while len(order) < n and i < 64 * n:
+        f, k, w = 0.0, i, 0.5
+        while k:
+            f += w * (k & 1); k >>= 1; w /= 2
+        j = int(((f + 0.5) % 1.0) * n)
+        if j not in order:
+            order.append(j)
+        i += 1
+    return order + [j for j in range(n) if j not in order]
 
 
 def pick(path, n, root=""):
@@ -27,9 +43,10 @@ def pick(path, n, root=""):
     k = min(n, max(1, (L - lo) // MIN_STEP_GAP))
     idx = np.unique(np.linspace(lo, L - 1, k).astype(int))
     out = []
-    for i in idx:
+    for rank, j in enumerate(spread_order(len(idx))):
+        i = idx[j]
         a = frames[i]
-        a.info.update(source=path, frame=int(i), comp=0)
+        a.info.update(source=path, frame=int(i), frame_rank=rank)
         a.calc.results["stress"] = a.get_stress(voigt=False)
         out.append(a)
     return path, out, None
@@ -51,23 +68,24 @@ def select(df, a):
     out = []
     for _, g in d.groupby(["comp_snap", "T_bin", "P100"]):
         g = g.sort_values("True_P_GPa")
-        idx = np.unique(np.linspace(0, len(g) - 1, min(a.max_runs, len(g))).astype(int))
-        out.append(g.iloc[idx])
+        order = spread_order(len(g))[:a.max_runs]
+        out.append(g.iloc[order].assign(run_rank=range(len(order))))
     return pd.concat(out) if out else d.iloc[:0]
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("inv"); ap.add_argument("out")
-    ap.add_argument("--per-run", type=int, default=5)
+    ap.add_argument("inv"); ap.add_argument("out", help="output prefix, e.g. snapshots")
+    ap.add_argument("--tiers", default="s=1x1,m=3x3,l=6x5", help="name=RUNSxFRAMES, nested (small first)")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--root", default="~/work", help="dir that inventory paths are relative to")
     ap.add_argument("--pmin", type=float, default=200.0); ap.add_argument("--pmax", type=float, default=1450.0)
     ap.add_argument("--tmin", type=float, default=2000.0)
-    ap.add_argument("--max-runs", type=int, default=6, help="runs per (composition, T bin, 100 GPa bin)")
     ap.add_argument("--max-pstd", type=float, default=20.0)
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
+    tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]
+    a.max_runs = max(t[1] for t in tiers); a.per_run = max(t[2] for t in tiers)
     root = os.path.abspath(os.path.expanduser(a.root))
     df = select(pd.read_csv(a.inv), a)
     meta = df.set_index("Path")
@@ -80,7 +98,11 @@ if __name__ == "__main__":
                 print("skip", path, err); continue
             m = meta.loc[path]
             for f in fr:
-                f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa))
+                f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa),
+                              run_rank=int(m.run_rank))
             allf += fr
-    write(a.out, allf, format="extxyz")
-    print(f"wrote {len(allf)} frames -> {a.out}")
+    for name, nr, nf in tiers:
+        sub = [f for f in allf if f.info["run_rank"] < nr and f.info["frame_rank"] < nf]
+        fn = f"{a.out}_{name}.extxyz"
+        write(fn, sub, format="extxyz")
+        print(f"tier {name} ({nr} runs x {nf} frames): {len(sub)} frames -> {fn}")
