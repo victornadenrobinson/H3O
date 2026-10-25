@@ -62,12 +62,29 @@ Perlmutter: `nersc-python` (pandas, ase). Young (Slurm): `~/work/envs/mace-ng` (
 ## Itinerary
 - [x] Mine and validate inventory; EOS/eos.dat cross-checks; pressure/temperature/energy conventions fixed
 - [x] Build and verify nested datasets s/m/l with 11000-13000 K data; bundle sent to Young
-- [ ] Smoke test: one snapshot through MACE (medium, medium-omat-0), MatterSim, GRACE on a Young GPU
-- [ ] Zero-shot benchmark on valid_m (then l): force RMSE, stress MAE, pressure error by composition and T
+- [x] Smoke test: one snapshot through MACE, MatterSim, GRACE on a Young GPU (all load and run)
+- [~] Zero-shot benchmark on valid_m: done for MatterSim, MACE-OMAT/MP-0, GRACE (6 variants); MACE mpa-0/mh-1 pending
 - [ ] Choose models: criteria = pressure error at 400-1400 GPa, 11000/13000 K error, learning curve s/m/l, MD stability
 - [ ] Fine-tune (MACE first, MatterSim second, GRACE third); E0 re-estimation; consider multihead replay
 - [ ] Short MD with fine-tuned models; compare EOS (add N kB T/V) and RDFs against DFT
 - [ ] Expand data: more 11000/13000 K compositions (H2.25O, H5O, H7O have none above 9000 K); run `09_label_phase.py` to tag solid/liquid
+
+## Zero-shot results and model choice (2026-10-25, Young A100 40 GB; 30 frames/model, cells >= 8.5 A, 1-3 frames per state; indicative)
+| model | force RMSE (eV/A) | pressure error (GPa) | memory (inference, 40 GB) |
+|---|---|---|---|
+| MatterSim 5M | 0.9-1.8 | -3..-5 (<=9000 K) | OOM at 432+ atoms |
+| **GRACE-2L-SMAX-OMAT-medium** | 1.0-1.6 (H 0.55-0.70) | +49,+16,+20,+15,+5,-1.5 (3000..13000 K) | 729 atoms 10.1 GiB, 0.17 GiB/Mtriplet |
+| GRACE-2L-SMAX-OMAT-large | 1.1-1.8 | +46,+11,+19,+6,-9,-5 | 729 atoms 10.4 GiB |
+| MatterSim 1M | 1.1-2.1 | -34..+19 | OOM at 512+ |
+| GRACE-1L-SMAX-OMAT-large | 1.7-2.5 | mixed | (pending) |
+| GRACE-3L-OMAT-large | 1.9-3.5 | +120..+333 | - |
+| MACE-OMAT-0 | 3.9-22 | hundreds | OOM at 512 (fp64); fp32 fits 512, not 729 |
+| GRACE-2L-OMAT-large-ft-E | 6-13 | thousands | - |
+| MACE MP-0, GRACE-2L-OMAT (small) | blow-up | 1e6+ | - |
+
+Pattern: SMAX-trained models stay finite at 300-1400 GPa; OMat24-only models fail (MACE-OMAT-0, GRACE OMAT variants). GRACE needs 7-20x less memory per triplet than MACE/MatterSim.
+Decision: first fine-tune = GRACE-2L-SMAX-OMAT-medium (large as second). MatterSim 5M is the best zero-shot but cannot hold production cells for training here.
+Open: MACE candidates (medium-mpa-0, mh-1) and MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
 
 ## Open questions
 1. H2O offset at 5000/7000 K: tag branch (fcc solid, kp222 small cells) via `09_label_phase.py` and keep as separate config types?
