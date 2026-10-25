@@ -43,16 +43,31 @@ def main(model, path, n=0, max_atoms=0, device="cuda"):
     frames = sample_frames(read(inp(path), index=":"), n, max_atoms)
     print(f"{len(frames)} frames, {len(set(f.info.get('config_type') for f in frames))} config types, device {device}")
     calc = get_calc_spec(model, device)
-    rows, E_d, E_m, cnt = [], [], [], []
+    rows, E_d, E_m, cnt, skipped = [], [], [], [], []
     for a in progress(frames, desc=f"{model} eval"):
         ref_f, ref_s, ref_e = a.get_forces(), a.get_stress(voigt=False), a.get_potential_energy()
         b = a.copy(); b.calc = calc
-        f, s, e = b.get_forces(), b.get_stress(voigt=False), b.get_potential_energy()
+        try:
+            f, s, e = b.get_forces(), b.get_stress(voigt=False), b.get_potential_energy()
+        except Exception as ex:  # GPU out-of-memory on big dense cells: skip the frame, free memory, keep going
+            if "out of memory" not in str(ex).lower() and type(ex).__name__ != "OutOfMemoryError":
+                raise
+            skipped.append((len(a), a.info.get("config_type")))
+            b.calc = None
+            try:
+                import torch, gc; gc.collect(); torch.cuda.empty_cache()
+            except Exception:
+                pass
+            continue
         n = len(a); syms = a.get_chemical_symbols()
         cnt.append([syms.count("H"), syms.count("O")]); E_d.append(ref_e); E_m.append(e)
         rows.append(dict(comp=a.info.get("config_type"), T=a.info.get("T_K"), P_dft=a.info.get("P_GPa"),
                          f_se=np.mean((f - ref_f) ** 2), s_ae=np.mean(np.abs(s - ref_s)) * EV_A3_TO_GPA,
                          dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n))
+    if skipped:
+        print(f"SKIPPED {len(skipped)} frames (GPU out of memory), atoms: {sorted(x[0] for x in skipped)}; use --max-atoms or a bigger GPU")
+    if not rows:
+        raise SystemExit("no frame fit in memory")
     cnt, dE = np.array(cnt, float), np.array(E_m) - np.array(E_d)
     shift, *_ = np.linalg.lstsq(cnt, dE, rcond=None)  # per-element reference shift
     for r, e, c in zip(rows, dE - cnt @ shift, cnt):
