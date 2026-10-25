@@ -1,8 +1,10 @@
 """Bin mined runs by composition / P / T and check coverage of hull-CSV EOS targets.
 
-usage: python 01_bin_inventory.py mined_inventory_ground_truth.csv data-h3o-convex-hull.csv
+usage: python 01_bin_inventory.py mined_v2.csv data-h3o-convex-hull.csv [--min-steps 100]
+Composition comes from OUTCAR ion counts (00_mine_outcars.py). `comp` = exact H:O ratio,
+`comp_snap` = nearest of KNOWN ratios within SNAP_TOL (off-stoichiometric cells like 33H16O -> h2o).
 """
-import sys
+import argparse
 import numpy as np
 import pandas as pd
 from common import parse_composition, comp_label, HULL_COMPS
@@ -10,6 +12,17 @@ from common import parse_composition, comp_label, HULL_COMPS
 P_BIN, T_BIN = 25.0, 250.0
 P_MIN, P_MAX = 250.0, 1425.0
 ISOTHERMS = (5000, 7000, 9000)
+KNOWN = [2.0, 2.25, 2.5, 2.75, 3.0, 5.0, 7.0, float("inf")]
+SNAP_TOL = 0.04  # relative
+
+
+def snap(r):
+    if r != r:
+        return r
+    if np.isinf(r):
+        return r
+    best = min(KNOWN[:-1], key=lambda k: abs(r - k) / k)
+    return best if abs(r - best) / best <= SNAP_TOL else r
 
 
 def load_inventory(path):
@@ -17,11 +30,7 @@ def load_inventory(path):
     for c in ("True_T_K", "True_P_GPa", "True_V_A3"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
-    print(f"{int((df.True_P_GPa <= 0).sum())} of {len(df)} runs have P<=0 -> non-positive mean pressure (can be legitimate for low-density/low-T runs)")
-    if df.True_P_GPa.median() > 3000:
-        print("WARNING: median pressure >3000 -> looks like kB; dividing by 10")
-        df["True_P_GPa"] *= 0.1
-    if "N_H" in df:  # inventory from 00_mine_outcars.py: composition from OUTCAR ion counts
+    if "N_H" in df:  # composition from OUTCAR ion counts
         df["Other"] = df.Other.fillna("")
         n = df.N_H.fillna(0) + df.N_O.fillna(0)
         df = df[(df.Other == "") & (n > 0)].copy()
@@ -29,6 +38,8 @@ def load_inventory(path):
     else:
         df["ratio"] = df.Path.map(parse_composition)
     df["comp"] = df.ratio.map(comp_label)
+    df["ratio_snap"] = df.ratio.map(snap)
+    df["comp_snap"] = df.ratio_snap.map(comp_label)
     df["P_bin"] = (np.round(df.True_P_GPa / P_BIN) * P_BIN).astype(int)
     df["T_bin"] = (np.round(df.True_T_K / T_BIN) * T_BIN).astype(int)
     return df
@@ -46,42 +57,38 @@ def hull_targets(path):
     return pd.DataFrame(rows, columns=["T", "comp", "ratio", "P_GPa"])
 
 
-def main(inv_path, hull_path=None):
+def main(inv_path, hull_path, min_steps):
     df = load_inventory(inv_path)
+    df["good"] = (df.get("N_steps", 1e9) >= min_steps)
     df.to_csv("inventory_binned.csv", index=False)
-    print(f"{len(df)} runs; unknown composition: {(df.comp == 'unknown').sum()}")
-    print("\nP (GPa) percentiles:", df.True_P_GPa.quantile([0, .05, .25, .5, .75, .95, 1]).round(1).tolist())
-    print("T (K) percentiles:", df.True_T_K.quantile([0, .05, .25, .5, .75, .95, 1]).round(0).tolist())
-    print("P<=0 or V missing:", int((df.True_P_GPa <= 0).sum()), int(df.True_V_A3.isna().sum()))
-    print("\nruns per T bin (all):\n", df.T_bin.value_counts().sort_index().to_string())
-    print("\nruns per 100-GPa bin (all):\n", (np.floor(df.True_P_GPa / 100) * 100).astype(int).value_counts().sort_index().to_string())
-    print("\nruns per composition:\n", df.comp.value_counts().to_string())
-    print("\n=== ALL T x P(100 GPa bins), runs ===")
-    df["P100"] = (np.floor(df.True_P_GPa / 100) * 100).astype(int)
-    print(df.pivot_table(index="T_bin", columns="P100", values="Path", aggfunc="count", fill_value=0).to_string())
-    unk = df[df.comp == "unknown"]
-    if len(unk):
-        unk.Path.sample(min(30, len(unk)), random_state=0).to_csv("unknown_comp_sample.txt", index=False, header=False)
-        print("\nsample of unknown-composition paths -> unknown_comp_sample.txt")
-    for T in ISOTHERMS:
-        s = df[(df.T_bin == T) & df.True_P_GPa.between(P_MIN, P_MAX)]
-        print(f"\n=== {T} K, {P_MIN:.0f}-{P_MAX:.0f} GPa (runs per comp x P bin) ===")
-        if len(s):
-            print(s.pivot_table(index="comp", columns="P_bin", values="Path", aggfunc="count", fill_value=0).to_string())
-        else:
-            print("(none)")
+    print(f"{len(df)} H/O-only runs; {int((~df.good).sum())} have < {min_steps} steps (excluded from coverage)")
+    print(f"{int((df.True_P_GPa <= 0).sum())} runs with mean P <= 0")
+    print("\nP (GPa) pct 0/5/25/50/75/95/100:", df.True_P_GPa.quantile([0, .05, .25, .5, .75, .95, 1]).round(0).tolist())
+    print("\nruns per composition (exact -> snapped):")
+    print(pd.concat([df.comp.value_counts().rename("exact"), df.comp_snap.value_counts().rename("snapped")], axis=1).fillna(0).astype(int).to_string())
+
+    g = df[df.good].copy()
+    g["Pc"] = np.clip(np.floor(g.True_P_GPa / 100) * 100, -100, 1600).astype(int)
+    big = g.T_bin.value_counts()
+    print("\n=== runs by T x P(100 GPa; -100 = '<0', 1600 = '1600+'), T bins with >=30 runs ===")
+    print(g[g.T_bin.isin(big[big >= 30].index)].pivot_table(index="T_bin", columns="Pc", values="Path", aggfunc="count", fill_value=0).to_string())
+    print("\n=== runs by snapped composition x T (T bins >=30 runs) ===")
+    print(g[g.T_bin.isin(big[big >= 30].index)].pivot_table(index="comp_snap", columns="T_bin", values="Path", aggfunc="count", fill_value=0).to_string())
+
     if hull_path:
         tg = hull_targets(hull_path)
-        counts = []
-        for r in tg.itertuples():
-            m = df[(df.comp == r.comp) & ((df.True_T_K - r.T).abs() <= T_BIN) & ((df.True_P_GPa - r.P_GPa).abs() <= P_BIN)]
-            counts.append(len(m))
-        tg["n_runs"] = counts
+        tg["n_runs"] = [len(g[(g.comp_snap == r.comp) & ((g.True_T_K - r.T).abs() <= T_BIN) & ((g.True_P_GPa - r.P_GPa).abs() <= P_BIN)])
+                        for r in tg.itertuples()]
         tg.to_csv("hull_target_coverage.csv", index=False)
-        print(f"\nHull EOS targets covered: {(tg.n_runs > 0).sum()} / {len(tg)}")
-        print("Uncovered:\n", tg[tg.n_runs == 0].to_string(index=False))
-        print("\nNote: hull has no H2.5O / H2.75O EOS columns.")
+        print(f"\nHull EOS targets covered: {(tg.n_runs > 0).sum()} / {len(tg)}  (P +-{P_BIN:.0f} GPa, T +-{T_BIN:.0f} K)")
+        s = tg.groupby(["comp", "T"]).agg(targets=("n_runs", "size"), covered=("n_runs", lambda x: int((x > 0).sum())), runs=("n_runs", "sum"))
+        print(s.to_string())
+        print("full per-target table -> hull_target_coverage.csv")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("inv"); ap.add_argument("hull", nargs="?")
+    ap.add_argument("--min-steps", type=int, default=100)
+    a = ap.parse_args()
+    main(a.inv, a.hull, a.min_steps)
