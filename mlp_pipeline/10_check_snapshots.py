@@ -26,6 +26,8 @@ def warn(msg): warns.append(msg); print("  WARN:", msg)
 
 
 def check(path):
+    if not os.path.exists(path):
+        print(f"\n== {path}"); bad("file not found (bare names are looked up in the current dir, then in runs/)"); return None
     print(f"\n== {path}  ({os.path.getsize(path) / 1e6:.1f} MB)")
     try:
         frames = read(path, index=":")
