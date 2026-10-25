@@ -4,6 +4,7 @@ import sys
 import numpy as np
 import pandas as pd
 from ase.io import read
+from common import progress
 
 EV_A3_TO_GPA = 160.21766
 
@@ -28,7 +29,7 @@ def main(model, path):
     frames = read(path, index=":")
     calc = get_calc(model)
     rows, E_d, E_m, cnt = [], [], [], []
-    for a in frames:
+    for a in progress(frames, desc=f"{model} eval"):
         ref_f, ref_s, ref_e = a.get_forces(), a.get_stress(voigt=False), a.get_potential_energy()
         b = a.copy(); b.calc = calc
         f, s, e = b.get_forces(), b.get_stress(voigt=False), b.get_potential_energy()

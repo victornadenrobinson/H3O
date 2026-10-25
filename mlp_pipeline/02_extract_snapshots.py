@@ -9,6 +9,7 @@ from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from ase.io import read, write
+from common import progress
 
 MIN_STEP_GAP = 50
 P_MIN, P_MAX = 250.0, 1425.0
@@ -37,6 +38,10 @@ def pick(path, n):
     return path, out, None
 
 
+def pick_star(args):
+    return pick(*args)
+
+
 def select(df):
     d = df[df.comp != "unknown"]
     d = d[d.True_P_GPa.between(P_MIN, P_MAX)]
@@ -56,7 +61,7 @@ if __name__ == "__main__":
     print(f"{len(df)} runs selected")
     allf = []
     with Pool(a.workers) as p:
-        for path, fr, err in p.starmap(pick, [(x, a.per_run) for x in df.Path]):
+        for path, fr, err in progress(p.imap(pick_star, [(x, a.per_run) for x in df.Path]), total=len(df), desc="extracting"):
             if err:
                 print("skip", path, err); continue
             m = meta.loc[path]

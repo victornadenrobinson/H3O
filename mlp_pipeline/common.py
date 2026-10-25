@@ -39,3 +39,12 @@ def comp_label(r):
 
 # hull-CSV column suffix -> H per O
 HULL_COMPS = {"h2o": 2.0, "h2.25": 2.25, "h3o": 3.0, "h5o": 5.0, "h7o": 7.0, "h": float("inf")}
+
+
+def progress(it, **kw):
+    """tqdm progress bar if available, else plain iterator."""
+    try:
+        from tqdm import tqdm
+        return tqdm(it, **kw)
+    except ImportError:
+        return it
