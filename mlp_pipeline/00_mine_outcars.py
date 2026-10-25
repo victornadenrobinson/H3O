@@ -123,6 +123,8 @@ if __name__ == "__main__":
     ap.add_argument("old"); ap.add_argument("new")
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--known", nargs="+", default=[], metavar="CSV",
+                    help="with --scan: already-mined CSVs; their rows (that have T and P) are carried over and only NEW files are mined")
     ap.add_argument("--count-only", action="store_true", help="with --scan: just count OUTCAR files per top-level folder and exit")
     ap.add_argument("--scan", nargs="+", default=None, metavar="DIR",
                     help="ignore the old inventory: find every OUTCAR* under these dirs (paths stored relative to --root) and mine ALL of them")
@@ -143,6 +145,7 @@ if __name__ == "__main__":
         print(f"updated {a.new}; N_H+N_O==0 for {int(((df.N_H + df.N_O) == 0).sum())} of {len(df)}")
         print(df.assign(f=df.N_H.astype(str) + "H" + df.N_O.astype(str) + "O+" + df.Other.fillna("")).f.value_counts().head(25).to_string())
         sys.exit()
+    carry = pd.DataFrame()
     if a.scan:
         root0 = os.path.abspath(os.path.expanduser(a.root or os.path.dirname(os.path.abspath(a.new))))
         found = []
@@ -151,7 +154,15 @@ if __name__ == "__main__":
             print("scanning", d, "...", flush=True)
             r = subprocess.run(["find", d, "-type", "f", "-name", "OUTCAR*"], capture_output=True, text=True)
             found += [os.path.relpath(p, root0) for p in r.stdout.split("\n") if p]
-        old = pd.DataFrame({"Path": sorted(set(found))})
+        found = sorted(set(found))
+        if a.known:
+            from common import inp
+            kn = pd.concat([pd.read_csv(inp(k)) for k in a.known], ignore_index=True)
+            kn = kn[kn.True_T_K.notna() & kn.True_P_GPa.notna()].drop_duplicates("Path")
+            carry = kn[kn.Path.isin(set(found))]
+            found = [p for p in found if p not in set(carry.Path)]
+            print(f"{len(carry)} already mined (carried over), {len(found)} new files to mine")
+        old = pd.DataFrame({"Path": found})
         a.all, a.root = True, root0
         print(f"found {len(old)} OUTCAR files")
         if a.count_only:
@@ -172,6 +183,7 @@ if __name__ == "__main__":
         rows = list(progress(pool.imap(partial(mine, root=root), paths, chunksize=20), total=len(paths), desc="mining OUTCARs"))
     n_empty = sum(1 for r in rows if r.get("True_T_K") is None)
     print(f"{n_empty} of {len(rows)} files gave no TEBEG (missing/unreadable/truncated)")
-    df = pd.DataFrame(rows)
+    df = pd.concat([carry, pd.DataFrame(rows)], ignore_index=True)
     df.to_csv(a.new, index=False)
+    print(f"wrote {a.new}: {len(df)} rows ({len(carry)} carried over + {len(rows)} newly mined)")
     print(df.describe(include="all").T.to_string())
