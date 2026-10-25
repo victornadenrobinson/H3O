@@ -8,7 +8,7 @@ export MLP_DTYPE=float32 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 L=runs/gpu_session_models; mkdir -p $L
 step() { name=$1; shift; echo "=== $(date +%H:%M:%S) $name"; "$@" > $L/$name.log 2>&1; echo "    exit $?  -> $L/$name.log"; grep -v -E "^(OK[0-9]|bashrc)|Warning|torch.load" $L/$name.log | tail -n ${TAILN:-24}; }
 NAMES="medium-mpa-0 medium-0b3 large-0b2 medium-0b2 mace-matpes-pbe-0 small-omat-0"
-NAMES="$NAMES $($P/mace-ng/bin/python mlp_pipeline/mace_heads.py mh-1 mh-0 --names 2>$L/heads.err | grep @ | tr '\n' ' ')"   # every head of mh-1 and mh-0
+NAMES="$NAMES $($P/mace-ng/bin/python mlp_pipeline/mace_heads.py mh-1 mh-0 --names --pbe 2>$L/heads.err | grep @ | tr '\n' ' ')"   # every head of mh-1 and mh-0
 [ -n "$MH_HEAD" ] && NAMES="$NAMES mh-1@$MH_HEAD"
 echo "models: $NAMES"
 for M in $NAMES "$@"; do
