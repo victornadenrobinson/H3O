@@ -1,8 +1,9 @@
 #!/bin/bash -l
-# Slurm job for UCL Young (A100). Partition / account / gres names are PLACEHOLDERS: copy them from one of your existing GPU job scripts (~/scripts).
+# Slurm job for UCL Young (A100). account/qos below are from the working interactive line (intergpu/allusers); a 12 h fine-tune probably
+# needs a longer-running GPU partition: check `sinfo -o '%P %l %G'` and fill in the partition/qos before submitting.
 #SBATCH --job-name=mace_ft_h3o
-#SBATCH --partition=<gpu-partition>
-#SBATCH --account=<account>
+#SBATCH --partition=<long-gpu-partition>
+#SBATCH --account=allusers
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G

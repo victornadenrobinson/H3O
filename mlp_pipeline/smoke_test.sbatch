@@ -1,8 +1,9 @@
 #!/bin/bash -l
-# One-snapshot smoke test per model on Young. Partition / account / gres are PLACEHOLDERS (copy from an existing GPU job script).
+# One-snapshot smoke test per model on Young (interactive-GPU partition; values from the user's working srun line).
 #SBATCH --job-name=smoke
-#SBATCH --partition=<gpu-partition>
-#SBATCH --account=<account>
+#SBATCH --partition=intergpu
+#SBATCH --qos=intergpu
+#SBATCH --account=allusers
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
