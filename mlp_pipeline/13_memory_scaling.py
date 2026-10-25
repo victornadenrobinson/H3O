@@ -105,7 +105,7 @@ def main(a):
     if is_tf and total != total:
         total = float(os.environ.get("GPU_GIB", 40))   # no torch in the GRACE env: assume the 40 GB A100 (override with GPU_GIB)
     print(f"GPU memory {total:.1f} GiB; {len(frames)} frames, {len(by)} distinct sizes; model dtype: {model_dtype(calc)}")
-    print(f"{'atoms':>6} {'A3/atom':>8} {'pairs':>9} {'triplets':>11} {'peak_GiB':>9} {'smi_GiB':>8} {'sec':>6}  status")
+    print(f"{'atoms':>6} {'A3/atom':>8} {'pairs':>9} {'triplets':>11} {'peak_GiB':>9} {'smi_abs_GiB':>12} {'sec':>6}  status")
     rows = []
     for nat in sorted(by):
         f = min(by[nat], key=lambda x: x.get_volume())   # densest frame of this size = worst case
@@ -121,7 +121,7 @@ def main(a):
             g.positions = f.positions + 1e-6
             with SmiPoller() as sp:
                 t0 = time.time(); g.get_potential_energy(); g.get_forces(); g.get_stress(voigt=False); dt = time.time() - t0
-            smi = sp.used
+            smi = sp.peak   # absolute GPU memory in use by everything on the device (includes the framework's cache): an upper bound
             if is_tf:
                 peak = tf_mem()
             elif torch and torch.cuda.is_available():
@@ -131,7 +131,7 @@ def main(a):
         g.calc = None; gc.collect()
         if torch and torch.cuda.is_available():
             torch.cuda.empty_cache()
-        print(f"{nat:6d} {f.get_volume() / nat:8.2f} {pairs:9d} {trip:11d} {peak:9.2f} {smi:8.2f} {dt:6.2f}  {status}", flush=True)
+        print(f"{nat:6d} {f.get_volume() / nat:8.2f} {pairs:9d} {trip:11d} {peak:9.2f} {smi:12.2f} {dt:6.2f}  {status}", flush=True)
         rows.append((nat, trip, peak if peak == peak else smi, status))
     ok = [(t, p) for _, t, p, s in rows if s == "ok" and np.isfinite(p)]
     if len(ok) >= 2:
