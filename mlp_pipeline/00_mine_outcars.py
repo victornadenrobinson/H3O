@@ -123,6 +123,7 @@ if __name__ == "__main__":
     ap.add_argument("old"); ap.add_argument("new")
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--count-only", action="store_true", help="with --scan: just count OUTCAR files per top-level folder and exit")
     ap.add_argument("--scan", nargs="+", default=None, metavar="DIR",
                     help="ignore the old inventory: find every OUTCAR* under these dirs (paths stored relative to --root) and mine ALL of them")
     ap.add_argument("--fill", action="store_true", help="new csv already exists: only re-parse headers (T, composition) and update it")
@@ -153,6 +154,10 @@ if __name__ == "__main__":
         old = pd.DataFrame({"Path": sorted(set(found))})
         a.all, a.root = True, root0
         print(f"found {len(old)} OUTCAR files")
+        if a.count_only:
+            top = old.Path.map(lambda p: "/".join(p.split("/")[:4]))
+            print(top.value_counts().head(40).to_string())
+            sys.exit()
     else:
         old = pd.read_csv(a.old)
     paths = old.Path if a.all else old.Path[[parse_composition(p) is not None or any(k in p.lower() for k in KEYS) for p in old.Path]]
