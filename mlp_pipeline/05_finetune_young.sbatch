@@ -10,7 +10,8 @@
 #SBATCH --output=%x-%j.out
 # usage: TAG=m sbatch mlp_pipeline/05_finetune_young.sbatch      (run from the repo root; TAG picks train_${TAG}/valid_${TAG})
 # Flags below are from memory: verify with `mace_run_train --help` in your MACE env.
-source <path-to-mace-env>/bin/activate        # e.g. ~/work/envs/mace/bin/activate
+source ~/work/envs/mace-env-ng.sh              # helper script in ~/work/envs (check what it loads); or: source ~/work/envs/mace-ng/bin/activate
+module load cuda/12.6.2/gcc-12.3.0-avx2         # torch in mace-ng is the cu126 build
 TAG=${TAG:-m}
 RUNS=${H3O_RUNS:-$PWD/runs}
 mkdir -p $RUNS/mace_$TAG && cd $RUNS/mace_$TAG
