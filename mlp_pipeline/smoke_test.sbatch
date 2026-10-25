@@ -6,8 +6,8 @@
 #SBATCH --account=allusers
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=24G
-#SBATCH --time=00:30:00
+#SBATCH --mem=16G
+#SBATCH --time=00:20:00
 #SBATCH --output=runs/smoke_%x_%j.out
 # usage, from the repo root:
 #   MODEL=mace      PY=~/work/envs/mace-ng/bin/python        NAME=medium-omat-0 sbatch mlp_pipeline/smoke_test.sbatch
