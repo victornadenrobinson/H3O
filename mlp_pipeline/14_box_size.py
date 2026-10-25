@@ -59,15 +59,15 @@ def part_b(hull_path, mined):
                 continue
             o = np.argsort(e["rho"]); rho, P = e["rho"][o], e["P"][o]
             if rho[0] <= r.rho <= rho[-1]:
-                rows.append(dict(comp=r.comp_snap, T=T, lat=r.lat, box=r.box, N=r.N_ions, dP=r.True_P_GPa - np.interp(r.rho, rho, P)))
+                ph = float(np.interp(r.rho, rho, P)); rows.append(dict(Path=r.Path, comp=r.comp_snap, T=T, lat=r.lat, box=r.box, N=r.N_ions, P_run=r.True_P_GPa, P_hull=ph, dP=r.True_P_GPa - ph))
     x = pd.DataFrame(rows)
     x["bin"] = pd.cut(x.box, [0, 6, 7, 8, 8.5, 9, 9.5, 10, 11, 20])
-    print(f"\\n=== B. finite-size check: mined P - hull P(rho), by box edge ({len(x)} runs) ===")
+    print(f"\n=== B. finite-size check: mined P - hull P(rho), by box edge ({len(x)} runs) ===")
     for (c, T), g in x.groupby(["comp", "T"]):
         t = g.groupby(["lat", "bin"], observed=True).dP.agg(n="size", med="median", std="std").round(1)
         t = t[t.n >= 3]
         if len(t):
-            print(f"\\n{c} {T} K\\n{t.to_string()}")
+            print(f"\n{c} {T} K\n{t.to_string()}")
     x.to_csv(out("box_size_dP.csv"), index=False)
 
 
