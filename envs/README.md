@@ -38,3 +38,12 @@ Version pins live in `~/work/envs/constraints.txt` and `constraints-ng.txt`.
 `torch.cuda.is_available()` printed False on the login node (no GPU there): re-check inside a GPU job.
 Analysis scripts (00-03, 06-11) need pandas/ase/matplotlib/tqdm: the base python has no pandas; use one of the envs above or make a small CPU env.
 Not yet verified: that MACE-ng's CLI flags match `05_finetune_young.sbatch`, and GRACE's GPU stack.
+
+## Which energy goes into the fine-tuning sets (researched 2026-10-25)
+- **Label = VASP free energy (`free energy  TOTEN`)**, written as `energy`; E(sigma->0) is kept as `energy_sigma0` metadata.
+  VASP forces are derivatives of the free energy F, not of the sigma->0 extrapolation (VASP wiki "Hellmann-Feynman forces"; VASP forum). At 5000-13000 K the smearing entropy is large, so mixing E(sigma->0) with F-consistent forces would put a state-dependent inconsistency into every label.
+- Stress: ASE/extxyz virial stress (eV/A^3, ASE sign: P = -trace/3). It excludes the ions' kinetic term, as MLP training expects; add N kB T / V back only when comparing MLP-MD pressure with the hull EOS.
+- **Not verified:** which VASP energy (TOTEN or sigma->0) the foundation models' own training sets used (MPtrj, OMat24, MatterSim data). Per-element reference shifts absorb constant offsets, but not the T-dependent entropy term, which is why we fine-tune.
+- MACE: re-estimate E0s for the new reference (`--E0s=estimated`; `average` is discouraged for fine-tuning); consider multihead replay fine-tuning if plain fine-tuning gives unstable MD. Key names/flags must be checked against `mace_run_train --help` in mace-ng 0.3.16.
+- GRACE (gracemaker): use `shift: auto` when fine-tuning a foundation model (per-element shifts fitted to the new DFT data).
+- MatterSim: fine-tuning data format, energy/stress units and loss weights NOT verified; read the microsoft/mattersim finetune script before use.
