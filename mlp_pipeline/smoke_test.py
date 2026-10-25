@@ -27,7 +27,9 @@ def find_class(pkg_name, cls_name):
 def get_calc(model, name, device):
     if model == "mace":
         from mace.calculators import mace_mp
-        return mace_mp(model=name or "medium-omat-0", default_dtype=os.environ.get("MLP_DTYPE", "float64"), device=device)
+        nm, _, head = (name or "medium-mpa-0").partition("@")      # 'mace-mh-1@<head>' picks a head of a multihead model
+        kw = {"head": head} if head else {}
+        return mace_mp(model=nm, default_dtype=os.environ.get("MLP_DTYPE", "float64"), device=device, **kw)
     if model == "mattersim":
         C = find_class("mattersim", "MatterSimCalculator")
         try:
