@@ -13,7 +13,7 @@ run "MACE medium-omat-0" $HOME/work/envs/mace-ng/bin/python mlp_pipeline/smoke_t
 run "MACE medium (MP-0)" $HOME/work/envs/mace-ng/bin/python mlp_pipeline/smoke_test.py --model mace --name medium --data $D --max-atoms 120 --device $DEV
 run "MatterSim" $HOME/work/envs/mattersim-env/bin/python mlp_pipeline/smoke_test.py --model mattersim --data $D --max-atoms 120 --device $DEV
 run "GRACE" $HOME/grace-venv/bin/python mlp_pipeline/smoke_test.py --model grace --name GRACE-2L-OMAT --data $D --max-atoms 120 --device $DEV
-echo; echo "=================== timing summary (steady = mean of calls 2-3: energy+forces+stress)"
+echo; echo "=================== timing summary (steady = median of calls 3-6: energy+forces+stress)"
 grep -h "^TIMING" "$LOG" | sed 's/^TIMING //' | (column -t || cat) 2>/dev/null
 echo "(a failed model has no TIMING line; scroll up for its traceback)"
 rm -f "$LOG"
