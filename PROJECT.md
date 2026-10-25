@@ -86,6 +86,8 @@ Pattern: SMAX-trained models stay finite at 300-1400 GPa; OMat24-only models fai
 Decision: first fine-tune = GRACE-2L-SMAX-OMAT-medium (large as second). MatterSim 5M is the best zero-shot but cannot hold production cells for training here.
 MACE mh-1 (omat_pbe / mp_pbe_refit_add / oc20_usemppbe heads, 11 frames): all three fail alike - force RMSE 0.6-1.3 eV/A on H2O 3000-7000 K but 5-20 eV/A on H-rich/9000 K+ states, pressure errors +600..+4000 GPa (docs/figures/mace_mh1_zero_shot.png). mh-0 not run.
 MACE scan (float32, 20 frames): none usable zero-shot. medium-mpa-0 best (H2O 3000/7000 K forces 1.6-1.9 eV/A) but 8-15 eV/A on H-rich states; medium-0b3 finite but ~-500..-1100 GPa too soft; small-omat-0, large-0b2, medium-0b2, matpes-pbe blow up. mh-0/mh-1 not yet scanned (head lookup returned nothing).
+GRACE-2L-SMAX-OMAT-medium fine-tuned on tier s (162 frames, 400 updates, batch 2, 10 min, peak 33.5 GB, cutoff forced to 6.0 by the foundation model), evaluated on 30 valid_m frames (26 states, ~1 frame each, indicative):
+force RMSE 0.46-1.26 eV/A (T-mean 0.86-1.11; zero-shot 1.0-1.6), stress MAE 0.9-6.7 GPa, pressure error -7.3..+8.8 GPa per state with T-means within +-3.4 GPa (zero-shot +5..+49 GPa), energy MAE 3-118 meV/atom after per-element shift. Pressure is fixed by the fine-tune; forces improved only modestly (under-trained). Next: tier m, 2000 updates.
 Open: MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
 
 ## Open questions
