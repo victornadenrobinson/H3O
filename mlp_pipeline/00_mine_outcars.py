@@ -131,6 +131,8 @@ if __name__ == "__main__":
     ap.add_argument("--fill", action="store_true", help="new csv already exists: only re-parse headers (T, composition) and update it")
     ap.add_argument("--root", default=None, help="dir that relative inventory paths are under (default: dir of old csv)")
     a = ap.parse_args()
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # `kill <pid>` unwinds the Pool context -> workers are terminated, not orphaned
     a.new = out(a.new)
     if a.fill:
         df = pd.read_csv(a.new)
