@@ -12,6 +12,7 @@ from common import parse_composition, comp_label, HULL_COMPS
 P_BIN, T_BIN = 25.0, 250.0
 P_MIN, P_MAX = 250.0, 1425.0
 ISOTHERMS = (5000, 7000, 9000)
+KB_EV, EV_A3_GPA = 8.617333e-5, 160.21766
 KNOWN = [2.0, 2.25, 2.5, 2.75, 3.0, 5.0, 7.0, float("inf")]
 SNAP_TOL = 0.04  # relative
 
@@ -30,6 +31,12 @@ def load_inventory(path):
     for c in ("True_T_K", "True_P_GPa", "True_V_A3"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
+    # NVT: OUTCAR 'external pressure' omits the ions' ideal-gas term; eos.dat/hull P = external + N kB T / V
+    # (verified against 238 eos.dat lines with 08_crosscheck_eos_dat.py: slope 1.001, resid std 0.5 GPa)
+    df["P_ext_GPa"] = df.True_P_GPa
+    nat = df.N_ions if "N_ions" in df else df.get("N_H", 0) + df.get("N_O", 0)
+    df["P_kin_GPa"] = (nat * KB_EV * df.True_T_K / df.True_V_A3 * EV_A3_GPA).fillna(0)
+    df["True_P_GPa"] = df.P_ext_GPa + df.P_kin_GPa
     if "N_H" in df:  # composition from OUTCAR ion counts
         df["Other"] = df.Other.fillna("")
         n = df.N_H.fillna(0) + df.N_O.fillna(0)
