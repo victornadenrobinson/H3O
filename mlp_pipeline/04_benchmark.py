@@ -1,4 +1,4 @@
-"""Zero-shot / fine-tuned MLP vs DFT. usage: python 04_benchmark.py {mace|grace|mattersim|mace-ft:/path/model} data.extxyz
+"""Zero-shot / fine-tuned MLP vs DFT. usage: python 04_benchmark.py {mace[:medium-omat-0]|grace[:NAME]|mattersim|mace-ft:/path/model} data.extxyz
 Energy MAE after per-element shift fit; forces/stress absolute. NOTE: GRACE/MatterSim APIs unverified."""
 import os
 import sys
@@ -10,25 +10,19 @@ from common import progress, out, inp
 EV_A3_TO_GPA = 160.21766
 
 
-def get_calc(name):
-    if name == "mace":
-        from mace.calculators import mace_mp
-        return mace_mp(model="medium", default_dtype="float64", device="cuda")
-    if name.startswith("mace-ft:"):
+def get_calc_spec(spec):
+    """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'lj'"""
+    if spec.startswith("mace-ft:"):
         from mace.calculators import MACECalculator
-        return MACECalculator(model_paths=name.split(":", 1)[1], device="cuda", default_dtype="float64")
-    if name == "grace":
-        from tensorpotential.calculator import grace_fm
-        return grace_fm("GRACE-2L-OMAT")  # check name against installed version
-    if name == "mattersim":
-        from mattersim.forward_observer import MatterSimCalculator  # check import path
-        return MatterSimCalculator(device="cuda")
-    raise SystemExit("unknown model")
+        return MACECalculator(model_paths=spec.split(":", 1)[1], device="cuda", default_dtype="float64")
+    from smoke_test import get_calc
+    kind, _, name = spec.partition(":")
+    return get_calc(kind, name or None, "cuda")
 
 
 def main(model, path):
     frames = read(inp(path), index=":")
-    calc = get_calc(model)
+    calc = get_calc_spec(model)
     rows, E_d, E_m, cnt = [], [], [], []
     for a in progress(frames, desc=f"{model} eval"):
         ref_f, ref_s, ref_e = a.get_forces(), a.get_stress(voigt=False), a.get_potential_energy()
@@ -49,7 +43,7 @@ def main(model, path):
     print("overall\n", g(df).to_string())
     print("\nby comp\n", df.groupby("comp").apply(g).to_string())
     print("\nby T\n", df.groupby("T").apply(g).to_string())
-    df.to_csv(out(f"bench_{model.split(':')[0]}_{os.path.basename(path).rsplit('.', 1)[0]}.csv"), index=False)
+    df.to_csv(out(f"bench_{model.replace('/', '_').replace(':', '-')[:60]}_{os.path.basename(path).rsplit('.', 1)[0]}.csv"), index=False)
 
 
 if __name__ == "__main__":
