@@ -60,11 +60,16 @@ def main(a):
             print("  torch", torch.__version__, "cuda", torch.version.cuda, "gpu", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "-")
     except ImportError:
         print("  (no torch in this env; fine for GRACE/TensorFlow)")
-    t0 = time.time(); calc = get_calc(a.model, a.name, device); print(f"  model loaded in {time.time() - t0:.1f}s")
+    t0 = time.time(); calc = get_calc(a.model, a.name, device); t_load = time.time() - t0; print(f"  model loaded in {t_load:.1f}s")
     g = f.copy(); g.calc = calc
-    for i in range(2):  # 2nd call = steady-state timing
-        t0 = time.time(); e = g.get_potential_energy(); fo = g.get_forces(); s = g.get_stress(voigt=False); dt = time.time() - t0
-        print(f"  call {i + 1}: {dt:.2f}s")
+    ts = []
+    for i in range(3):  # call 1 includes warm-up/graph build; calls 2-3 = steady state (fresh positions each time so nothing is cached)
+        g.positions = f.positions + 1e-6 * i
+        t0 = time.time(); e = g.get_potential_energy(); fo = g.get_forces(); s = g.get_stress(voigt=False); ts.append(time.time() - t0)
+        print(f"  call {i + 1}: {ts[-1]:.2f}s")
+    steady = float(np.mean(ts[1:]))
+    print(f"TIMING model={a.model}:{a.name or '-'} device={device} atoms={len(f)} threads={os.environ.get('OMP_NUM_THREADS', '-')} "
+          f"load_s={t_load:.1f} first_s={ts[0]:.2f} steady_s={steady:.2f} ms_per_atom={1000 * steady / len(f):.1f}")
     rmse = float(np.sqrt(np.mean((fo - ref_f) ** 2))); ref_rms = float(np.sqrt(np.mean(ref_f ** 2)))
     P_m, P_d = -np.trace(s) / 3 * EV_A3_GPA, -np.trace(ref_s) / 3 * EV_A3_GPA
     print(f"  E/atom: model {e / len(f):.4f}  dft {ref_e / len(f):.4f} eV   (offset expected: different reference energies)")
