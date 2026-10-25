@@ -30,7 +30,7 @@ def stream(path, mode):
 def grep_lines(path):
     cmd = ["gzip", "-dc", path] if path.endswith(".gz") else ["cat", path]
     p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|total pressure|volume of cell"], stdin=p1.stdout,
+    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|total pressure|volume of cell|temperature +[0-9]"], stdin=p1.stdout,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p1.stdout.close()
     out = p2.communicate()[0].decode(errors="replace")
@@ -95,6 +95,12 @@ def mine_head(path, root=""):
     return dict(True_T_K=T, N_H=d.get("H", 0), N_O=d.get("O", 0), Other=other, N_ions=sum(cnt))
 
 
+def path_temperature(path):
+    """Nominal T from the folder name, deepest match wins: '.../bcc-13000K-liquid/...' -> 13000."""
+    m = re.findall(r"(?<![\d.])(\d{3,5})\s*[kK](?![a-zA-Z])", path)
+    return float(m[-1]) if m else None
+
+
 def mine(path, root=""):
     full = os.path.join(root, path)
     try:
@@ -104,11 +110,18 @@ def mine(path, root=""):
         P = [float(x) for x in re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
         P2 = P[len(P) // 2:]
+        Tmd = [float(x) for x in re.findall(r"temperature\s+([\d.]+)\s*K", tail)]
+        Tmd_mean = sum(Tmd[len(Tmd) // 2:]) / len(Tmd[len(Tmd) // 2:]) if Tmd else None
+        T_source = "TEBEG"
+        if T is None:  # custom VASP builds may not print TEBEG: use folder name, else the measured MD temperature
+            T, T_source = path_temperature(path), "path"
+            if T is None and Tmd_mean is not None:
+                T, T_source = round(Tmd_mean / 50) * 50.0, "md_mean"
         PT = [float(x) for x in re.findall(r"total pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         PT2 = PT[len(PT) // 2:]
         d = comp_dict(full, el, cnt)
         other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
-        return dict(Path=path, True_T_K=T, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
+        return dict(Path=path, True_T_K=T, T_source=T_source if T is not None else None, T_md_mean=Tmd_mean, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
                     P_total_GPa=sum(PT2) / len(PT2) * 0.1 if PT2 else None,
                     P_std_GPa=(pd.Series(P2).std() * 0.1) if len(P2) > 1 else None, N_steps=len(P),
                     True_V_A3=float(V[-1]) if V else None,
