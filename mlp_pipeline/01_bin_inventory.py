@@ -27,7 +27,7 @@ def snap(r):
 
 
 def load_inventory(path, include_lambda=False):
-    df = pd.read_csv(path)
+    df = pd.read_csv(inp(path))
     # lambda_* = TDI windows (1.0 = DFT, 0.0 = pair potential, in between = mixed Hamiltonian): not pure-DFT data
     lam = df.Path.str.contains("lambda_", case=False)
     if not include_lambda:
