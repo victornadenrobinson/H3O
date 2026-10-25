@@ -17,7 +17,7 @@ def load_inventory(path):
     for c in ("True_T_K", "True_P_GPa", "True_V_A3"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
-    print(f"{int((df.True_P_GPa <= 0).sum())} of {len(df)} runs have P<=0 -> pressure mining likely failed; re-run 00_mine_outcars.py")
+    print(f"{int((df.True_P_GPa <= 0).sum())} of {len(df)} runs have P<=0 -> non-positive mean pressure (can be legitimate for low-density/low-T runs)")
     if df.True_P_GPa.median() > 3000:
         print("WARNING: median pressure >3000 -> looks like kB; dividing by 10")
         df["True_P_GPa"] *= 0.1

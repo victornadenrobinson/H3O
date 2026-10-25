@@ -14,7 +14,7 @@ import pandas as pd
 from common import parse_composition, progress
 
 KEYS = ("h3o", "clathrate", "calthrate", "c3-", "/c3", "h2o", "h2-")
-HEAD_N = 3000
+HEAD_N = 8000
 
 
 def stream(path, mode):
@@ -38,12 +38,29 @@ def grep_lines(path):
     return out
 
 
+def _uniq(seq):
+    return list(dict.fromkeys(seq))
+
+
 def parse_head(txt):
-    el = re.findall(r"VRHFIN\s*=\s*([A-Za-z]+)\s*:", txt)
     m = re.search(r"ions per type\s*=\s*([\d\s]+)", txt)
     cnt = [int(x) for x in m.group(1).split()] if m else []
+    # element order: VRHFIN, else POTCAR lines, else TITEL; repeats collapsed in order of appearance
+    el = []
+    for pat in (r"VRHFIN\s*=\s*([A-Z][a-z]?)\s*:", r"POTCAR:\s+\S+\s+([A-Z][a-z]?)[_\s]", r"TITEL\s*=\s*\S+\s+([A-Z][a-z]?)[_\s]"):
+        el = _uniq(re.findall(pat, txt))
+        if len(el) >= len(cnt) > 0:
+            break
+    el = el[:len(cnt)]
     t = re.search(r"TEBEG\s*=\s*([\d.]+)", txt)
     return el, cnt, float(t.group(1)) if t else None
+
+
+def mine_head(path, root=""):
+    el, cnt, T = parse_head(stream(os.path.join(root, path), ("head", HEAD_N)))
+    d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
+    other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
+    return dict(True_T_K=T, N_H=d.get("H", 0), N_O=d.get("O", 0), Other=other, N_ions=sum(cnt))
 
 
 def mine(path, root=""):
@@ -56,7 +73,7 @@ def mine(path, root=""):
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
         P2 = P[len(P) // 2:]
         d = dict(zip(el, cnt)) if len(el) == len(cnt) else {}
-        other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O"))
+        other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
         return dict(Path=path, True_T_K=T, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
                     P_std_GPa=(pd.Series(P2).std() * 0.1) if len(P2) > 1 else None, N_steps=len(P),
                     True_V_A3=float(V[-1]) if V else None,
@@ -71,8 +88,22 @@ if __name__ == "__main__":
     ap.add_argument("old"); ap.add_argument("new")
     ap.add_argument("--workers", type=int, default=64)
     ap.add_argument("--all", action="store_true")
+    ap.add_argument("--fill", action="store_true", help="new csv already exists: only re-parse headers (T, composition) and update it")
     ap.add_argument("--root", default=None, help="dir that relative inventory paths are under (default: dir of old csv)")
     a = ap.parse_args()
+    if a.fill:
+        df = pd.read_csv(a.new)
+        root = os.path.abspath(a.root or os.path.dirname(os.path.abspath(a.old)))
+        from functools import partial
+        with Pool(a.workers) as pool:
+            res = list(progress(pool.imap(partial(mine_head, root=root), list(df.Path), chunksize=50), total=len(df), desc="headers"))
+        for k in ("True_T_K", "N_H", "N_O", "Other", "N_ions"):
+            df[k] = [r[k] for r in res]
+        df["V_per_atom"] = df.True_V_A3 / df.N_ions.replace(0, float("nan"))
+        df.to_csv(a.new, index=False)
+        print(f"updated {a.new}; N_H+N_O==0 for {int(((df.N_H + df.N_O) == 0).sum())} of {len(df)}")
+        print(df.assign(f=df.N_H.astype(str) + "H" + df.N_O.astype(str) + "O+" + df.Other.fillna("")).f.value_counts().head(25).to_string())
+        sys.exit()
     old = pd.read_csv(a.old)
     paths = old.Path if a.all else old.Path[[parse_composition(p) is not None or any(k in p.lower() for k in KEYS) for p in old.Path]]
     root = os.path.abspath(a.root or os.path.dirname(os.path.abspath(a.old)))
