@@ -34,7 +34,6 @@ def parse(txt):
         m = re.search(p, txt); d[k] = m.group(1) if m else None
     m = re.search(r"ISMEAR\s*=\s*(-?\d+);\s*SIGMA\s*=\s*([\d.]+)", txt); d["ISMEAR"], d["SIGMA"] = (m.group(1), m.group(2)) if m else (None, None)
     m = re.search(r"generate k-points for:\s+(\d+)\s+(\d+)\s+(\d+)", txt); d["kmesh"] = "x".join(m.groups()) if m else None
-    first = txt.split("\\n", 1)[0] if "\\n" in txt[:200] else txt[:200]
     d["gamma_only_build"] = "gamma-only" in txt[:300]
     m = re.match(r"\s*(vasp\.[\w.\-]+)", txt); d["vasp"] = m.group(1) if m else None
     pots = list(dict.fromkeys(re.findall(r"POTCAR:\s+(PAW_PBE\s+\S+\s+\S+|PAW\S*\s+\S+\s+\S+)", txt)))
@@ -64,22 +63,23 @@ def main(a):
     for k in ("frames", "comp", "T", "atoms"):
         df[k] = df.source.map(lambda s: meta[s][k])
     key = ["ENCUT", "ISMEAR", "SIGMA", "PREC", "kmesh", "NKPTS", "gamma_only_build", "LASPH", "LREAL", "ISPIN", "potcars"]
+    df[key] = df[key].astype(object).where(df[key].notna(), "-")
     df["settings"] = df[key].astype(str).agg(" | ".join, axis=1)
     ids = {s: i for i, s in enumerate(df.settings.value_counts().index)}
     df["settings_id"] = df.settings.map(ids)
     df.to_csv(out("dft_settings.csv"), index=False)
-    print(f"{len(df)} runs, {df.frames.sum()} frames, {len(ids)} distinct setting groups ({int(df.get('error', pd.Series()).notna().sum())} unreadable)\\n")
+    print(f"{len(df)} runs, {df.frames.sum()} frames, {len(ids)} distinct setting groups ({int(df.get('error', pd.Series()).notna().sum())} unreadable)\n")
     g = df.groupby("settings_id").agg(runs=("source", "size"), frames=("frames", "sum"), comps=("comp", lambda x: ",".join(sorted(set(x))[:6])),
                                       T=("T", lambda x: f"{min(x)}-{max(x)}"), atoms=("atoms", lambda x: f"{min(x)}-{max(x)}"))
     g["settings"] = [df[df.settings_id == i].settings.iloc[0] for i in g.index]
     pd.set_option("display.width", 250); pd.set_option("display.max_colwidth", 120)
     print(g.to_string())
-    print("\\nsettings fields that vary across the dataset:")
+    print("\nsettings fields that vary across the dataset:")
     for k in key:
         v = df[k].astype(str).value_counts()
         if len(v) > 1:
             print(f"  {k}: " + ", ".join(f"{i} ({n})" for i, n in v.head(8).items()))
-    print("\\nexample sources of each minority group (id>0):")
+    print("\nexample sources of each minority group (id>0):")
     for i in sorted(ids.values())[1:6]:
         print(f"  [{i}] {df[df.settings_id == i].source.iloc[0]}")
 
