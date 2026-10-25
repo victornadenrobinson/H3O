@@ -12,4 +12,5 @@ for nm in ([a for a in sys.argv[1:] if not a.startswith("--")] or ["mh-1", "mh-0
         else:
             print(nm, "heads:", heads, "| available:", getattr(c, "available_heads", "?"))
     except Exception as e:
-        print(nm, "failed:", str(e)[:200])
+        import traceback; traceback.print_exc()
+        print(nm, "failed:", type(e).__name__, str(e)[:300], file=sys.stderr if names_only else sys.stdout)

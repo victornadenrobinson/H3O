@@ -84,7 +84,8 @@ Perlmutter: `nersc-python` (pandas, ase). Young (Slurm): `~/work/envs/mace-ng` (
 
 Pattern: SMAX-trained models stay finite at 300-1400 GPa; OMat24-only models fail (MACE-OMAT-0, GRACE OMAT variants). GRACE needs 7-20x less memory per triplet than MACE/MatterSim.
 Decision: first fine-tune = GRACE-2L-SMAX-OMAT-medium (large as second). MatterSim 5M is the best zero-shot but cannot hold production cells for training here.
-Open: MACE candidates (medium-mpa-0, mh-1) and MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
+MACE scan (float32, 20 frames): none usable zero-shot. medium-mpa-0 best (H2O 3000/7000 K forces 1.6-1.9 eV/A) but 8-15 eV/A on H-rich states; medium-0b3 finite but ~-500..-1100 GPa too soft; small-omat-0, large-0b2, medium-0b2, matpes-pbe blow up. mh-0/mh-1 not yet scanned (head lookup returned nothing).
+Open: MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
 
 ## Open questions
 1. H2O offset at 5000/7000 K: tag branch (fcc solid, kp222 small cells) via `09_label_phase.py` and keep as separate config types?
