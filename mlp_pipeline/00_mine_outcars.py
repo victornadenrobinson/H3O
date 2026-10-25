@@ -30,7 +30,7 @@ def stream(path, mode):
 def grep_lines(path):
     cmd = ["gzip", "-dc", path] if path.endswith(".gz") else ["cat", path]
     p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|total pressure|volume of cell|temperature +[0-9]"], stdin=p1.stdout,
+    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|total pressure|volume of cell|temperature"], stdin=p1.stdout,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p1.stdout.close()
     out = p2.communicate()[0].decode(errors="replace")
@@ -110,7 +110,9 @@ def mine(path, root=""):
         P = [float(x) for x in re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
         P2 = P[len(P) // 2:]
-        Tmd = [float(x) for x in re.findall(r"temperature\s+([\d.]+)\s*K", tail)]
+        # VASP's fixed-width output overflows at >= 10000 K: 'TEBEG = ******' and '(temperature13378.34 K)' (no space)
+        Tmd = [float(x) for x in re.findall(r"mean temperature <T/S>/<1/S>\s*:\s*([\d.]+)", tail)] or \
+              [float(x) for x in re.findall(r"\(temperature\s*([\d.]+)\s*K\)", tail)]
         Tmd_mean = sum(Tmd[len(Tmd) // 2:]) / len(Tmd[len(Tmd) // 2:]) if Tmd else None
         T_source = "TEBEG"
         if T is None:  # custom VASP builds may not print TEBEG: use folder name, else the measured MD temperature
@@ -174,6 +176,8 @@ if __name__ == "__main__":
             from common import inp
             kn = pd.concat([pd.read_csv(inp(k)) for k in a.known], ignore_index=True)
             kn = kn[kn.True_T_K.notna() & kn.True_P_GPa.notna()].drop_duplicates("Path")
+            if "T_source" in kn:  # folder-name temperatures are re-mined so T_md_mean is recomputed (cheap)
+                kn = kn[kn.T_source != "path"]
             carry = kn[kn.Path.isin(set(found))]
             found = [p for p in found if p not in set(carry.Path)]
             print(f"{len(carry)} already mined (carried over), {len(found)} new files to mine")
