@@ -30,7 +30,7 @@ def stream(path, mode):
 def grep_lines(path):
     cmd = ["gzip", "-dc", path] if path.endswith(".gz") else ["cat", path]
     p1 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|volume of cell"], stdin=p1.stdout,
+    p2 = subprocess.Popen(["grep", "-a", "-E", "external pressure|total pressure|volume of cell"], stdin=p1.stdout,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p1.stdout.close()
     out = p2.communicate()[0].decode(errors="replace")
@@ -104,9 +104,12 @@ def mine(path, root=""):
         P = [float(x) for x in re.findall(r"external pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
         V = re.findall(r"volume of cell\s*:\s*([\d.]+)", tail)
         P2 = P[len(P) // 2:]
+        PT = [float(x) for x in re.findall(r"total pressure\s*=\s*(-?[\d.]+)\s*kB", tail)]
+        PT2 = PT[len(PT) // 2:]
         d = comp_dict(full, el, cnt)
         other = ",".join(f"{k}{v}" for k, v in d.items() if k not in ("H", "O")) or ("?" if cnt and not d else "")
         return dict(Path=path, True_T_K=T, True_P_GPa=sum(P2) / len(P2) * 0.1 if P2 else None,
+                    P_total_GPa=sum(PT2) / len(PT2) * 0.1 if PT2 else None,
                     P_std_GPa=(pd.Series(P2).std() * 0.1) if len(P2) > 1 else None, N_steps=len(P),
                     True_V_A3=float(V[-1]) if V else None,
                     V_per_atom=float(V[-1]) / sum(cnt) if V and cnt else None, N_H=d.get("H", 0), N_O=d.get("O", 0),

@@ -15,6 +15,7 @@ from common import HULL_COMPS, comp_label
 
 inv = import_module("01_bin_inventory")
 AMU_G, M_H, M_O = 1.66053907, 1.00794, 15.9994
+KB_EV, EV_A3_GPA = 8.617333e-5, 160.21766
 COL = {"h2o": "#d62728", "h2.25o": "#2a78d6", "h3o": "#2e9b4e", "h5o": "#8e44ad", "h7o": "#e66100", "h": "#7f5539"}
 SURF, INK, MUTED, GRID = "#fcfcfb", "#1a1a19", "#6b6b66", "#e4e3df"
 plt.rcParams.update({"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF, "axes.edgecolor": GRID,
@@ -38,6 +39,14 @@ def main(a):
     os.makedirs(a.out, exist_ok=True)
     df = inv.load_inventory(a.inv)
     df = df[(df.N_steps >= a.min_steps) & (df.P_std_GPa.fillna(0) <= a.max_pstd)].copy()
+    if a.pressure == "total" and "P_total_GPa" in df:
+        df["True_P_GPa"] = df.P_total_GPa
+        print("using VASP 'total pressure' (external + kinetic)")
+    elif a.pressure == "total":
+        df["True_P_GPa"] = df.True_P_GPa + df.N_ions * KB_EV * df.True_T_K / df.True_V_A3 * EV_A3_GPA
+        print("no total-pressure column: adding ideal-gas kinetic term N kB T / V to 'external pressure'")
+    else:
+        print("using VASP 'external pressure' as-is (no kinetic term)")
     df["rho"] = (df.N_H * M_H + df.N_O * M_O) * AMU_G / df.True_V_A3
     curves = hull_curves(a.hull)
     rows = []
@@ -99,4 +108,6 @@ if __name__ == "__main__":
     ap.add_argument("inv"); ap.add_argument("hull")
     ap.add_argument("--out", default="plots"); ap.add_argument("--min-steps", type=int, default=100)
     ap.add_argument("--max-pstd", type=float, default=20.0)
+    ap.add_argument("--pressure", choices=["external", "total"], default="external",
+                    help="total = include ions' kinetic (ideal-gas) pressure, as VASP 'total pressure'")
     main(ap.parse_args())
