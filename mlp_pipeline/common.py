@@ -75,6 +75,9 @@ def out(name):
 
 
 def inp(path):
-    """Input file: as given if it exists, else looked up in the runs folder."""
+    """Input file. A bare name resolves to runs/<name> first (so stale copies in the cwd can't shadow current outputs);
+    otherwise the path as given."""
     p = os.path.expanduser(path)
-    return p if os.path.exists(p) or not (RUNS / path).exists() else str(RUNS / path)
+    if not os.path.dirname(p) and (RUNS / p).exists():
+        return str(RUNS / p)
+    return p
