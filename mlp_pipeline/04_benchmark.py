@@ -1,4 +1,4 @@
-"""Zero-shot / fine-tuned MLP vs DFT. usage: python 04_benchmark.py {mace[:medium-omat-0]|grace[:NAME]|mattersim|mace-ft:/path/model} data.extxyz
+"""Zero-shot / fine-tuned MLP vs DFT. usage: python 04_benchmark.py [--n 60 --max-atoms 220 --device cpu]   {mace[:medium-omat-0]|grace[:NAME]|mattersim|mace-ft:/path/model} data.extxyz
 Energy MAE after per-element shift fit; forces/stress absolute. NOTE: GRACE/MatterSim APIs unverified."""
 import os
 import sys
@@ -10,19 +10,39 @@ from common import progress, out, inp
 EV_A3_TO_GPA = 160.21766
 
 
-def get_calc_spec(spec):
+def get_calc_spec(spec, device="cuda"):
     """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'lj'"""
     if spec.startswith("mace-ft:"):
         from mace.calculators import MACECalculator
-        return MACECalculator(model_paths=spec.split(":", 1)[1], device="cuda", default_dtype="float64")
+        return MACECalculator(model_paths=spec.split(":", 1)[1], device=device, default_dtype="float64")
     from smoke_test import get_calc
     kind, _, name = spec.partition(":")
-    return get_calc(kind, name or None, "cuda")
+    return get_calc(kind, name or None, device)
 
 
-def main(model, path):
-    frames = read(inp(path), index=":")
-    calc = get_calc_spec(model)
+def sample_frames(frames, n, max_atoms, seed=0):
+    """Stratified by config_type (composition_T), at most max_atoms atoms; n total (0 = all)."""
+    import random
+    fr = [f for f in frames if len(f) <= max_atoms] if max_atoms else list(frames)
+    if not n or n >= len(fr):
+        return fr
+    rng = random.Random(seed); by = {}
+    for f in fr:
+        by.setdefault(f.info.get("config_type"), []).append(f)
+    for v in by.values():
+        rng.shuffle(v)
+    out = []
+    while len(out) < n and any(by.values()):
+        for k in list(by):
+            if by[k] and len(out) < n:
+                out.append(by[k].pop())
+    return out
+
+
+def main(model, path, n=0, max_atoms=0, device="cuda"):
+    frames = sample_frames(read(inp(path), index=":"), n, max_atoms)
+    print(f"{len(frames)} frames, {len(set(f.info.get('config_type') for f in frames))} config types, device {device}")
+    calc = get_calc_spec(model, device)
     rows, E_d, E_m, cnt = [], [], [], []
     for a in progress(frames, desc=f"{model} eval"):
         ref_f, ref_s, ref_e = a.get_forces(), a.get_stress(voigt=False), a.get_potential_energy()
@@ -47,4 +67,11 @@ def main(model, path):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model"); ap.add_argument("data")
+    ap.add_argument("--n", type=int, default=0, help="stratified sample of N frames (0 = all)")
+    ap.add_argument("--max-atoms", type=int, default=0, help="skip cells larger than this (0 = no limit); speeds up CPU runs")
+    ap.add_argument("--device", default="cuda")
+    a = ap.parse_args()
+    main(a.model, a.data, a.n, a.max_atoms, a.device)
