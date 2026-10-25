@@ -17,6 +17,7 @@ Benchmark foundation MLPs (MACE, MatterSim, GRACE; optionally CHGNet/SevenNet) a
 | Temperature | `TEBEG`, else folder name, else MD mean. VASP prints `TEBEG=******` and `(temperature13378 K)` (no space) at >=10000 K | folder T vs measured T agree within ~1% (11000/13000 K) |
 | Energy label | VASP **free energy (TOTEN)** as `energy`; E(sigma->0) kept as `energy_sigma0` | VASP forces are derivatives of F |
 | Stress label | ASE 3x3 virial (eV/A^3), excludes ions' kinetic term (right for MLP training); add N kB T/V when comparing MLP-MD pressure with the EOS | stress/pressure check: median 0 GPa, 95% < 9 GPa |
+| Production only | composition whitelist (no pure O, no H-poor), path exclusions in `mlp_pipeline/exclude_paths.txt` (kp* tests, pure-o2, too-small, broken, bad*), `--min-box` 9 A | user rule: no test/convergence systems in training |
 | Dataset tiers | nested s (1 run x 1 frame / state) < m (3x3) < l (6x5); state = (composition, T bin, 100 GPa bin) | checker: s in m in l |
 | Split | 80/20 grouped by run directory | no shared run dirs |
 | Not verified | what energy convention foundation models' own training sets used; GRACE/MatterSim fine-tune APIs | see envs/README.md |

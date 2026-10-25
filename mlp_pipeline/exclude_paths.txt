@@ -1,0 +1,7 @@
+# Regexes (case-insensitive, searched in the OUTCAR path) for runs that are NOT production-like and must stay out of the training sets.
+# One per line; '#' starts a comment. Edit freely, then rerun 02 (the per-run cache keeps this fast). 02 prints how many runs each rule removes.
+kp\d{2,3}            # k-point convergence tests (e.g. eos/kp222/3000K/fcc-32mol)
+pure-o2              # pure-oxygen test system
+too-small            # undersized cells
+broken               # broken / aborted runs
+(^|/)bad\d*(/|$)     # failed runs flagged by hand

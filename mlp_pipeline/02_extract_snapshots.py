@@ -105,6 +105,22 @@ def select(df, a):
         print(f"--min-box {a.min_box} A: dropping {int((box < a.min_box).sum())} of {len(d)} runs (cells smaller than the 9-12 A rule); "
               f"box edge range kept {box[box >= a.min_box].min():.1f}-{box.max():.1f} A")
         d = d[box >= a.min_box]
+    # production-only: composition whitelist + path exclusion rules (exclude_paths.txt, --exclude)
+    if a.comps != "all":
+        keep_c = set(a.comps.split(","))
+        print(f"composition whitelist: dropping {int((~d.comp_snap.isin(keep_c)).sum())} runs ({sorted(set(d.comp_snap) - keep_c)})")
+        d = d[d.comp_snap.isin(keep_c)]
+    rules = list(a.exclude or [])
+    if not a.no_default_exclusions and os.path.exists(a.exclude_file):
+        for ln in open(a.exclude_file):
+            ln = ln.split("#", 1)[0].strip()
+            if ln:
+                rules.append(ln)
+    for rx in rules:
+        hit = d.Path.str.contains(rx, regex=True, case=False)
+        if hit.any():
+            print(f"exclusion rule {rx!r}: dropping {int(hit.sum())} runs, e.g. {d.Path[hit].iloc[0]}")
+        d = d[~hit]
     lam = d.Path.str.contains("lambda_", case=False)
     keep = d.Path.str.contains(a.lambda_keep) if a.lambda_keep else pd.Series(False, index=d.index)
     d = d[~lam | keep]
@@ -129,6 +145,11 @@ if __name__ == "__main__":
     ap.add_argument("--max-pstd", type=float, default=20.0)
     ap.add_argument("--cache-dir", default=None, help="per-run frame cache (default: runs/cache); reruns only extract new/changed OUTCARs")
     ap.add_argument("--no-cache", action="store_true", help="ignore and do not write the cache")
+    ap.add_argument("--comps", default="h2o,h2.25o,h2.5o,h2.75o,h3o,h4o,h5o,h5.5o,h6o,h7o,h",
+                    help="comma list of snapped compositions to keep ('all' = no filter); default = production H:O mixtures + pure H")
+    ap.add_argument("--exclude", action="append", help="extra regex on the OUTCAR path to exclude (repeatable)")
+    ap.add_argument("--exclude-file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt"))
+    ap.add_argument("--no-default-exclusions", action="store_true")
     ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
