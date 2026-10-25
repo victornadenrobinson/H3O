@@ -1,10 +1,10 @@
 #!/bin/bash
 # Send the newest data bundle to Young after checking the build log passed. Run on Perlmutter from the repo root.
 # usage: bash mlp_pipeline/send_bundle.sh [--dry-run]
-# env overrides: YOUNG=mmm0037@young.rc.ucl.ac.uk  YOUNG_DIR=/lustre/scratch/mmm0037/H3O   (hostname is a guess: use the one you ssh to)
+# env overrides: YOUNG=mmm0037@young-ng.rc.ucl.ac.uk  YOUNG_DIR=/lustre/scratch/mmm0037/H3O   (hostname is a guess: use the one you ssh to)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-YOUNG=${YOUNG:-mmm0037@young.rc.ucl.ac.uk}
+YOUNG=${YOUNG:-mmm0037@young-ng.rc.ucl.ac.uk}
 YOUNG_DIR=${YOUNG_DIR:-/lustre/scratch/mmm0037/H3O}
 LOG=runs/build.log
 [ -f "$LOG" ] || { echo "no $LOG: run build_all.sh first"; exit 1; }
