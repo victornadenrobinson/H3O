@@ -20,6 +20,7 @@ Benchmark foundation MLPs (MACE, MatterSim, GRACE; optionally CHGNet/SevenNet) a
 | Production only | composition whitelist (no pure O, no H-poor), path exclusions in `mlp_pipeline/exclude_paths.txt` (kp* tests, pure-o2, too-small, broken, bad*), `--min-box` 9 A | user rule: no test/convergence systems in training |
 | Dataset tiers | nested s (1 run x 1 frame / state) < m (3x3) < l (6x5); state = (composition, T bin, 100 GPa bin) | checker: s in m in l |
 | Split | 80/20 grouped by run directory | no shared run dirs |
+| GRACE model | NOT the small `GRACE-2L-OMAT` we first tried (deprecated, fp64, blew up); candidates `GRACE-2L-SMAX-OMAT-medium/large`, `GRACE-2L-OMAT-large-ft-E`, 1L/3L variants | gracemaker docs (user pasted) |
 | Not verified | what energy convention foundation models' own training sets used; GRACE/MatterSim fine-tune APIs | see envs/README.md |
 
 ## Data status (2026-10-25)

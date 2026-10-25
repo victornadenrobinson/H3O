@@ -37,7 +37,9 @@ def get_calc(model, name, device):
     if model == "grace":
         import tensorpotential.calculator as tc
         print("  tensorpotential.calculator exposes:", [x for x in dir(tc) if not x.startswith("_")][:25])
-        return tc.grace_fm(name or "GRACE-2L-OMAT")
+        # full names per the gracemaker docs; plain name = fp32, add -fp64 for double. GRACE_UQ=1 turns on the per-atom extrapolation grade gamma
+        kw = {"enable_uq": True} if os.environ.get("GRACE_UQ") else {}
+        return tc.grace_fm(name or "GRACE-2L-SMAX-OMAT-medium", **kw)
     if model == "lj":  # harness test only
         from ase.calculators.lj import LennardJones
         return LennardJones(sigma=1.0, epsilon=0.1, rc=4.0)
@@ -88,7 +90,7 @@ def main(a):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, choices=["mace", "mattersim", "grace", "lj"])
-    ap.add_argument("--name", default=None, help="mace: medium | medium-mpa-0 | medium-omat-0 ...; grace: GRACE-2L-OMAT ...; mattersim: checkpoint")
+    ap.add_argument("--name", default=None, help="mace: medium | medium-mpa-0 | medium-omat-0 ...; grace: GRACE-2L-SMAX-OMAT-medium ...; mattersim: checkpoint")
     ap.add_argument("--data", default="valid_m.extxyz"); ap.add_argument("--max-atoms", type=int, default=260)
     ap.add_argument("--device", default="cuda")
     main(ap.parse_args())

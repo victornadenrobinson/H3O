@@ -62,11 +62,13 @@ def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
             except Exception:
                 pass
             continue
+        gam = getattr(calc, "results", {}).get("gamma") if hasattr(calc, "results") else None
         n = len(a); syms = a.get_chemical_symbols()
         cnt.append([syms.count("H"), syms.count("O")]); E_d.append(ref_e); E_m.append(e)
         rows.append(dict(comp=a.info.get("config_type"), T=a.info.get("T_K"), P_dft=a.info.get("P_GPa"),
                          f_se=np.mean((f - ref_f) ** 2), s_ae=np.mean(np.abs(s - ref_s)) * EV_A3_TO_GPA,
-                         dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n))
+                         dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n,
+                         gamma_max=float(np.max(gam)) if gam is not None else np.nan, gamma_mean=float(np.mean(gam)) if gam is not None else np.nan))
     if skipped:
         print(f"SKIPPED {len(skipped)} frames (GPU out of memory), atoms: {sorted(x[0] for x in skipped)}; use --max-atoms or a bigger GPU")
     if not rows:
@@ -81,6 +83,10 @@ def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
     print("overall\n", g(df).to_string())
     print("\nby comp\n", df.groupby("comp").apply(g).to_string())
     print("\nby T\n", df.groupby("T").apply(g).to_string())
+    if df.gamma_max.notna().any():
+        print("\nUQ gamma (<=1: environment similar to the model's training data): mean of per-frame max gamma by T")
+        print(df.groupby("T").gamma_max.agg(["mean", "max"]).round(2).to_string())
+        print("frames with gamma_max > 1:", int((df.gamma_max > 1).sum()), "of", len(df))
     df.to_csv(out(f"bench_{model.replace('/', '_').replace(':', '-')[:60]}_{os.path.basename(path).rsplit('.', 1)[0]}.csv"), index=False)
 
 
