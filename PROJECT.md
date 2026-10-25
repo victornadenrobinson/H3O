@@ -63,7 +63,7 @@ Perlmutter: `nersc-python` (pandas, ase). Young (Slurm): `~/work/envs/mace-ng` (
 - [x] Mine and validate inventory; EOS/eos.dat cross-checks; pressure/temperature/energy conventions fixed
 - [x] Build and verify nested datasets s/m/l with 11000-13000 K data; bundle sent to Young
 - [x] Smoke test: one snapshot through MACE, MatterSim, GRACE on a Young GPU (all load and run)
-- [~] Zero-shot benchmark on valid_m: done for MatterSim, MACE-OMAT/MP-0, GRACE (6 variants); MACE mpa-0/mh-1 pending
+- [~] Zero-shot benchmark on valid_m: done for MatterSim, MACE-OMAT/MP-0, GRACE (6 variants); MACE mh-0 pending (mh-1 done: fails)
 - [ ] Choose models: criteria = pressure error at 400-1400 GPa, 11000/13000 K error, learning curve s/m/l, MD stability
 - [ ] Fine-tune (MACE first, MatterSim second, GRACE third); E0 re-estimation; consider multihead replay
 - [ ] Short MD with fine-tuned models; compare EOS (add N kB T/V) and RDFs against DFT
@@ -84,6 +84,7 @@ Perlmutter: `nersc-python` (pandas, ase). Young (Slurm): `~/work/envs/mace-ng` (
 
 Pattern: SMAX-trained models stay finite at 300-1400 GPa; OMat24-only models fail (MACE-OMAT-0, GRACE OMAT variants). GRACE needs 7-20x less memory per triplet than MACE/MatterSim.
 Decision: first fine-tune = GRACE-2L-SMAX-OMAT-medium (large as second). MatterSim 5M is the best zero-shot but cannot hold production cells for training here.
+MACE mh-1 (omat_pbe / mp_pbe_refit_add / oc20_usemppbe heads, 11 frames): all three fail alike - force RMSE 0.6-1.3 eV/A on H2O 3000-7000 K but 5-20 eV/A on H-rich/9000 K+ states, pressure errors +600..+4000 GPa (docs/figures/mace_mh1_zero_shot.png). mh-0 not run.
 MACE scan (float32, 20 frames): none usable zero-shot. medium-mpa-0 best (H2O 3000/7000 K forces 1.6-1.9 eV/A) but 8-15 eV/A on H-rich states; medium-0b3 finite but ~-500..-1100 GPa too soft; small-omat-0, large-0b2, medium-0b2, matpes-pbe blow up. mh-0/mh-1 not yet scanned (head lookup returned nothing).
 Open: MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
 
