@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from importlib import import_module
-from common import HULL_COMPS, comp_label
+from common import HULL_COMPS, comp_label, phase_from_path
 
 inv = import_module("01_bin_inventory")
 AMU_G, M_H, M_O = 1.66053907, 1.00794, 15.9994
@@ -55,6 +55,10 @@ def main(a):
     x = pd.DataFrame(rows)
     if x.empty:
         raise SystemExit("no mined runs fall inside the hull density ranges")
+    x["phase_path"] = x.Path.map(phase_from_path)
+    if a.phase_csv:
+        ph = pd.read_csv(a.phase_csv)[["Path", "phase"]]
+        x = x.merge(ph, on="Path", how="left")
     x["dP"] = x.P_mined - x.P_hull
     x["dP_pct"] = 100 * x.dP / x.P_hull
     x.to_csv("crosscheck_eos.csv", index=False)
@@ -62,6 +66,12 @@ def main(a):
                                      std_dP=("dP", "std"), med_pct=("dP_pct", "median")).round(1)
     print(f"{len(x)} of {len(df)} quality runs lie on a hull isotherm inside its density range")
     print(s.to_string())
+    key = "phase" if "phase" in x else "phase_path"
+    print(f"\nH2O at 5000/7000 K split by {key}:")
+    h = x[(x.comp == "h2o") & x["T"].isin([5000, 7000])]
+    print(h.groupby(["T", key]).dP.agg(n="size", med="median", std="std").round(1).to_string())
+    print("\nall compositions by", key, ":")
+    print(x.groupby(["comp", key]).dP.agg(n="size", med="median", std="std").round(1).to_string())
     print("\noverall median dP = %.1f GPa, median |dP| = %.1f GPa, median %% = %.1f" % (x.dP.median(), x.dP.abs().median(), x.dP_pct.median()))
     bad = x[x.dP.abs() > 3 * x.dP.abs().median() + 20].sort_values("dP", key=abs, ascending=False)
     print(f"{len(bad)} outliers (|dP| > 3 x median + 20 GPa); worst 15:")
@@ -85,13 +95,16 @@ def main(a):
     fig, axs = plt.subplots(1, 3, figsize=(15, 4.2), sharey=True)
     for ax, T in zip(axs, inv.ISOTHERMS):
         for c, col in COL.items():
-            d = x[(x["T"] == T) & (x.comp == c)]
-            ax.scatter(d.P_hull, d.dP, s=9, color=col, alpha=0.5, linewidths=0, label=c)
+            for ph, mk in (("liquid", "o"), ("solid", "s"), ("superionic", "^")):
+                d = x[(x["T"] == T) & (x.comp == c) & (x[key] == ph)]
+                ax.scatter(d.P_hull, d.dP, s=12, color=col, alpha=0.55, linewidths=0, marker=mk, label=f"{c} {ph}" if T == 5000 else None)
+            d = x[(x["T"] == T) & (x.comp == c) & ~x[key].isin(["liquid", "solid", "superionic"])]
+            ax.scatter(d.P_hull, d.dP, s=12, color=col, alpha=0.4, linewidths=0, marker="x")
         ax.axhline(0, color=INK, lw=0.8); ax.set_title(f"{T} K", loc="left", color=INK)
         ax.set_xlabel("hull P at same density (GPa)"); ax.grid(color=GRID, lw=0.5)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
-    axs[0].set_ylabel("P$_{mined}$ - P$_{hull}$ (GPa)"); axs[0].legend(frameon=False, fontsize=8, markerscale=2)
+    axs[0].set_ylabel("P$_{mined}$ - P$_{hull}$ (GPa)"); axs[0].legend(frameon=False, fontsize=7, markerscale=1.5, ncol=2, title="o liquid  s solid  ^ superionic  x other", title_fontsize=7)
     fig.savefig(os.path.join(a.out, "fig4_eos_residuals.png"), dpi=160, bbox_inches="tight"); plt.close(fig)
     print("wrote crosscheck_eos.csv,", os.path.join(a.out, "fig3_eos_overlay.png"), os.path.join(a.out, "fig4_eos_residuals.png"))
 
@@ -101,4 +114,5 @@ if __name__ == "__main__":
     ap.add_argument("inv"); ap.add_argument("hull")
     ap.add_argument("--out", default="plots"); ap.add_argument("--min-steps", type=int, default=100)
     ap.add_argument("--max-pstd", type=float, default=20.0)
+    ap.add_argument("--phase-csv", default=None, help="phase.csv from 09_label_phase.py (dynamical phase); else path-based tag")
     main(ap.parse_args())

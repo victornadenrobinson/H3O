@@ -48,3 +48,13 @@ def progress(it, **kw):
         return tqdm(it, **kw)
     except ImportError:
         return it
+
+
+def phase_from_path(path):
+    """Starting-structure tag from folder names (deepest component first). Not the dynamical phase: see 09_label_phase.py."""
+    for comp in reversed(strip_root(path).split("/")[:-1]):
+        for key, lab in (("superionic", "superionic"), ("plastic", "plastic"), ("solid", "solid"),
+                         ("glass", "glass"), ("liquid", "liquid"), ("melt", "liquid"), ("fluid", "liquid")):
+            if key in comp:
+                return lab
+    return "unknown"
