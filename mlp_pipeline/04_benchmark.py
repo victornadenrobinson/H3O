@@ -20,10 +20,13 @@ def get_calc_spec(spec, device="cuda"):
     return get_calc(kind, name or None, device)
 
 
-def sample_frames(frames, n, max_atoms, seed=0):
+def sample_frames(frames, n, max_atoms, seed=0, min_box=0.0):
     """Stratified by config_type (composition_T), at most max_atoms atoms; n total (0 = all)."""
     import random
     fr = [f for f in frames if len(f) <= max_atoms] if max_atoms else list(frames)
+    if min_box:
+        n0 = len(fr); fr = [f for f in fr if f.get_volume() ** (1 / 3) >= min_box]
+        print(f"--min-box {min_box} A: kept {len(fr)} of {n0} frames")
     if not n or n >= len(fr):
         return fr
     rng = random.Random(seed); by = {}
@@ -39,8 +42,8 @@ def sample_frames(frames, n, max_atoms, seed=0):
     return out
 
 
-def main(model, path, n=0, max_atoms=0, device="cuda"):
-    frames = sample_frames(read(inp(path), index=":"), n, max_atoms)
+def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
+    frames = sample_frames(read(inp(path), index=":"), n, max_atoms, min_box=min_box)
     print(f"{len(frames)} frames, {len(set(f.info.get('config_type') for f in frames))} config types, device {device}")
     calc = get_calc_spec(model, device)
     rows, E_d, E_m, cnt, skipped = [], [], [], [], []
@@ -87,6 +90,7 @@ if __name__ == "__main__":
     ap.add_argument("model"); ap.add_argument("data")
     ap.add_argument("--n", type=int, default=0, help="stratified sample of N frames (0 = all)")
     ap.add_argument("--max-atoms", type=int, default=0, help="skip cells larger than this (0 = no limit); speeds up CPU runs")
+    ap.add_argument("--min-box", type=float, default=0.0, help="only frames with cell edge V^(1/3) >= this (A); 9.0 matches the training rule")
     ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
-    main(a.model, a.data, a.n, a.max_atoms, a.device)
+    main(a.model, a.data, a.n, a.max_atoms, a.device, a.min_box)
