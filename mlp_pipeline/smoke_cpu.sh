@@ -12,6 +12,6 @@ run "MACE medium (MP-0)" $HOME/work/envs/mace-ng/bin/python mlp_pipeline/smoke_t
 run "MatterSim" $HOME/work/envs/mattersim-env/bin/python mlp_pipeline/smoke_test.py --model mattersim --data $D --max-atoms 120 --device cpu
 run "GRACE" $HOME/grace-venv/bin/python mlp_pipeline/smoke_test.py --model grace --name GRACE-2L-OMAT --data $D --max-atoms 120 --device cpu
 echo; echo "=================== CPU timing summary (steady = mean of calls 2-3: energy+forces+stress)"
-grep -h "^TIMING" "$LOG" | sed 's/^TIMING //' | column -t
+grep -h "^TIMING" "$LOG" | sed 's/^TIMING //' | (column -t || cat) 2>/dev/null
 echo "(a failed model has no TIMING line; scroll up for its traceback)"
 rm -f "$LOG"
