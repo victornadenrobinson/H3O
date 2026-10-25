@@ -7,7 +7,7 @@ Composition comes from OUTCAR ion counts (00_mine_outcars.py). `comp` = exact H:
 import argparse
 import numpy as np
 import pandas as pd
-from common import parse_composition, comp_label, HULL_COMPS
+from common import parse_composition, comp_label, HULL_COMPS, out, inp
 
 P_BIN, T_BIN = 25.0, 250.0
 P_MIN, P_MAX = 250.0, 1425.0
@@ -70,9 +70,9 @@ def hull_targets(path):
 
 
 def main(inv_path, hull_path, min_steps, include_lambda=False):
-    df = load_inventory(inv_path, include_lambda)
+    df = load_inventory(inp(inv_path), include_lambda)
     df["good"] = (df.get("N_steps", 1e9) >= min_steps)
-    df.to_csv("inventory_binned.csv", index=False)
+    df.to_csv(out("inventory_binned.csv"), index=False)
     print(f"{len(df)} H/O-only runs; {int((~df.good).sum())} have < {min_steps} steps (excluded from coverage)")
     print(f"{int((df.True_P_GPa <= 0).sum())} runs with mean P <= 0")
     print("\nP (GPa) pct 0/5/25/50/75/95/100:", df.True_P_GPa.quantile([0, .05, .25, .5, .75, .95, 1]).round(0).tolist())
@@ -91,11 +91,11 @@ def main(inv_path, hull_path, min_steps, include_lambda=False):
         tg = hull_targets(hull_path)
         tg["n_runs"] = [len(g[(g.comp_snap == r.comp) & ((g.True_T_K - r.T).abs() <= T_BIN) & ((g.True_P_GPa - r.P_GPa).abs() <= P_BIN)])
                         for r in tg.itertuples()]
-        tg.to_csv("hull_target_coverage.csv", index=False)
+        tg.to_csv(out("hull_target_coverage.csv"), index=False)
         print(f"\nHull EOS targets covered: {(tg.n_runs > 0).sum()} / {len(tg)}  (P +-{P_BIN:.0f} GPa, T +-{T_BIN:.0f} K)")
         s = tg.groupby(["comp", "T"]).agg(targets=("n_runs", "size"), covered=("n_runs", lambda x: int((x > 0).sum())), runs=("n_runs", "sum"))
         print(s.to_string())
-        print("full per-target table -> hull_target_coverage.csv")
+        print("full per-target table ->", out("hull_target_coverage.csv"))
 
 
 if __name__ == "__main__":

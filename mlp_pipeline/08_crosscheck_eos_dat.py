@@ -8,6 +8,7 @@ Reports dP = P_eos - P_external(mined) and tests dP against the ideal-gas term N
 import argparse, os, re
 import numpy as np
 import pandas as pd
+from common import out, inp
 
 KB_EV, EV_A3_GPA = 8.617333e-5, 160.21766
 LINE = re.compile(r"^(\S+)\s+(\d+)H(?:\+(\d+)O)?\s+N=\s*(\d+)\s+V\[A\^3\]=\s*([\d.]+)\s+rho\[g/cc\]=\s*([\d.]+)\s+"
@@ -33,7 +34,7 @@ def main(a):
     root = os.path.abspath(os.path.expanduser(a.root))
     eos = parse_eos([os.path.expanduser(r) for r in a.roots], root)
     print(f"{len(eos)} eos.dat lines in {eos.folder.nunique()} folders")
-    m = pd.read_csv(a.inv)
+    m = pd.read_csv(inp(a.inv))
     m["dir"] = m.Path.str.lower().str.replace("\\", "/")
     m = m.dropna(subset=["True_P_GPa"])
     out = []
@@ -53,7 +54,7 @@ def main(a):
     x = pd.DataFrame(out)
     if x.empty:
         raise SystemExit("no eos.dat lines matched any mined runs (check --root and path prefixes)")
-    x.to_csv("crosscheck_eos_dat.csv", index=False)
+    x.to_csv(out("crosscheck_eos_dat.csv"), index=False)
     print(f"{len(x)} of {len(eos)} eos.dat lines matched to mined runs\n")
     g = x.groupby("folder").agg(n=("dP", "size"), dP=("dP", "mean"), kin=("kin_est", "mean"), resid=("dP_minus_kin", "mean"),
                                 resid_std=("dP_minus_kin", "std")).round(1)

@@ -13,7 +13,7 @@ from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from ase.io import read, write
-from common import progress
+from common import progress, out, inp
 
 MIN_STEP_GAP = 50
 
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]
     a.max_runs = max(t[1] for t in tiers); a.per_run = max(t[2] for t in tiers)
     root = os.path.abspath(os.path.expanduser(a.root))
-    df = select(pd.read_csv(a.inv), a)
+    df = select(pd.read_csv(inp(a.inv)), a)
     meta = df.set_index("Path")
     print(f"{len(df)} runs selected in {df.groupby(['comp_snap', 'T_bin']).ngroups} (composition, T) states")
     print(df.pivot_table(index="comp_snap", columns="T_bin", values="Path", aggfunc="count", fill_value=0).to_string())
@@ -108,6 +108,6 @@ if __name__ == "__main__":
             allf += fr
     for name, nr, nf in tiers:
         sub = [f for f in allf if f.info["run_rank"] < nr and f.info["frame_rank"] < nf]
-        fn = f"{a.out}_{name}.extxyz"
+        fn = out(f"{a.out}_{name}.extxyz")
         write(fn, sub, format="extxyz")
         print(f"tier {name} ({nr} runs x {nf} frames): {len(sub)} frames -> {fn}")

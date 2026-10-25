@@ -11,7 +11,7 @@ from functools import partial
 import numpy as np
 import pandas as pd
 from ase.io import read
-from common import progress
+from common import progress, out, inp
 
 MIN_WINDOW = 100
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     ap.add_argument("--o-liq", type=float, default=2.0, help="A^2 per 1000 steps")
     ap.add_argument("--h-super", type=float, default=20.0); ap.add_argument("--h-liq", type=float, default=20.0)
     a = ap.parse_args()
-    df = pd.read_csv(a.inv)
+    df = pd.read_csv(inp(a.inv))
     df = df[df.good & (df.True_T_K >= a.tmin) & (df.comp_snap != "unknown")]
     if a.sample:
         df = df.sample(min(a.sample, len(df)), random_state=0)
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         rows = list(progress(p.imap(partial(one, root=root), list(df.Path), chunksize=4), total=len(df), desc="phase MSD"))
     x = pd.DataFrame(rows)
     x["phase"] = [label(r, a.o_liq, a.h_super, a.h_liq) if r["window"] > 0 else "unknown" for r in x.to_dict("records")]
-    x.to_csv(a.out, index=False)
+    x.to_csv(out(a.out), index=False)
     print(x.phase.value_counts().to_string())
     print("O rate percentiles (A^2/1000 steps):", x.O_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
     print("H rate percentiles:", x.H_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())

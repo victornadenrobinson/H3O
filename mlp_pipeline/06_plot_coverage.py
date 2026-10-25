@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from importlib import import_module
+from common import out as outp, inp
 
 inv = import_module("01_bin_inventory")
 
@@ -104,10 +105,11 @@ if __name__ == "__main__":
     ap.add_argument("inv"); ap.add_argument("hull", nargs="?")
     ap.add_argument("--metric", choices=["steps", "outcars"], default="steps")
     ap.add_argument("--min-steps", type=int, default=100)
-    ap.add_argument("--out", default="plots")
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    a.out = a.out or outp("plots")
     os.makedirs(a.out, exist_ok=True)
-    df = inv.load_inventory(a.inv)
+    df = inv.load_inventory(inp(a.inv))
     if "N_steps" not in df:
         df["N_steps"] = 1
     g = df[df.N_steps >= a.min_steps].copy()

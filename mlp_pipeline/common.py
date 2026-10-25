@@ -1,5 +1,7 @@
 """Shared helpers: composition parsing from run paths."""
+import os
 import re
+from pathlib import Path
 
 ROOT_PREFIXES = ("quartz-work/tdi/h3o", "tdi/h3o", "quartz-work")
 KB_TO_GPA = 0.1
@@ -58,3 +60,21 @@ def phase_from_path(path):
             if key in comp:
                 return lab
     return "unknown"
+
+
+# All data products go to <repo>/runs (gitignored) unless H3O_RUNS is set.
+RUNS = Path(os.environ.get("H3O_RUNS", Path(__file__).resolve().parent.parent / "runs"))
+
+
+def out(name):
+    """Path of an output file inside the runs folder (bare names only; paths with a directory are kept)."""
+    if os.path.dirname(name):
+        return os.path.expanduser(name)
+    RUNS.mkdir(parents=True, exist_ok=True)
+    return str(RUNS / name)
+
+
+def inp(path):
+    """Input file: as given if it exists, else looked up in the runs folder."""
+    p = os.path.expanduser(path)
+    return p if os.path.exists(p) or not (RUNS / path).exists() else str(RUNS / path)

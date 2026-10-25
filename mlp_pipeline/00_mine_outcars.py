@@ -11,7 +11,7 @@ V per atom is reported since density is the control variable. Reads whole files:
 import argparse, os, re, subprocess, sys
 from multiprocessing import Pool
 import pandas as pd
-from common import parse_composition, progress
+from common import parse_composition, progress, out
 
 KEYS = ("h3o", "clathrate", "calthrate", "c3-", "/c3", "h2o", "h2-")
 HEAD_N = 8000
@@ -128,6 +128,7 @@ if __name__ == "__main__":
     ap.add_argument("--fill", action="store_true", help="new csv already exists: only re-parse headers (T, composition) and update it")
     ap.add_argument("--root", default=None, help="dir that relative inventory paths are under (default: dir of old csv)")
     a = ap.parse_args()
+    a.new = out(a.new)
     if a.fill:
         df = pd.read_csv(a.new)
         root = os.path.abspath(a.root or os.path.dirname(os.path.abspath(a.old)))

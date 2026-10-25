@@ -1,10 +1,11 @@
 """Zero-shot / fine-tuned MLP vs DFT. usage: python 04_benchmark.py {mace|grace|mattersim|mace-ft:/path/model} data.extxyz
 Energy MAE after per-element shift fit; forces/stress absolute. NOTE: GRACE/MatterSim APIs unverified."""
+import os
 import sys
 import numpy as np
 import pandas as pd
 from ase.io import read
-from common import progress
+from common import progress, out, inp
 
 EV_A3_TO_GPA = 160.21766
 
@@ -26,7 +27,7 @@ def get_calc(name):
 
 
 def main(model, path):
-    frames = read(path, index=":")
+    frames = read(inp(path), index=":")
     calc = get_calc(model)
     rows, E_d, E_m, cnt = [], [], [], []
     for a in progress(frames, desc=f"{model} eval"):
@@ -48,7 +49,7 @@ def main(model, path):
     print("overall\n", g(df).to_string())
     print("\nby comp\n", df.groupby("comp").apply(g).to_string())
     print("\nby T\n", df.groupby("T").apply(g).to_string())
-    df.to_csv(f"bench_{model.split(':')[0]}.csv", index=False)
+    df.to_csv(out(f"bench_{model.split(':')[0]}_{os.path.basename(path).rsplit('.', 1)[0]}.csv"), index=False)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from importlib import import_module
-from common import HULL_COMPS, comp_label, phase_from_path
+from common import HULL_COMPS, comp_label, phase_from_path, out as outp, inp
 
 inv = import_module("01_bin_inventory")
 AMU_G, M_H, M_O = 1.66053907, 1.00794, 15.9994
@@ -36,8 +36,9 @@ def hull_curves(path):
 
 
 def main(a):
+    a.out = a.out or outp("plots")
     os.makedirs(a.out, exist_ok=True)
-    df = inv.load_inventory(a.inv)
+    df = inv.load_inventory(inp(a.inv))
     df = df[(df.N_steps >= a.min_steps) & (df.P_std_GPa.fillna(0) <= a.max_pstd)].copy()
     print("pressure = OUTCAR external + ideal-gas kinetic term (as eos.dat / hull CSV)")
     df["rho"] = (df.N_H * M_H + df.N_O * M_O) * AMU_G / df.True_V_A3
@@ -61,7 +62,7 @@ def main(a):
         x = x.merge(ph, on="Path", how="left")
     x["dP"] = x.P_mined - x.P_hull
     x["dP_pct"] = 100 * x.dP / x.P_hull
-    x.to_csv("crosscheck_eos.csv", index=False)
+    x.to_csv(outp("crosscheck_eos.csv"), index=False)
     s = x.groupby(["comp", "T"]).agg(n=("dP", "size"), med_dP=("dP", "median"), mean_dP=("dP", "mean"),
                                      std_dP=("dP", "std"), med_pct=("dP_pct", "median")).round(1)
     print(f"{len(x)} of {len(df)} quality runs lie on a hull isotherm inside its density range")
@@ -112,7 +113,7 @@ def main(a):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("inv"); ap.add_argument("hull")
-    ap.add_argument("--out", default="plots"); ap.add_argument("--min-steps", type=int, default=100)
+    ap.add_argument("--out", default=None); ap.add_argument("--min-steps", type=int, default=100)
     ap.add_argument("--max-pstd", type=float, default=20.0)
     ap.add_argument("--phase-csv", default=None, help="phase.csv from 09_label_phase.py (dynamical phase); else path-based tag")
     main(ap.parse_args())
