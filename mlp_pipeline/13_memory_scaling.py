@@ -2,10 +2,11 @@
 energy+forces+stress call, plus neighbour/triplet counts so memory can be predicted for any frame.
 
 usage (inside a GPU job, with the model's own python): python 13_memory_scaling.py mattersim valid_m.extxyz [--min-box 9] [--cut 5 --cut3 4]
-Inference only. FORCE TRAINING needs more (second derivatives + optimizer state: expect ~2-4x), so a model that barely fits here will not train.
+Inference only. MLP_DTYPE=float32 halves MACE memory. GRACE (TensorFlow): memory comes from tf.config get_memory_info (growth mode); use --cut 6. FORCE TRAINING needs more (second derivatives + optimizer state: expect ~2-4x), so a model that barely fits here will not train.
 cut/cut3 are the two-body and three-body cutoffs used only for the triplet COUNT (assumed MatterSim/M3GNet defaults 5.0/4.0 A: check yours).
 """
-import argparse, gc, time
+import argparse, gc, os, time
+os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # GRACE (TensorFlow) otherwise preallocates the whole GPU and memory cannot be read
 import numpy as np
 from ase.io import read
 from ase.neighborlist import neighbor_list
@@ -19,11 +20,23 @@ def counts(f, cut, cut3):
     return int(n2.sum()), int((n3 * np.maximum(n3 - 1, 0)).sum())
 
 
+def tf_mem(reset=False):
+    try:
+        import tensorflow as tf
+        if reset:
+            tf.config.experimental.reset_memory_stats("GPU:0")
+            return 0.0
+        return tf.config.experimental.get_memory_info("GPU:0")["peak"] / 2**30
+    except Exception:
+        return float("nan")
+
+
 def main(a):
     try:
         import torch
     except ImportError:
         torch = None
+    is_tf = a.model.startswith("grace")
     frames = read(inp(a.data), index=":")
     if a.min_box:
         frames = [f for f in frames if f.get_volume() ** (1 / 3) >= a.min_box]
@@ -32,6 +45,8 @@ def main(a):
         by.setdefault(len(f), []).append(f)
     calc = get_calc(a.model.split(":")[0], a.model.split(":")[1] if ":" in a.model else None, a.device)
     total = torch.cuda.get_device_properties(0).total_memory / 2**30 if torch and torch.cuda.is_available() else float("nan")
+    if is_tf and total != total:
+        total = float(os.environ.get("GPU_GIB", 40))   # no torch in the GRACE env: assume the 40 GB A100 (override with GPU_GIB)
     print(f"GPU memory {total:.1f} GiB; {len(frames)} frames, {len(by)} distinct sizes")
     print(f"{'atoms':>6} {'A3/atom':>8} {'pairs':>9} {'triplets':>11} {'peak_GiB':>9} {'sec':>6}  status")
     rows = []
@@ -43,10 +58,14 @@ def main(a):
         try:
             if torch and torch.cuda.is_available():
                 torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats()
+            if is_tf:
+                tf_mem(reset=True)
             g.get_potential_energy(); g.get_forces(); g.get_stress(voigt=False)       # warm-up
             g.positions = f.positions + 1e-6
             t0 = time.time(); g.get_potential_energy(); g.get_forces(); g.get_stress(voigt=False); dt = time.time() - t0
-            if torch and torch.cuda.is_available():
+            if is_tf:
+                peak = tf_mem()
+            elif torch and torch.cuda.is_available():
                 peak = torch.cuda.max_memory_allocated() / 2**30
         except Exception as e:
             status = "OOM" if "out of memory" in str(e).lower() or type(e).__name__ == "OutOfMemoryError" else f"error: {str(e)[:60]}"
