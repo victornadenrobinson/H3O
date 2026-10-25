@@ -19,6 +19,7 @@ from common import progress, out, inp
 MIN_STEP_GAP = 50
 CACHE_VERSION = "v2-free-energy"   # bump when the frame content/label convention changes: invalidates all cached runs
 CACHE_DIR = None                   # set from --cache-dir; None disables caching
+MIN_WIDTH = 0.0                    # set from --min-box: minimum perpendicular cell width (A), applied per run after reading the cell
 
 
 def spread_order(n):
@@ -47,7 +48,19 @@ def cache_file(path, n, root):
     return os.path.join(CACHE_DIR, key[:2], key + ".extxyz")
 
 
+def min_width(cell):
+    m = np.array(cell); V = abs(np.linalg.det(m))
+    return min(V / np.linalg.norm(np.cross(m[(i + 1) % 3], m[(i + 2) % 3])) for i in range(3))
+
+
 def pick(path, n, root=""):
+    path, fr, err = _pick_cached(path, n, root)
+    if not err and fr and MIN_WIDTH and min_width(fr[0].cell) < MIN_WIDTH:   # volume edge V^(1/3) overstates sheared/orthorhombic cells
+        return path, [], f"narrow cell (width {min_width(fr[0].cell):.2f} A < {MIN_WIDTH})"
+    return path, fr, err
+
+
+def _pick_cached(path, n, root=""):
     cf = cache_file(path, n, root)
     if cf and os.path.exists(cf):
         try:
@@ -87,9 +100,9 @@ def _pick(path, n, root=""):
     return path, out, None
 
 
-def _set_cache(d):
-    global CACHE_DIR
-    CACHE_DIR = d
+def _set_cache(d, minw=0.0):
+    global CACHE_DIR, MIN_WIDTH
+    CACHE_DIR, MIN_WIDTH = d, minw
 
 
 def pick_star(args):
@@ -164,16 +177,22 @@ if __name__ == "__main__":
         print(f"cache {CACHE_DIR}: {have} of {len(df)} selected runs already cached")
     print(f"{len(df)} runs selected in {df.groupby(['comp_snap', 'T_bin']).ngroups} (composition, T) states")
     print(df.pivot_table(index="comp_snap", columns="T_bin", values="Path", aggfunc="count", fill_value=0).to_string())
-    allf = []
-    with Pool(a.workers, initializer=_set_cache, initargs=(CACHE_DIR,)) as p:
+    allf = []; n_narrow = 0
+    with Pool(a.workers, initializer=_set_cache, initargs=(CACHE_DIR, a.min_box)) as p:
         for path, fr, err in progress(p.imap(pick_star, [(x, a.per_run, root) for x in df.Path]), total=len(df), desc="extracting"):
             if err:
-                print("skip", path, err); continue
+                if err.startswith("narrow"):
+                    n_narrow += 1
+                else:
+                    print("skip", path, err)
+                continue
             m = meta.loc[path]
             for f in fr:
                 f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa), box_A=round(float(m.True_V_A3) ** (1 / 3), 3),
                               run_rank=int(m.run_rank))
             allf += fr
+    if a.min_box:
+        print(f"{n_narrow} runs dropped because the minimum perpendicular cell width is below {a.min_box} A (sheared/orthorhombic cells)")
     for name, nr, nf in tiers:
         sub = [f for f in allf if f.info["run_rank"] < nr and f.info["frame_rank"] < nf]
         fn = out(f"{a.out}_{name}.extxyz")
