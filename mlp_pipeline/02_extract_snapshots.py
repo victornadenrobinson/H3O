@@ -4,6 +4,7 @@ usage: python 02_extract_snapshots.py inventory_binned.csv snapshots [--tiers s=
 Writes snapshots_s.extxyz, snapshots_m.extxyz, snapshots_l.extxyz. A tier "RxF" = up to R runs per (composition, T bin,
 100 GPa bin) and up to F frames per run. Runs/frames are ranked by a spread-out order (middle first, then fill the gaps),
 so every smaller tier is a subset of the larger ones. Frames: 2nd half of each run, >= MIN_STEP_GAP MD steps apart.
+Energy label = VASP free energy (force-consistent); E(sigma->0) kept in info['energy_sigma0'].
 Stress is stored as full 3x3 (ASE convention, eV/A^3, excludes the ions' kinetic term).
 """
 import argparse
@@ -47,7 +48,11 @@ def pick(path, n, root=""):
         i = idx[j]
         a = frames[i]
         a.info.update(source=path, frame=int(i), frame_rank=rank)
-        a.calc.results["stress"] = a.get_stress(voigt=False)
+        res = a.calc.results
+        if res.get("free_energy") is not None:  # forces are derivatives of the free energy (TOTEN), not of E(sigma->0)
+            a.info["energy_sigma0"] = float(res["energy"])
+            res["energy"] = float(res["free_energy"])
+        res["stress"] = a.get_stress(voigt=False)
         out.append(a)
     return path, out, None
 
