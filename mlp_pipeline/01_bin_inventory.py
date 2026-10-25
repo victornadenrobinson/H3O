@@ -17,10 +17,17 @@ def load_inventory(path):
     for c in ("True_T_K", "True_P_GPa", "True_V_A3"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
+    print(f"{int((df.True_P_GPa <= 0).sum())} of {len(df)} runs have P<=0 -> pressure mining likely failed; re-run 00_mine_outcars.py")
     if df.True_P_GPa.median() > 3000:
         print("WARNING: median pressure >3000 -> looks like kB; dividing by 10")
         df["True_P_GPa"] *= 0.1
-    df["ratio"] = df.Path.map(parse_composition)
+    if "N_H" in df:  # inventory from 00_mine_outcars.py: composition from OUTCAR ion counts
+        df["Other"] = df.Other.fillna("")
+        n = df.N_H.fillna(0) + df.N_O.fillna(0)
+        df = df[(df.Other == "") & (n > 0)].copy()
+        df["ratio"] = np.where(df.N_O > 0, df.N_H / df.N_O.replace(0, np.nan), np.inf).round(3)
+    else:
+        df["ratio"] = df.Path.map(parse_composition)
     df["comp"] = df.ratio.map(comp_label)
     df["P_bin"] = (np.round(df.True_P_GPa / P_BIN) * P_BIN).astype(int)
     df["T_bin"] = (np.round(df.True_T_K / T_BIN) * T_BIN).astype(int)
