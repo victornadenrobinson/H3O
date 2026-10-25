@@ -1,7 +1,7 @@
 #!/bin/bash
 # List python envs (venv + conda) and report which have the MLP packages. Run on the cluster login node (read-only).
 # usage: bash envs/check_envs.sh [extra dir with venvs ...]
-roots=("$HOME/venvs" "$HOME/.virtualenvs" "$HOME/envs" "$HOME/Scratch" "$HOME/miniconda3/envs" "$HOME/anaconda3/envs" "$HOME/.conda/envs" "$@")
+roots=("$HOME/venvs" "$HOME/.virtualenvs" "$HOME/envs" "$HOME/work/envs" "$HOME/work/mattersim" "$HOME/grace-venv" "$HOME/Scratch" "$HOME/miniconda3/envs" "$HOME/anaconda3/envs" "$HOME/.conda/envs" "$@")
 pys=()
 for r in "${roots[@]}"; do
   [ -d "$r" ] || continue
