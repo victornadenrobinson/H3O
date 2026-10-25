@@ -18,10 +18,18 @@ def get_calc_spec(spec, device="cuda"):
     if spec.startswith("grace-ft:"):   # exported gracemaker model dir (e.g. runs/grace/ft_s/final_model)
         import tensorpotential.calculator as tc
         kw = {"enable_uq": True} if os.environ.get("GRACE_UQ") else {}
+        import glob
+        p = os.path.expanduser(spec.split(":", 1)[1])
+        if not os.path.exists(os.path.join(p, "saved_model.pb")):   # gracemaker writes final_model under seed/<n>/; search below the given dir
+            hit = sorted(glob.glob(os.path.join(p, "**", "saved_model.pb"), recursive=True)) or \
+                  sorted(glob.glob(os.path.join(os.path.dirname(p.rstrip("/")), "**", "final_model", "saved_model.pb"), recursive=True))
+            if not hit:
+                raise SystemExit(f"no saved_model.pb under {p}: run `find <run dir> -name saved_model.pb`")
+            p = os.path.dirname(hit[0]); print("using", p)
         try:
-            return tc.TPCalculator(os.path.expanduser(spec.split(":", 1)[1]), **kw)
+            return tc.TPCalculator(p, **kw)
         except TypeError:
-            return tc.TPCalculator(os.path.expanduser(spec.split(":", 1)[1]))
+            return tc.TPCalculator(p)
     from smoke_test import get_calc
     kind, _, name = spec.partition(":")
     return get_calc(kind, name or None, device)
