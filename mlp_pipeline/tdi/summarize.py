@@ -1,20 +1,53 @@
-"""Collect every tdi_<tag>.json in a run directory into one table (and a CSV for the repo).
-usage: python3 mlp_pipeline/tdi/summarize.py runs/tdi [-o docs/data/tdi_results.csv]
-Pairs bcc/fcc entries with the same (P, T, H per O) and prints G_fcc - G_bcc (meV/atom) with the combined statistical error."""
-import argparse, glob, json, os
+"""Summary of every TDI run found, recomputed from the saved lambda series (no need to run collect.py first, partial runs included).
+usage (repo root):  ~/grace-venv/bin/python mlp_pipeline/tdi/summarize.py [dir ...] [-o docs/data/tdi_results.csv] [--plots]
+Without directories it scans runs/tdi* (not runs/tdi_test). One row per tag and directory: G (meV/atom; for insertion runs mu_H per added H), the Gauss-Legendre statistical error, the drift (G over all samples minus G over the first
+half, a convergence hint), the share of the target time done, and the MLP pressure at the highest lambda. Then: G_fcc - G_bcc for equal cell sizes, mixing free energy per added H (crystals and insertion) and the liquid hull."""
+import argparse, glob, json, os, sys
+import numpy as np
 import pandas as pd
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tdi import analyze
+from tdi.gcalc import G_from_nodes
 
-ap = argparse.ArgumentParser(); ap.add_argument("dir"); ap.add_argument("-o", default=None); a = ap.parse_args()
-rows = []
-for f in sorted(glob.glob(os.path.join(a.dir, "tdi_*.json"))):
-    d = json.load(open(f)); A = d.get("args", {}); h = d.get("hist", [])
-    rows.append(dict(tag=d["tag"], phase=d["phase"], T_K=d["T"], P_target_GPa=d["P_target"], H_per_O=A.get("hper", 2.0) if d["nO"] else float("nan"), N=d["N"], nO=d["nO"], nH=d["nH"],
-                     vpa_A3=d["vpa"], P_mlp_GPa=d.get("P_mlp"), k_Einstein=d.get("kE"), O_struct=d.get("O_struct"), nrep=A.get("nrep"), nodes=A.get("nodes"), power=A.get("power"), dt_fs=A.get("dt"), ps_per_node=h[-1]["t_ps"] if h else None,
-                     G_meV_atom=d["G_meV_atom"], G_err_meV_atom=d["G_err_meV_atom"], model=A.get("model"), git=d.get("meta", {}).get("git", "")[:8], date=d.get("meta", {}).get("date", "")))
+ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None); a = ap.parse_args()
+dirs = a.dirs or [d for d in sorted(glob.glob("runs/tdi*")) if os.path.isdir(d) and os.path.basename(d) != "tdi_test"]
+if not dirs:
+    raise SystemExit("no runs/tdi* directory here: run from the repo root or give the directory")
+rows, skipped = [], []
+for d in dirs:
+    for f0 in sorted(glob.glob(os.path.join(d, "*_stage0.json"))):
+        tag = os.path.basename(f0)[:-len("_stage0.json")]; st = json.load(open(f0)); A = st.get("args", {})
+        lam, w = analyze.gauss_legendre(A["nodes"], A["power"]); per_ps = 1000 / A["dt"] / A["every"]
+        def load(k):   # a file being rewritten by a running chunk can be unreadable for a moment: treat as empty
+            f = os.path.join(d, f"{tag}_node{k}.npy")
+            try:
+                return np.load(f) if os.path.exists(f) else np.array([])
+            except Exception:
+                return np.array([])
+        ser = [load(k) for k in range(A["nodes"])]
+        n = min(len(x) for x in ser)
+        if n < 25:
+            skipped.append(f"{os.path.basename(d)}/{tag}: " + ("no samples" if max(len(x) for x in ser) == 0 else f"only {sum(len(x) > 0 for x in ser)}/{A['nodes']} lambda values have samples"))
+            continue
+        G, Ge, dF, m, sd = G_from_nodes(st, lam, w, [x[:n] for x in ser], st["N"]); Gh = G_from_nodes(st, lam, w, [x[:n // 2] for x in ser], st["N"])[0]
+        ps = n / per_ps; P_hi = float("nan"); ft = os.path.join(d, f"{tag}_node{A['nodes'] - 1}_thermo.csv")
+        if os.path.exists(ft):
+            try:
+                P_hi = float(pd.read_csv(ft).P_MLP_GPa.mean())
+            except Exception:
+                pass
+        rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
+                         nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status="done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%",
+                         G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
-    raise SystemExit("no tdi_*.json found (run tdi/collect.py first)")
-pd.set_option("display.width", 220); print(df[["tag", "O_struct", "P_mlp_GPa", "ps_per_node", "G_meV_atom", "G_err_meV_atom", "git"]].to_string(index=False))
+    raise SystemExit("no tag with samples found in " + ", ".join(dirs) + ("\nskipped: " + "; ".join(skipped) if skipped else ""))
+df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs", "dir"]).reset_index(drop=True)
+pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
+print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); P_hi = MLP pressure at the highest lambda, target in P_target):")
+print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
+if skipped:
+    print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
 def pick(g, dt):
     """one row of g: the one with the same dt as `dt` if there is one (then the longest run), else the smallest dt (flagged by the caller)"""
     same = g[g.dt_fs == dt]

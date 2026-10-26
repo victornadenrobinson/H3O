@@ -22,6 +22,7 @@ from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from tdi import refs, engine, analyze
+from tdi.gcalc import stats, G_total_eV, G_from_nodes   # noqa: F401 (collect.py and live.py import these from here)
 
 EV_A3_GPA = 160.21766
 
@@ -133,13 +134,6 @@ def prog(t_start, done, total, t_last=None, n_last=None):
     sp = (now - t_last) / n_last if t_last and n_last else el / max(done, 1)
     rem = (total - done) * sp
     return f" | {sp * 1000:.0f} ms/step | {100 * done / total:.0f}% | ETA {time.strftime('%H:%M', time.localtime(now + rem))} (in {rem / 60:.0f} min)"
-
-
-def stats(series, nb=5):
-    s = np.asarray(series, float)
-    if len(s) < 5 * nb:
-        return float("nan"), float("nan")
-    return analyze.block_stats(s, nblocks=nb)
 
 
 def banner(c):
@@ -470,18 +464,6 @@ def run_node(c, st, k):
             r.snaps = []
         m, e = stats(r.series)
         print(f"lambda {k} = {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
-
-
-def G_total_eV(st, dF):
-    """whole-cell G (eV) from the TDI integral dF; the -kT ln V translation term applies only when the O centre of mass is held fixed (not for the pure-H fluid)"""
-    kt = refs.kT(st["T"]); tr = 0.0 if st.get("no_com_term") else -kt * np.log(st["V"])
-    return st["f_ref_cons_eV"] + dF + tr + st["f_kin_eV"] + st["PV_eV"]
-
-
-def G_from_nodes(st, lam, w, series_list, N):
-    ms = [stats(s) for s in series_list]; m = np.array([x[0] for x in ms]); s = np.array([x[1] for x in ms])
-    dF, dFe = analyze.integrate(m, s, w)
-    return G_total_eV(st, dF) / N * 1e3, dFe / N * 1e3, dF / N * 1e3, m, s
 
 
 if __name__ == "__main__":
