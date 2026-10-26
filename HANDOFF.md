@@ -26,6 +26,8 @@ tiers s/m/l = 212 / 932 / 1281 frames (train/valid grouped by run directory: tra
 ## TDI engine (`mlp_pipeline/tdi/`)
 `refs.py` analytic references (Einstein crystal with fixed O-COM, ideal gas, harmonic network, kinetic terms), `engine.py` (stages direct/stage1/stage2, `FixGroupCom`, Langevin run per lambda), `analyze.py` (Gauss-Legendre in lambda^p, block errors). `python mlp_pipeline/tdi/test_harmonic.py` reproduces an analytic harmonic-crystal free energy to 0.5 meV total (PASS, 8 lambda nodes). Use Langevin: Bussi does not thermalise the modes of a harmonic crystal. Not yet written: structure builder + runner for the real system (builder exists in `17_eos_md.py::build`), GRACE components (full and O-only), proton reference (ideal gas; Uhlenbeck-Ford fluid is the alternative used by Cheng et al.), the DFT-level correction, Slurm array scripts. Plan: first state point 500 GPa 3000 K (Wilson's 5 Mbar row), then 400 GPa; DFT-sized cells (128 O bcc / 108 O fcc); check bcc stays bcc in 20 ps NVT first.
 
+`mlp_pipeline/young_stability.sbatch`: 20 ps NVT check (bcc/fcc at 400 and 500 GPa, 3000 K) that prints O_struct / delta_L; not yet run.
+
 ## Open items, in order
 1. `ft_s2` (small model on the new data, about 10 min), then `bash mlp_pipeline/bench_grace_compare.sh valid_m.extxyz 0 runs/grace/ft_m2 runs/grace/ft_s2` (figure `runs/bench_compare_valid_m.png`; points coloured by composition).
 2. Reduce the force/energy error: unfrozen weights and 8000+ updates (compare train vs validation), then decide whether more data is needed.

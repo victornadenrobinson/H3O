@@ -113,9 +113,15 @@ def run_one(a, calc, vpa, tag):
             m = (disp[:, sel] ** 2).sum(-1).mean(1); h = len(m) // 2
             msd[el] = np.polyfit(np.array(tpos)[h:], m[h:], 1)[0] / 6 * 0.1      # cm^2/s
             msd[f"msd_{el}_end"] = float(m[-1])
+    struct = {}
+    if len(pos) > 20:   # O-sublattice type in the 2nd half of production (time-averaged sites; COM removed), and its Lindemann ratio: did the lattice survive?
+        P0 = np.array(pos); iO = at.numbers == 8; h = len(P0) // 2
+        O = P0[h:, iO] - P0[h:, iO].mean(1, keepdims=True); mean = O.mean(0)
+        lab, c1, c2, d1 = import_module("09_label_phase").o_structure(mean, at.cell.array)
+        struct = dict(O_struct=lab, CN1=c1, CN2=c2, delta_L=float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1))
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
-               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), ps=a.ps, ms_per_step=(time.time() - t0) / step[0] * 1000)
+               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, ms_per_step=(time.time() - t0) / step[0] * 1000)
     print("RESULT", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
     return row
 
