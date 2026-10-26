@@ -18,6 +18,7 @@ ap.add_argument("--phase", default="bcc"); ap.add_argument("--T", type=float, de
 ap.add_argument("--vpa", type=float, nargs="+", required=True); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
 ap.add_argument("--n", type=int, default=40, help="max frames per volume")
 ap.add_argument("--md-p", type=float, nargs="*", default=None, help="MD pressures (GPa) in the order of --vpa: print their difference to the local DFT fit and the equivalent volume error")
+ap.add_argument("--families", action="store_true", help="with --inventory: break the DFT population down by run family (folder above the volume folder): n, V range, mean T, mean P offset from the population fit")
 ap.add_argument("--list", action="store_true", help="with --inventory: list every frame with its source run and its P offset from the local DFT fit")
 ap.add_argument("--inventory", default=None, help="inventory csv: also print the DFT run-level mean P of runs of this phase near each volume (the population the EOS fit is made of)"); ap.add_argument("--device", default="cuda")
 a = ap.parse_args()
@@ -56,6 +57,17 @@ if a.inventory:
         rr.append(row)
     print(pd.DataFrame(rr).round(2).to_string(index=False))
     print("dV_pct = (P_md - P_lin) / |dP/dV| / V: the volume shift that accounts for the pressure difference.")
+    if a.families and coef:
+        from common import run_key
+        rows_f = []
+        for v0, c in coef.items():
+            w = inv[(inv.vpa - v0).abs() <= a.tol].copy()
+            w["fam"] = w.Path.map(lambda p: "/".join(run_key(p).split("/")[:-1]))
+            w["off"] = w.True_P_GPa - np.polyval(c, w.vpa - v0)
+            for fam, g in w.groupby("fam"):
+                rows_f.append(dict(vpa_target=v0, family=fam, n_rows=len(g), n_runs=g.Path.map(run_key).nunique(), vpa_lo=g.vpa.min(), vpa_hi=g.vpa.max(), T_mean=g.True_T_K.mean(), P_mean=g.True_P_GPa.mean(), offset_vs_fit=g.off.mean()))
+        print("\nDFT population by family (offset_vs_fit = mean P minus the population's local linear fit at the same volume):")
+        print(pd.DataFrame(rows_f).round(2).sort_values(["vpa_target", "n_rows"], ascending=[True, False]).to_string(index=False))
     if a.list and coef:
         r["P_pop"] = [np.polyval(coef[v], x - v) if v in coef else np.nan for v, x in zip(r.vpa_target, r.vpa)]
         r["offset_vs_pop"] = r.P_run - r.P_pop
