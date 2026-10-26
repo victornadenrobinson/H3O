@@ -15,7 +15,7 @@ from common import inp, phase_bucket
 EV_A3_GPA = 160.21766
 ap = argparse.ArgumentParser(); ap.add_argument("model"); ap.add_argument("data", nargs="+")
 ap.add_argument("--phase", default="bcc"); ap.add_argument("--T", type=float, default=3000); ap.add_argument("--tol-T", type=float, default=250)
-ap.add_argument("--vpa", type=float, nargs="+", required=True); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
+ap.add_argument("--vpa", type=float, nargs="+", default=None); ap.add_argument("--p-targets", type=float, nargs="+", default=None, help="instead of --vpa: use the volumes where the cleaned DFT population has these pressures (GPa; needs --inventory)"); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
 ap.add_argument("--n", type=int, default=40, help="max frames per volume")
 ap.add_argument("--md-p", type=float, nargs="*", default=None, help="MD pressures (GPa) in the order of --vpa: print their difference to the local DFT fit and the equivalent volume error")
 ap.add_argument("--natoms", type=int, default=None, help="with --inventory: only DFT runs with this many atoms (e.g. 384 = the cell the tier frames come from)")
@@ -24,6 +24,43 @@ ap.add_argument("--families", action="store_true", help="with --inventory: break
 ap.add_argument("--list", action="store_true", help="with --inventory: list every frame with its source run and its P offset from the local DFT fit")
 ap.add_argument("--inventory", default=None, help="inventory csv: also print the DFT run-level mean P of runs of this phase near each volume (the population the EOS fit is made of)"); ap.add_argument("--device", default="cuda")
 a = ap.parse_args()
+
+def population(a):
+    """The DFT runs of this phase and temperature, cleaned like the tier builder (02_extract_snapshots.py) and optionally restricted to one cell size."""
+    inv = import_module("01_bin_inventory").load_inventory(a.inventory)
+    inv = inv[(inv.comp_snap == "h2o") & ((inv.True_T_K - a.T).abs() <= a.tol_T) & (inv.Path.map(phase_bucket) == a.phase)].assign(vpa=lambda d: d.True_V_A3 / d.N_ions)
+    if not a.no_clean:
+        n0 = len(inv); why = {}
+
+        def keep(mask, name):
+            nonlocal inv
+            k = int((~mask).sum())
+            if k:
+                why[name] = k
+            inv = inv[mask]
+        if "good" in inv: keep(inv.good.astype(bool), "not good")
+        keep(inv.True_P_GPa.between(200, 1450), "P outside 200-1450 GPa")
+        if "P_std_GPa" in inv: keep(inv.P_std_GPa.fillna(0) <= 20, "P std > 20 GPa")
+        keep(inv.True_V_A3 ** (1 / 3) >= 8.5, "box edge < 8.5 A")
+        exfile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt")
+        if os.path.exists(exfile):
+            for ln in open(exfile):
+                rx = ln.split("#", 1)[0].strip()
+                if rx:
+                    keep(~inv.Path.str.contains(rx, regex=True, case=False), f"exclude rule {rx}")
+        print(f"cleaning the population like the tier builder: {n0} -> {len(inv)} rows; removed {why}")
+    if a.natoms:
+        n0 = len(inv); inv = inv[inv.N_ions == a.natoms]; print(f"--natoms {a.natoms}: {n0} -> {len(inv)} rows")
+    return inv
+
+
+POP = population(a) if a.inventory else None
+if a.vpa is None:
+    if not (a.p_targets and a.inventory):
+        raise SystemExit("give --vpa, or --p-targets together with --inventory")
+    c = np.polyfit(POP.vpa, np.log(POP.True_P_GPa.clip(lower=1)), 2); g = np.linspace(POP.vpa.min(), POP.vpa.max(), 800); Pg = np.exp(np.polyval(c, g))
+    a.vpa = [float(np.interp(-p, -Pg, g)) for p in a.p_targets]
+    print(f"{len(POP)} {a.phase} DFT rows: V/atom {POP.vpa.min():.3f}-{POP.vpa.max():.3f}, P {POP.True_P_GPa.min():.0f}-{POP.True_P_GPa.max():.0f} GPa; volumes for P = {a.p_targets}: {[round(v, 3) for v in a.vpa]}")
 frames = [f for p in a.data for f in read(inp(p), index=":")]
 frames = [f for f in frames if str(f.info.get("config_type", "")).startswith("h2o_") and abs(f.info.get("T_K", 0) - a.T) <= a.tol_T
           and phase_bucket(str(f.info.get("source", ""))) == a.phase]
@@ -44,29 +81,7 @@ t = r.groupby("vpa_target").agg(n=("dP", "size"), vpa=("vpa", "mean"), T=("T", "
 print(t.to_string())
 print("P_dft = frame stress + kinetic term; P_run = the run-level mean P stored with the frame (inventory convention). If they differ by more than a few GPa on average, the frame stress and the inventory EOS are not the same quantity.")
 if a.inventory:
-    inv = import_module("01_bin_inventory").load_inventory(a.inventory)
-    inv = inv[(inv.comp_snap == "h2o") & ((inv.True_T_K - a.T).abs() <= a.tol_T) & (inv.Path.map(phase_bucket) == a.phase)].assign(vpa=lambda d: d.True_V_A3 / d.N_ions)
-    if not a.no_clean:   # the same filters 02_extract_snapshots.py applies before it picks training runs
-        import re
-        n0 = len(inv); why = {}
-        def drop(mask, name):
-            global inv
-            k = int((~mask).sum())
-            if k: why[name] = k
-            inv = inv[mask]
-        if "good" in inv: drop(inv.good.astype(bool), "not good")
-        drop(inv.True_P_GPa.between(200, 1450), "P outside 200-1450 GPa")
-        if "P_std_GPa" in inv: drop(inv.P_std_GPa.fillna(0) <= 20, "P std > 20 GPa")
-        drop(inv.True_V_A3 ** (1 / 3) >= 8.5, "box edge < 8.5 A")
-        exfile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt")
-        if os.path.exists(exfile):
-            for ln in open(exfile):
-                rx = ln.split("#", 1)[0].strip()
-                if rx:
-                    drop(~inv.Path.str.contains(rx, regex=True, case=False), f"exclude rule {rx}")
-        print(f"cleaning the population like the tier builder: {n0} -> {len(inv)} rows; removed {why}")
-    if a.natoms:
-        n0 = len(inv); inv = inv[inv.N_ions == a.natoms]; print(f"--natoms {a.natoms}: {n0} -> {len(inv)} rows")
+    inv = POP
     print(f"\nDFT runs of the same phase and T in the inventory ({len(inv)}): run-level mean P near each volume (window +-{a.tol:.2f} A^3/atom)")
     rr = []; coef = {}
     for k, v0 in enumerate(a.vpa):
