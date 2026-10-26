@@ -94,7 +94,7 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         w, hh = pick(w, m.dt_fs, m.nodes), pick(hh, m.dt_fs, m.nodes); n = m.nH - 2 * m.nO
         dG = (m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n
         err = ((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n
-        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, N_H=int(hh.N),
+        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node, nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_H=int(hh.N),
                           note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid" if not (m.nodes == w.nodes == hh.nodes) else "")))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
@@ -107,13 +107,15 @@ if solid:
     print(pd.DataFrame(solid).round(2).to_string(index=False))
 hull = []
 for (P, T), g in df.groupby(["P_target_GPa", "T_K"]):
-    w, hh = g[(g.phase == "liquid") & (g.H_per_O == 2.0)], g[g.phase == "H"]
-    if len(w) and len(hh):
-        w, hh = w.iloc[0], hh.iloc[0]
+    wg, hg = g[(g.phase == "liquid") & (g.H_per_O == 2.0)], g[g.phase == "H"]
+    if len(wg) and len(hg):
         for _, m in g[(g.phase == "liquid") & (g.H_per_O > 2.0)].iterrows():
+            w, hh = pick(wg, m.dt_fs, m.nodes), pick(hg, m.dt_fs, m.nodes)
             n = m.H_per_O - 2.0; fw, fh = 3 / (3 + n), n / (3 + n)   # atom fractions of the H2O part and of the added H in the mixture
+            note = ("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid " if not (m.nodes == w.nodes == hh.nodes) else "") + ("not done" if not all(str(x.status).startswith("done") for x in (m, w, hh)) else "")
             hull.append(dict(P_GPa=P, T_K=T, H_per_O=m.H_per_O, x_H=n / (1 + n), dG_mix_meV_atom=m.G_meV_atom - fw * w.G_meV_atom - fh * hh.G_meV_atom,
-                             err=(m.G_err_meV_atom ** 2 + (fw * w.G_err_meV_atom) ** 2 + (fh * hh.G_err_meV_atom) ** 2) ** .5))
+                             err=(m.G_err_meV_atom ** 2 + (fw * w.G_err_meV_atom) ** 2 + (fh * hh.G_err_meV_atom) ** 2) ** .5, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node,
+                             nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_mix=int(m.N), N_H2O=int(w.N), N_H=int(hh.N), note=note.strip()))
 if hull:
     print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom:")
     print(pd.DataFrame(hull).round(2).to_string(index=False))
