@@ -86,11 +86,23 @@ if __name__ == "__main__":
     with Pool(a.workers) as p:
         rows = list(progress(p.imap(partial(one, root=root), list(df.Path), chunksize=4), total=len(df), desc="phase MSD"))
     x = pd.DataFrame(rows)
+    keep = [c for c in ("Path", "comp_snap", "True_T_K", "T_bin", "True_P_GPa", "N_ions") if c in df]
+    x = x.merge(df[keep], on="Path", how="left")
+    x["H_msd"] = x.H_rate * x.window / 1000; x["O_msd"] = x.O_rate * x.window / 1000   # total displacement^2 over the window (A^2)
     x["phase"] = [label(r, a.o_liq, a.h_super, a.h_liq) if r["window"] > 0 else "unknown" for r in x.to_dict("records")]
     x.to_csv(out(a.out), index=False)
     print(x.phase.value_counts().to_string())
     print("O rate percentiles (A^2/1000 steps):", x.O_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
     print("H rate percentiles:", x.H_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
+    # thresholds should be judged against total displacement over the window, per temperature (H diffuses slower at 2000 K than at 7000 K)
+    if "T_bin" in x:
+        ok = x[x.window > 0]
+        q = lambda c: ok.groupby("T_bin")[c].quantile([.1, .5, .9]).unstack().round(1)
+        print("\nH_msd (A^2 over the window) by T bin: 10/50/90th percentile"); print(pd.concat([ok.groupby("T_bin").size().rename("n"), q("H_msd")], axis=1).to_string())
+        print("\nO_msd (A^2 over the window) by T bin: 10/50/90th percentile"); print(pd.concat([ok.groupby("T_bin").size().rename("n"), q("O_msd")], axis=1).to_string())
+        nl = ok[ok.phase.isin(["solid", "superionic"]) & (ok.O_struct == "other")]
+        print(f"\nnon-liquid runs whose O sublattice is neither bcc nor fcc: {len(nl)}; O_msd median {nl.O_msd.median():.2f}, CN1/CN2 value counts:")
+        print(nl.groupby(["CN1", "CN2"]).size().sort_values(ascending=False).head(8).to_string())
     # calibration: how the path-word tags map onto the measured rates and O-sublattice types (tune --o-liq / --h-super from this table)
     x["tag"] = x.Path.map(path_phase_tag)
     print("\nby path tag: median / 90th percentile rate (A^2 per 1000 steps) and O-sublattice counts")

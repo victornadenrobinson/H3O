@@ -1,0 +1,7 @@
+# Free-energy difference between fcc and bcc superionic H2O versus pressure, one row per (source, P, T).
+# EMPTY ON PURPOSE: no value has been verified yet. Fill rows from the papers' tables/figures (record how: table, digitised figure, supplementary data).
+# columns: source,method,T_K,P_GPa,dG_meV_atom,err_meV_atom,sign,how_obtained,notes
+#   sign = "fcc-bcc" if dG is G_fcc - G_bcc (negative = fcc stable) or "bcc-fcc" if dG is G_bcc - G_fcc (positive = fcc stable); the script converts to fcc-bcc.
+#   dG_meV_atom per ATOM (not per H2O: multiply a per-molecule value by 1/3). Put 'NaN' in err if the paper gives none.
+# sources to fill: Wilson2013 (PRL, DFT, Table I), Cheng2021 (Nat Phys, MLP at PBE), Sun2015 / Militzer follow-ups (if found), this-work rows (MLP-TDI approaches A/B/C, and DFT TDI cross-check)
+source,method,T_K,P_GPa,dG_meV_atom,err_meV_atom,sign,how_obtained,notes

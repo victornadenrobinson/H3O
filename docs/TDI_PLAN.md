@@ -29,6 +29,14 @@ NUMBERS NOT OBTAINED. No meV/atom value for G_bcc - G_fcc or its error bar was v
 - Related MLP work seen in the search (not read): JCP 2025 Deep Potential on stress-strain curves (https://pubs.aip.org/aip/jcp/article-abstract/163/22/224507/3374708/Phase-behavior-of-a-machine-learning-potential?redirectedFrom=fulltext); JCP 2023 hybrid solid/liquid TI for the fcc melting at 340 GPa (https://pubs.aip.org/aip/jcp/article-abstract/158/6/064502/2875200/Melting-conditions-and-entropies-of-superionic?redirectedFrom=fulltext).
 Consequences for this plan: (1) replace the ideal-gas proton reference by an Uhlenbeck-Ford fluid (as Cheng et al.), which is soft and avoids the lambda -> 0 overlap problem of Stage 1; (2) the fcc cell can contain hcp-like stacking faults, so check stacking in the fcc runs; (3) the data and potential from Cheng et al. could serve as an independent PBE cross-check of our MLP at the same state point.
 
+## TDI approaches to compare for G_fcc - G_bcc (goal of the research: the published energy differences as a function of P)
+Run the same fcc/bcc cells with each; the spread between approaches is itself the systematic-error estimate.
+- A. Einstein crystal (O) + ideal gas (H), two stages as above. Simplest; risk at lambda -> 0 for the protons.
+- B. Einstein crystal (O) + Uhlenbeck-Ford fluid (H) (Cheng et al. 2021). Soft proton reference, smoother Stage 1.
+- C. Two-step coupling-constant integration from a pair-potential reference (Wilson et al. 2013; also what the earlier VASP lambda_* runs look like).
+- Variants of the quadrature on any of them: Gauss-Legendre in lambda^(1/m) versus MBAR/BAR over all windows.
+Each approach is run at several P along 2000 K, 3000 K and (if the phases survive) 5000 K, then everything goes into docs/data/dg_fcc_bcc.csv next to the literature values (docs/plot_dg_vs_P.py draws one panel per temperature; the CSV is empty until values are filled in from the papers).
+
 ## Cells
 - First use the SAME cells as the DFT runs (fcc 108 O, bcc 128 O): the FEP correction needs DFT single points, and 324/384 atoms is what VASP already ran. Then repeat with larger cells (below) as a finite-size check.
 - Larger check: one cubic supercell per phase, about 250 O each so ΔG per atom is comparable: fcc 4x4x4 conventional (256 O + 512 H = 768 atoms), bcc 6x6x6 (432 O) or 5x5x5 (250 O + 500 H = 750 atoms). Edge must stay above 8.5 A (our box rule) - at about 200-300 GPa these are about 12-14 A.
