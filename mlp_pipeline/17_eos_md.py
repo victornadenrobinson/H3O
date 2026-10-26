@@ -85,10 +85,15 @@ def run_one(a, calc, vpa, tag):
         if s >= n_eq and s % int(10 / a.dt) == 0:
             pos.append(at.get_positions().copy()); tpos.append(s * a.dt)
         if s % int(500 / a.dt) == 0 and s:
-            r = pd.DataFrame(rows); r = r[r.step >= n_eq]
-            Tm = r["T"].mean() if len(r) else T; Pm = r["P_GPa"].mean() if len(r) else P
-            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  T {Tm:.0f}  P {Pm:.1f} GPa  "
-                  f"{(time.time() - t0) / s * 1000:.0f} ms/step", flush=True)
+            allr = pd.DataFrame(rows); prod = allr[allr.step >= n_eq]
+            if len(prod) >= 10:
+                w, phase = prod, "prod avg"
+            else:   # still equilibrating: average over the last 250 fs rather than one instantaneous value
+                w, phase = allr[allr.t_fs >= allr.t_fs.iloc[-1] - 250], "equil, last 250 fs"
+            Tm, Pm = w["T"].mean(), w["P_GPa"].mean()
+            Pe = np.std([x.mean() for x in np.array_split(w["P_GPa"].values, 5)], ddof=1) / np.sqrt(5) if len(w) >= 50 else float("nan")
+            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  [{phase}, {len(w)} pts]  T {Tm:.0f} K  P {Pm:.1f} +- {Pe:.1f} GPa  "
+                  f"(now T {T:.0f} P {P:.1f})  {(time.time() - t0) / s * 1000:.0f} ms/step", flush=True)
         step[0] += a.log_every
     dyn.attach(log, interval=a.log_every)
     dyn.attach(lambda: write(os.path.join(d, "traj.extxyz"), at, append=True) if step[0] >= n_eq else None, interval=int(20 / a.dt))
