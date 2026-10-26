@@ -19,22 +19,22 @@ for k in range(A["nodes"]):
     ser.append(np.load(f) if os.path.exists(f) else np.array([]))
 per_ps = 1000 / A["dt"] / A["every"]           # recorded samples per ps
 for t in a.copy:
-    k_, j_ = t.split(":"); ser[int(k_)] = ser[int(j_)].copy(); print(f"WARNING: node {k_} replaced by a copy of node {j_} (weight of node {k_}: {w[int(k_)]:.2e})")
+    k_, j_ = t.split(":"); ser[int(k_)] = ser[int(j_)].copy(); print(f"WARNING: lambda {k_} replaced by a copy of lambda {j_} (weight of lambda {k_}: {w[int(k_)]:.2e})")
 for t in a.truncate:
-    k_, ps_ = t.split(":"); ser[int(k_)] = ser[int(k_)][:int(float(ps_) * per_ps)]; print(f"node {k_} truncated to the first {ps_} ps ({len(ser[int(k_)])} samples)")
+    k_, ps_ = t.split(":"); ser[int(k_)] = ser[int(k_)][:int(float(ps_) * per_ps)]; print(f"lambda {k_} truncated to the first {ps_} ps ({len(ser[int(k_)])} samples)")
 have = [len(s) / per_ps for s in ser]
-print(f"{a.tag}: samples per node (ps): " + "  ".join(f"{h:.2f}" for h in have))
+print(f"{a.tag}: samples per lambda (ps): " + "  ".join(f"{h:.2f}" for h in have))
 tmax = min(have)
 if tmax < a.every_ps:
-    sys.exit(f"not all nodes have {a.every_ps} ps yet")
+    sys.exit(f"not all lambda values have {a.every_ps} ps yet")
 hist = []
 for t in np.arange(a.every_ps, tmax + 1e-9, a.every_ps):
     G, Ge, dF, m, s = G_from_nodes(st, lam, w, [x[:int(round(t * per_ps))] for x in ser], st["N"])
-    hist.append(dict(t_ps=float(t), G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF)); print(f"  t/node {t:5.2f} ps   G {G:10.2f} +- {Ge:5.2f} meV/atom   (dF_TDI {dF:9.2f})")
+    hist.append(dict(t_ps=float(t), G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF)); print(f"  t/lambda {t:5.2f} ps   G {G:10.2f} +- {Ge:5.2f} meV/atom   (dF_TDI {dF:9.2f})")
 B = "▁▂▃▄▅▆▇█"; g = [h["G_meV_atom"] for h in hist]
 print("G(t) trace: " + "".join(B[int(round((v - min(g)) / (max(g) - min(g) + 1e-12) * 7))] for v in g))
-print("per-node <U_MLP - E_Einstein> (eV, whole cell) over all samples:")
+print("per-lambda <U_MLP - E_Einstein> (eV, whole cell) over all samples:")
 for k in range(A["nodes"]):
-    print(f"   node {k} lam {lam[k]:.3e}  weight {w[k]:.3e}  {m[k]:12.3f} +- {s[k]:8.3f}   contribution {w[k] * m[k] / st['N'] * 1e3:9.2f} meV/atom")
+    print(f"   lambda {k} = {lam[k]:.3e}  weight {w[k]:.3e}  {m[k]:12.3f} +- {s[k]:8.3f}   contribution {w[k] * m[k] / st['N'] * 1e3:9.2f} meV/atom")
 json.dump(dict(st, lam=lam.tolist(), weights=w.tolist(), dudl_mean=m.tolist(), dudl_sem=s.tolist(), hist=hist, G_meV_atom=hist[-1]["G_meV_atom"], G_err_meV_atom=hist[-1]["G_err_meV_atom"]),
           open(os.path.join(a.dir, f"tdi_{a.tag}.json"), "w"), indent=1)

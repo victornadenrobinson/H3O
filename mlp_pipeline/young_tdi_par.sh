@@ -31,7 +31,7 @@ echo "== stage 0 (lambda = 1 run) $(date)"
 [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && echo "stage 0 already done (measured k kept; FRESH=1 to redo)" || $PY -u mlp_pipeline/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"
 [ -f $OUT/${TAGNAME}_stage0.json ] || { echo "stage 0 failed"; exit 1; }
 [ -n "$ONLY0" ] && exit 0   # ONLY0=1: stop after the lambda=1 run (e.g. to compare DT=0.5 and DT=1.0)
-echo "== nodes 0..$((NODES-1)), $NPAR at a time $(date)"
+echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
 if [ -n "$ONLYNODES" ]; then echo $ONLYNODES | tr ' ' '\n'; else
 python3 -c "
@@ -44,7 +44,7 @@ fi | xargs -P $NPAR -I{} bash -c "$PY -u mlp_pipeline/tdi/run_real.py $COMMON --
 XP=$!
 while kill -0 $XP 2>/dev/null; do
   sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
-  for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed s/${TAGNAME}_//): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
+  for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed s/${TAGNAME}_node/lambda /): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
   python3 mlp_pipeline/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
 echo "== done $(date)"; python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME

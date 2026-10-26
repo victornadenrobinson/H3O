@@ -44,6 +44,8 @@ TDI monitoring: `tdi/live.py runs/tdi <tagA> <tagB> [--loop 60 --png]` (text das
 5. Write the TDI runner for the real system; test the runtime of GRACE at 400-750 atoms (measured 172 ms/step for 384 atoms on an A100).
 6. Cheng et al. numbers; optional DFT-level correction by perturbation using existing DFT frames.
 
+User preference: say "lambda" / "lambda values", never "nodes" (nodes = compute nodes). In code the NODES env var, --node option and *_node<k>.* file names are kept for compatibility; printed text says lambda.
+
 ## Working agreements with the user
 Report energies in meV (also relative to kB T), pressure on the x axis for EOS plots, say plainly when something is unverified, do not mock results, keep outputs short, never open a new PR, commit with the Co-Authored-By line, test with Python 3.11. The user runs commands on Perlmutter/Young and pastes output; give them copy-paste blocks that say where to run.
 

@@ -100,7 +100,7 @@ BARS = "▁▂▃▄▅▆▇█"
 
 
 def trace(series, n_per, maxn=20):
-    """sparkline of the per-chunk means of the integrand (time evolution of this node)"""
+    """sparkline of the per-chunk means of the integrand (time evolution of this lambda)"""
     b = [float(np.mean(series[i * n_per:(i + 1) * n_per])) for i in range(len(series) // n_per)][-maxn:]
     if not b:
         return ""
@@ -144,7 +144,7 @@ def stats(series, nb=5):
 
 def banner(c):
     a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
-    mode = "stage 0 only" if a.stage0 else (f"node {a.node} only" if a.node is not None else "all in one process")
+    mode = "stage 0 only" if a.stage0 else (f"lambda {a.node} only" if a.node is not None else "all in one process")
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
     if a.phase == "insert":
         print("\n".join(["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
@@ -154,7 +154,7 @@ def banner(c):
             "path        : U(lam) = (1-lam) U_MLP(host atoms only) + lam U_MLP(all atoms); ghosts are an ideal gas at lam = 0; dU/dlam = U_full - U_host (the interaction energy of the added H)",
             "result      : mu_H(in fcc H2O) = <integral> + kT[ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln Lambda_H, per added H (no P V term); compare with G per atom of pure H at the same P, T",
             f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, no constraints; each lambda {a.equil_ps} ps equilibration + {a.ps} ps production",
-            f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes", "   node   lambda      weight"]
+            f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values", "   index  lambda      weight"]
             + [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]), flush=True); return
     if a.phase in ("H", "liquid"):
         nOr = c.get("nO_real", 0)
@@ -165,7 +165,7 @@ def banner(c):
                  "path        : U(lam) = lam U_MLP ; reference (lam=0) = ideal gas of N indistinguishable H atoms: F_ref = -kT N ln V + kinetic terms + kT ln N! (analytic); F = F_ref + integral_0^1 <U_MLP>_lam dlam",
                  f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs; no centre-of-mass constraint",
                  f"each lambda : {a.equil_ps} ps equilibration + {a.ps} ps production, reports every {a.chunk_ps} ps; the 'rms |u|' in the logs is the displacement of H from its start (liquid if it grows beyond the lattice spacing)",
-                 f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes", "   node   lambda      weight"]
+                 f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values", "   index  lambda      weight"]
         lines += [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]
         print("\n".join(lines), flush=True); return
     lines = [
@@ -183,14 +183,14 @@ def banner(c):
         f"Einstein k  : {('%.3f eV/A^2 (given: skips the lambda=1 run)' % a.k) if a.k else 'measured from a lambda=1 run (k = 3 kT / <|u|^2>), also gives MLP pressure and O structure'}",
         f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, forces/energies from the same MLP calls (one GPU evaluation per step per lambda)",
         f"each lambda : {a.equil_ps} ps equilibration (not used) + {a.ps} ps production = {neq + nprod} steps; sampling every {a.every} steps; reports every {a.chunk_ps} ps",
-        f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes, weight_i = w_i {a.power:g} x_i^{a.power - 1:g}",
-        "   node   lambda      weight     steps   what it samples",
+        f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values, weight_i = w_i {a.power:g} x_i^{a.power - 1:g}",
+        "   index  lambda      weight     steps   what it samples",
     ]
     for k, (l, ww) in enumerate(zip(lam, w)):
         what = "H nearly ideal gas, O on springs" if l < 1e-2 else ("mixed" if l < 0.3 else "mostly the full MLP")
         lines.append(f"   {k:4d}   {l:.3e}   {ww:.3e}   {neq + nprod:6d}   {what}")
     lines += [f"   sum of weights = {w.sum():.6f} (must be 1)",
-              f"total cost  : {a.nodes} nodes x {neq + nprod} steps = {a.nodes * (neq + nprod)} MD steps; at about 150-175 ms/step (384 atoms) that is {a.nodes * (neq + nprod) * 0.16 / 3600:.1f} GPU-hours of work (divided by the number of processes sharing the GPU)",
+              f"total cost  : {a.nodes} lambda values x {neq + nprod} steps = {a.nodes * (neq + nprod)} MD steps; at about 150-175 ms/step (384 atoms) that is {a.nodes * (neq + nprod) * 0.16 / 3600:.1f} GPU-hours of work (divided by the number of processes sharing the GPU)",
               f"outputs     : {a.outdir}/{c['tag']}_stage0.json, {c['tag']}_node<k>.npy / .log, tdi_{c['tag']}.json (from tdi/collect.py)",
               "=" * 100]
     print("\n".join(lines), flush=True)
@@ -397,17 +397,17 @@ def run_node(c, st, k):
         r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
         r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
         r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
-        print(f"node {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
+        print(f"lambda {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
     else:
         r.start()
         Teq = 2 * r.at.get_kinetic_energy() / (r.ndof * units.kB)
         if not np.isfinite(Teq) or Teq > 20 * a.T:
-            print(f"node {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); sys.exit(5)
-        print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
+            print(f"lambda {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); sys.exit(5)
+        print(f"lambda {k} = {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
     n_per = per // a.every
     if done >= nchunk:
-        print(f"node {k}: already complete"); return
+        print(f"lambda {k}: already complete"); return
     t_resume = time.time()
     for ch in range(done + 1, nchunk + 1):
         tl = time.time(); n_before = len(r.series)
@@ -417,8 +417,8 @@ def run_node(c, st, k):
             if Tavg > 2.0 * a.T:
                 raise Unstable(f"mean T_kin {Tavg:.0f} K in the last chunk (target {a.T:.0f} K)")
         except Unstable as ex:
-            print(f"node {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({done + ch - 1} of {nchunk}). "
-                  f"Rerun this node with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
+            print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({done + ch - 1} of {nchunk}). "
+                  f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
             sys.exit(5)
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
@@ -439,7 +439,7 @@ def run_node(c, st, k):
                 write(os.path.join(a.outdir, f"{c['tag']}_node{k}_traj.extxyz"), fr, append=True)
             r.snaps = []
         m, e = stats(r.series)
-        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
+        print(f"lambda {k} = {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
 
 def G_total_eV(st, dF):
@@ -479,13 +479,13 @@ if __name__ == "__main__":
     runs = [LambdaRun(c["at0"], comps, float(l), a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps)) for k, l in enumerate(lam)]
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = len(runs) * (neq + nchunk * per)
     for k, r in enumerate(runs):
-        r.start(); print(f"   node {k} lam {r.lam:.2e} equilibrated: {r.diag()}  {(time.time() - t0) / 60:.1f} min{prog(t0, (k + 1) * neq, tot)}", flush=True)
-    print("   t/node (ps)   G (meV/atom)   dF_TDI (meV/atom)   wall (min)", flush=True)
+        r.start(); print(f"   lambda {k} = {r.lam:.2e} equilibrated: {r.diag()}  {(time.time() - t0) / 60:.1f} min{prog(t0, (k + 1) * neq, tot)}", flush=True)
+    print("   t/lambda (ps)   G (meV/atom)   dF_TDI (meV/atom)   wall (min)", flush=True)
     hist = []; n_per = c["steps"](a.chunk_ps) // a.every
     for ch in range(1, nchunk + 1):
         for k, r in enumerate(runs):
             tl = time.time(); r.advance(per)
-            print(f"     chunk {ch} node {k} lam {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min{prog(t0, len(runs) * neq + ((ch - 1) * len(runs) + k + 1) * per, tot, tl, per)}", flush=True)
+            print(f"     chunk {ch} lambda {k} = {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min{prog(t0, len(runs) * neq + ((ch - 1) * len(runs) + k + 1) * per, tot, tl, per)}", flush=True)
         G, Ge, dF, m, s = G_from_nodes(st, lam, w, [r.series for r in runs], N)
         hist.append(dict(t_ps=ch * a.chunk_ps, G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF))
         print(f"   {ch * a.chunk_ps:6.2f}      {G:12.2f} +- {Ge:5.2f}   {dF:12.2f}        {(time.time() - t0) / 60:7.1f}", flush=True)

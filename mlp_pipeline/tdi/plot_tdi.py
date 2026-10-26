@@ -1,6 +1,6 @@
 """Plots from the TDI node files; aware of nodes that have not finished (or not started).
 usage: python3 mlp_pipeline/tdi/plot_tdi.py runs/tdi fcc_400GPa_3000K [bcc_400GPa_3000K] [-o out.png] [--lit -22.1]
-Panels: (1) <U_MLP - E_Einstein> per node vs lambda (log x): filled markers = nodes with data (size grows with progress), grey crosses = not started;
+Panels: (1) <U_MLP - E_Einstein> per lambda value vs lambda (log x): filled markers = nodes with data (size grows with progress), grey crosses = not started;
 (2) the same vs x = lambda^(1/p), bars = weight x integrand (= contribution to the integral);
 (3) G(t): solid = Gauss-Legendre over all nodes (only once every node has reached time t), dashed = PREVIEW using the nodes that have reached t
     (linear interpolation in x between them, constant beyond the end nodes: only as good as the nodes you have);
@@ -33,7 +33,7 @@ if __name__ == "__main__":
         if L is None:
             print("no stage0 json for", tag); continue
         st, A, lam, w, ser = L; N = st["N"]; per_ps = 1000 / A["dt"] / A["every"]; target = A["ps"] * per_ps; x = lam ** (1 / A["power"])
-        ndone = sum(len(s) >= target for s in ser); info.append(f"{tag}: {ndone}/{len(ser)} nodes complete")
+        ndone = sum(len(s) >= target for s in ser); info.append(f"{tag}: {ndone}/{len(ser)} lambda values complete")
         have = [k for k, s in enumerate(ser) if len(s) >= 10]; none = [k for k in range(len(ser)) if k not in have]
         m = np.array([stats(ser[k])[0] if len(ser[k]) >= 25 else np.mean(ser[k]) for k in have]) / N * 1e3
         e = np.array([stats(ser[k])[1] if len(ser[k]) >= 25 else np.nan for k in have]) / N * 1e3
@@ -48,7 +48,7 @@ if __name__ == "__main__":
         ts, prev, full, fe = cur[tag]
         if len(ts):
             ax[1, 0].plot(ts, prev, "--", color=col[n], alpha=.8); ax[1, 0].errorbar(ts, full, fe, fmt="o-", color=col[n], label=tag)
-    ax[0, 0].set(xscale="log", xlabel="lambda (grey x: node not started)", ylabel="<U_MLP - E_Einstein>  (meV/atom)", title="integrand per node (marker size ~ progress)"); ax[0, 0].axhline(0, c="k", lw=.5); ax[0, 0].legend()
+    ax[0, 0].set(xscale="log", xlabel="lambda (grey x: lambda not started)", ylabel="<U_MLP - E_Einstein>  (meV/atom)", title="integrand per lambda (marker size ~ progress)"); ax[0, 0].axhline(0, c="k", lw=.5); ax[0, 0].legend()
     ax[0, 1].set(xlabel="x = lambda^(1/p)", ylabel="meV/atom (line: integrand, bars: weight x integrand)", title="integrand in the quadrature variable"); ax[0, 1].axhline(0, c="k", lw=.5)
     ax[1, 0].set(xlabel="simulation time per node (ps)", ylabel="G (meV/atom)", title="G incl. P_target V   (solid: all nodes, dashed: preview from available nodes)"); ax[1, 0].legend()
     if len(a.tags) == 2 and all(t in cur for t in a.tags):
