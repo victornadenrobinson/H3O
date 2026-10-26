@@ -32,7 +32,7 @@ for n, tag in enumerate(a.tags):
         G = [G_from_nodes(st, lam, w, [s[:int(round(t * per_ps))] for s in ser], N)[:2] for t in ts]
         Gt[tag] = (ts, np.array([g[0] for g in G]), np.array([g[1] for g in G]))
         ax[1, 0].errorbar(ts, Gt[tag][1], Gt[tag][2], fmt="o-", color=col[n], label=tag)
-ax[0, 0].set(xscale="symlog", xlabel="lambda", ylabel="<U_MLP - E_Einstein>  (meV/atom)", title="integrand per node (error bars: block SEM)"); ax[0, 0].axhline(0, c="k", lw=.5)
+ax[0, 0].set(xscale="log", xlabel="lambda", ylabel="<U_MLP - E_Einstein>  (meV/atom)", title="integrand per node (error bars: block SEM)"); ax[0, 0].axhline(0, c="k", lw=.5)
 ax[0, 1].set(xlabel="x = lambda^(1/p)", ylabel="meV/atom   (line: integrand; bars: weight x integrand)", title="integrand in the quadrature variable"); ax[0, 1].axhline(0, c="k", lw=.5)
 ax[1, 0].set(xlabel="simulation time per node (ps)", ylabel="G (meV/atom)", title="G including P_target V"); ax[1, 0].legend(); ax[0, 0].legend()
 if len(a.tags) == 2 and all(t in Gt for t in a.tags):
