@@ -60,7 +60,7 @@ def _vpa_bin(df, phase, Tb, Ps):
     return np.array([float(np.interp(-p, -P, grid)) for p in Ps])   # P decreases with V: interpolate on the monotone branch
 
 
-def dft_vpa(inv, phase, T, Ps, hper=2.0, min_runs=20):
+def dft_vpa(inv, phase, T, Ps, hper=2.0, min_runs=20, max_extrap=2000):
     """V/atom at pressures Ps from the DFT EOS of this phase/composition at temperature T. T on a 1000 K bin with >= min_runs runs: that bin's fit;
     any other T between two such bins: linear interpolation in T between the neighbouring bin fits (approximate)."""
     df = import_module("01_bin_inventory").load_inventory(inv)
@@ -70,8 +70,13 @@ def dft_vpa(inv, phase, T, Ps, hper=2.0, min_runs=20):
     if abs(T - Tb) < 1 and Tb in good:
         return list(_vpa_bin(df, phase, Tb, Ps))
     lo = [b for b in good if b <= T]; hi = [b for b in good if b >= T]
-    if not lo or not hi:
-        raise SystemExit(f"{phase} {hper}: T = {T:.0f} K is outside the DFT bins with >= {min_runs} runs ({good}): give --vpa")
+    if not lo or not hi:   # outside the bins: linear extrapolation in T from the two nearest bins, at most max_extrap K beyond the nearest one
+        if len(good) < 2 or min(abs(T - b) for b in good) > max_extrap:
+            raise SystemExit(f"{phase} {hper}: T = {T:.0f} K is outside the DFT bins with >= {min_runs} runs ({good}) by more than {max_extrap} K: give --vpa")
+        a, b = sorted(sorted(good, key=lambda x: abs(x - T))[:2])
+        va, vb = _vpa_bin(df, phase, a, Ps), _vpa_bin(df, phase, b, Ps)
+        print(f"WARNING: {phase} volume at {T:.0f} K EXTRAPOLATED linearly in T from the {a} K and {b} K DFT EOS fits (check the MLP pressure at the highest lambda)")
+        return list(va + (vb - va) * (T - a) / (b - a))
     lo, hi = max(lo), min(hi)
     print(f"NOTE: {phase} volume at {T:.0f} K interpolated between the {lo} K and {hi} K DFT EOS fits")
     return list(_vpa_bin(df, phase, lo, Ps) + (_vpa_bin(df, phase, hi, Ps) - _vpa_bin(df, phase, lo, Ps)) * (T - lo) / (hi - lo))

@@ -250,11 +250,11 @@ def solid_vpa(a):
     and the free energy error is second order in it."""
     eos = import_module("17_eos_md")
     try:
-        return eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
+        return eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper, min_runs=a.min_runs)[0]
     except SystemExit:
         if a.hper <= 2.0:
             raise
-        n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], 2.0)[0]; v_h = h_vpa(a.from_dft, a.T, a.P)
+        n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, a.P)
         v = (3 * v_w + n * v_h) / (3 + n)
         print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase}: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
         return v
@@ -494,7 +494,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
