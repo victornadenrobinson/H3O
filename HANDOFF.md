@@ -79,3 +79,8 @@ Report energies in meV (also relative to kB T), pressure on the x axis for EOS p
 
 ## Mistakes already made (do not repeat)
 Double-counted kinetic pressure term (above); tier selection claimed "out1 unequilibrated" without evidence (withdrawn); `r.T` pandas transpose in a progress line; f-string quote nesting breaking py3.11; global thermostat on a harmonic test; `send_bundle.sh` needing a build log that was never written.
+
+## Session 2 additions (2026-10-26 evening)
+Results: fcc H2.25O 5000 K 400 GPa dt 0.5: G = 860.2 +- 2.5 meV/atom (1.5 ps); pure H N=250 dt 0.5: 235.8 +- 1.8 (GL value; the PREVIEW line is a different estimator); mixing per added H with fcc H2O (898.5, still dt 1 fs: rerun!): +165 +- 43 meV (0.38 kT). Insertion 4-lambda test (0.25 ps): mu_H = -111 +- 167 meV (harness test only). Insertion n=1 production (12 lambda values, PS=4) was running on Young.
+New: young_tdi_insert.sbatch (array over n), NREP=2/3 for 32/54-O cells (tag _rep<n>), summarize.py prints crystal and insertion mixing per added H and pairs fcc/bcc only for equal cell size and prefers equal dt, restart guard (dt, lambda, T, natoms in the node state files), live.py shows the pressure of the highest lambda.
+Known weak points (not fixed): block errors at short times (blocks of ~50 fs at 0.25 ps) are probably optimistic; with K given the MLP pressure at the TDI volume is only seen in the highest lambda value (G error ~ (dP)^2 V/2B, second order); insertion costs two MLP evaluations per step.

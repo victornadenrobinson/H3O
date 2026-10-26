@@ -84,7 +84,8 @@ def show(d, tags, brief=False):
         P_(f"  integrand vs lambda index: {spark(mm)}    (lambda increasing ->)")
         pp = [node_pressure(d, tag, k) for k in range(len(ser))]; pp = [x for x in pp if x == x]
         if pp:
-            print(f"  MLP pressure over {len(pp)} lambda values: mean {np.mean(pp):.1f} GPa (target {st['P_target']:.0f}), range {min(pp):.1f}-{max(pp):.1f}  (the integrand lambdas mix the MLP with springs, so the spread is expected)")
+            ph = node_pressure(d, tag, len(ser) - 1)
+            print(f"  MLP pressure at the highest lambda ({lam[-1]:.2f}, closest to the real system): {ph:.1f} GPa (target {st['P_target']:.0f}); over all {len(pp)} lambda values: {min(pp):.1f}-{max(pp):.1f} (small lambda is mostly springs / ideal gas, so that spread is not a check). G error from P_MLP != P_target is second order, ~ (dP)^2 V / 2B")
         nd = sum(len(x) >= 25 for x in ser)
         print(f"  PREVIEW (interpolated through the {nd}/{len(ser)} lambda values that have data): G = {preview(st, A, lam, ser, N):9.2f} meV/atom")
         have = min(n) / per_ps

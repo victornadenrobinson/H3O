@@ -394,6 +394,9 @@ def run_node(c, st, k):
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
+        for key, now in (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"]))):   # a state from other settings would silently mix samples (old state files lack these keys: no check)
+            if key in z.files and abs(float(z[key]) - float(now)) > 1e-9 * max(1.0, abs(float(now))):
+                print(f"lambda {k}: saved state has {key} = {float(z[key])} but this run has {key} = {float(now)}: refusing to mix samples. Use FRESH=1 (deletes the old files) or move them away.", flush=True); sys.exit(6)
         r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
         r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
         r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
@@ -421,7 +424,7 @@ def run_node(c, st, k):
                   f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
             sys.exit(5)
         np.save(f, np.array(r.series))
-        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
+        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, dt=a.dt, lam=l, T=a.T, natoms=len(c["at0"])); os.replace(sf + ".tmp.npz", sf)
         pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
         if r.thermo:
             import csv
