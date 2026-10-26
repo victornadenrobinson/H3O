@@ -18,7 +18,8 @@ df[keep].round(4).to_csv(os.path.join(out, "inventory_runs_slim.csv"), index=Fal
 df.groupby(["comp_snap", "bucket", "T_bin", "P_bin100"]).size().rename("runs").reset_index().to_csv(os.path.join(out, "inventory_counts.csv"), index=False)
 rows = []
 for (comp, tag, T), g in df.dropna(subset=["vpa"]).groupby(["comp_snap", "phase_tag", "T_bin"]):
-    if len(g) < 5:
+    g = g[np.isfinite(g.vpa) & np.isfinite(g.True_P_GPa)]   # a non-finite P or V in one bin made polyfit fail (SVD did not converge)
+    if len(g) < 5 or g.vpa.nunique() < 3:
         continue
     c = np.polyfit(g.vpa, np.log(g.True_P_GPa.clip(lower=1)), 2); res = float(np.std(np.log(g.True_P_GPa.clip(lower=1)) - np.polyval(c, g.vpa)))
     grid = np.linspace(g.vpa.min(), g.vpa.max(), 400); Pg = np.exp(np.polyval(c, grid)); r = dict(comp=comp, phase_tag=tag, T_bin=T, runs=len(g), P_min=g.True_P_GPa.min(), P_max=g.True_P_GPa.max(), vpa_min=g.vpa.min(), vpa_max=g.vpa.max(), fit_rms_lnP=res)
