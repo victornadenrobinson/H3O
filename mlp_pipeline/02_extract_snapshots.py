@@ -140,7 +140,13 @@ def select(df, a):
     d = d.assign(run=d.Path.map(lambda p: p.rsplit("/", 2)[0]), P100=(d.True_P_GPa // 100 * 100).astype(int))
     d = d.sort_values("Path").drop_duplicates("run")  # one OUTCAR per run directory (out1/out2... are a chain)
     # --by-phase: h2o runs are balanced separately per path-tag bucket (fcc / bcc / liquid / other) so fcc and bcc each get their own runs per state
-    d = d.assign(phase_bucket=[phase_bucket(p) if (a.by_phase and c == "h2o") else "all" for p, c in zip(d.Path, d.comp_snap)])
+    lab = {}
+    if getattr(a, "phase_csv", None):   # measured labels from 09_label_phase.py: bucket = <O sublattice>-<dynamical phase>, e.g. fcc-superionic
+        pc = pd.read_csv(inp(a.phase_csv)); a.by_phase = True
+        lab = {p: ("liquid" if ph == "liquid" else f"{st if st in ('fcc', 'bcc') else 'other'}-{ph}")
+               for p, ph, st in zip(pc.Path, pc.phase, pc.get("O_struct", pd.Series(["other"] * len(pc)))) if ph in ("solid", "superionic", "liquid")}
+        print(f"phase labels: {len(lab)} runs labelled; buckets {pd.Series(list(lab.values())).value_counts().to_dict()}")
+    d = d.assign(phase_bucket=[lab.get(p, phase_bucket(p)) if (a.by_phase and c == "h2o") else "all" for p, c in zip(d.Path, d.comp_snap)])
     out = []
     for _, g in d.groupby(["comp_snap", "T_bin", "P100", "phase_bucket"]):
         g = g.sort_values("True_P_GPa")
@@ -167,6 +173,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-default-exclusions", action="store_true")
     ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
     ap.add_argument("--by-phase", action="store_true", help="h2o only: balance runs per (T, 100 GPa) bin separately for fcc / bcc / liquid / other path tags (adds info['phase_tag'])")
+    ap.add_argument("--phase-csv", default=None, help="09_label_phase.py output: bucket h2o runs by measured O sublattice + dynamical phase (implies --by-phase; unlabelled runs fall back to path words)")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
     tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]

@@ -10,10 +10,28 @@ from multiprocessing import Pool
 from functools import partial
 import numpy as np
 import pandas as pd
+from ase import Atoms
 from ase.io import read
-from common import progress, out, inp
+from ase.neighborlist import neighbor_list
+from common import progress, out, inp, path_phase_tag
 
 MIN_WINDOW = 100
+
+
+def o_structure(pos, cell):
+    """O-sublattice type from TIME-AVERAGED O positions (thermal noise averaged out): bcc has 8 neighbours inside 1.08 d1 and 14 inside 1.22 d1,
+    fcc 12 and 12 (d1 = median nearest-O distance). Only meaningful when O does not diffuse (not liquid). Returns (label, CN1, CN2)."""
+    at = Atoms("O" * len(pos), positions=pos, cell=cell, pbc=True); at.wrap()
+    if len(at) < 8:
+        return "other", np.nan, np.nan
+    edge = abs(np.linalg.det(np.array(cell))) ** (1 / 3)
+    rc = min(0.45 * edge, 1.6 * (abs(np.linalg.det(np.array(cell))) / len(at)) ** (1 / 3))
+    i, d = neighbor_list("id", at, rc)
+    nn = np.array([d[i == k].min() if (i == k).any() else np.nan for k in range(len(at))]); d1 = np.nanmedian(nn)
+    cn1 = np.bincount(i[d < 1.08 * d1], minlength=len(at)); cn2 = np.bincount(i[d < 1.22 * d1], minlength=len(at))
+    c1, c2 = float(np.median(cn1)), float(np.median(cn2))
+    lab = "fcc" if abs(c1 - 12) <= 1 and abs(c2 - 12) <= 1 else "bcc" if abs(c1 - 8) <= 1 and abs(c2 - 14) <= 1 else "other"
+    return lab, c1, c2
 
 
 def msd_rates(frames):
@@ -33,6 +51,8 @@ def msd_rates(frames):
         m = sym == el
         out[el] = float(np.mean(np.sum((unw[-1, m] - unw[i0, m]) ** 2, axis=1)) / (L - 1 - i0) * 1000) if m.any() else np.nan
     out["window"] = L - 1 - i0
+    mO = sym == "O"
+    out["struct"], out["CN1"], out["CN2"] = o_structure((unw[i0:, mO] + frac[0, mO] @ cell).mean(0), cell)   # unw = displacement from frame 0: add the start positions if mO.any() else ("none", np.nan, np.nan)
     return out
 
 
@@ -45,7 +65,7 @@ def label(r, o_liq, h_super, h_liq):
 def one(path, root):
     try:
         r = msd_rates(read(os.path.join(root, path), index=":", format="vasp-out"))
-        return dict(Path=path, O_rate=np.nan, H_rate=np.nan, window=0) if r is None else dict(Path=path, O_rate=r["O"], H_rate=r["H"], window=r["window"])
+        return dict(Path=path, O_rate=np.nan, H_rate=np.nan, window=0) if r is None else dict(Path=path, O_rate=r["O"], H_rate=r["H"], window=r["window"], O_struct=r["struct"], CN1=r["CN1"], CN2=r["CN2"])
     except Exception as e:
         return dict(Path=path, O_rate=np.nan, H_rate=np.nan, window=-1)
 
@@ -71,3 +91,12 @@ if __name__ == "__main__":
     print(x.phase.value_counts().to_string())
     print("O rate percentiles (A^2/1000 steps):", x.O_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
     print("H rate percentiles:", x.H_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
+    # calibration: how the path-word tags map onto the measured rates and O-sublattice types (tune --o-liq / --h-super from this table)
+    x["tag"] = x.Path.map(path_phase_tag)
+    print("\nby path tag: median / 90th percentile rate (A^2 per 1000 steps) and O-sublattice counts")
+    g = x.groupby("tag")
+    print(pd.DataFrame({"n": g.size(), "O_med": g.O_rate.median().round(2), "O_p90": g.O_rate.quantile(.9).round(2),
+                        "H_med": g.H_rate.median().round(2), "H_p90": g.H_rate.quantile(.9).round(2)}).to_string())
+    if "O_struct" in x:
+        print("\nO sublattice by tag x phase (non-liquid runs only):")
+        print(x[x.phase.isin(["solid", "superionic"])].pivot_table(index="tag", columns=["O_struct", "phase"], values="Path", aggfunc="count", fill_value=0).to_string())
