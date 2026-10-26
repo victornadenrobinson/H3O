@@ -97,16 +97,19 @@ def _nvt_table():
                 if r.get("branch", "solid") != "solid" or r.get("phase") not in ("fcc", "bcc") or "T_set" not in r or "P_GPa" not in r: continue
                 dl, do = r.get("delta_L", np.nan), r.get("D_O_cm2s", np.nan); keep = (r.get("O_struct") == r["phase"]) and bool(np.isfinite(do) and do < 1e-5)
                 pt = r.get("P_target", np.nan)
-                out.append(dict(phase=r["phase"], hper=float(r["hper"]) if np.isfinite(r.get("hper", np.nan)) else 2.0, T=float(r["T_set"]), P=float(pt) if np.isfinite(pt) else float(r["P_GPa"]), exact=bool(np.isfinite(pt)),
+                out.append(dict(hold=float(r["hold_O_ps"]) if np.isfinite(r.get("hold_O_ps", np.nan)) else 0.0, phase=r["phase"], hper=float(r["hper"]) if np.isfinite(r.get("hper", np.nan)) else 2.0, T=float(r["T_set"]), P=float(pt) if np.isfinite(pt) else float(r["P_GPa"]), exact=bool(np.isfinite(pt)),
                                 v="solid" if keep and dl < 0.2 else "marginal" if keep and dl < 0.5 else "melted"))
-    return pd.DataFrame(out, columns=["phase", "hper", "T", "P", "exact", "v"])
+    return pd.DataFrame(out, columns=["hold", "phase", "hper", "T", "P", "exact", "v"])
 NVT = _nvt_table()
 def nvt_flag(phase, h, P, T):
     """text for the notes column: free NVT verdict of this crystal at (P, T), or 'not NVT-checked'"""
     g = NVT[(NVT.phase == phase) & ((NVT.hper - h).abs() < 0.02) & (NVT["T"] == T) & (((NVT.P - P).abs() <= 2) | (~NVT.exact & ((NVT.P - P).abs() <= 0.1 * P)))] if len(NVT) else NVT
     lab = f"H{h:g}O"
     if not len(g): return f"{lab} not NVT-checked"
-    v = set(g.v); return f"{lab} MELTED in free NVT" if "melted" in v else f"{lab} marginal in free NVT" if "marginal" in v else ""
+    nm = int((g.v == "melted").sum()); ng = int((g.v == "marginal").sum())
+    if not (nm or ng): return ""
+    f, h = g[g.hold == 0], g[g.hold > 0]   # free start vs O held first
+    return f"{lab} {'MELTED' if nm else 'marginal'} in free NVT: {nm} melted / {ng} marginal of {len(g)} runs (free start {int((f.v == 'melted').sum())}/{len(f)}, O-hold {int((h.v == 'melted').sum())}/{len(h)} melted)"
 # crystal mixing: H(2+n)O crystal (same phase, cell and T, P) -> H2O crystal + n pure-H fluid atoms, per added H; and the dilute limit from the insertion runs (mu_H - G_H)
 solid = []
 for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)].iterrows():
