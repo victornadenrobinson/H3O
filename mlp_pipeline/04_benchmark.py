@@ -82,7 +82,11 @@ def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
         rows.append(dict(comp=a.info.get("config_type"), T=a.info.get("T_K"), P_dft=a.info.get("P_GPa"),
                          f_se=np.mean((f - ref_f) ** 2), s_ae=np.mean(np.abs(s - ref_s)) * EV_A3_TO_GPA,
                          dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n,
-                         gamma_max=float(np.max(gam)) if gam is not None else np.nan, gamma_mean=float(np.mean(gam)) if gam is not None else np.nan))
+                         gamma_max=float(np.max(gam)) if gam is not None else np.nan, gamma_mean=float(np.mean(gam)) if gam is not None else np.nan,
+                         # raw predictions, so parity plots are possible (virial pressure only: no kinetic term, identical for model and DFT)
+                         P_virial_dft=-np.trace(ref_s) / 3 * EV_A3_TO_GPA, P_virial_mlp=-np.trace(s) / 3 * EV_A3_TO_GPA,
+                         f_rms_dft=float(np.sqrt(np.mean(ref_f ** 2))), E_dft=ref_e / n, box_A=a.info.get("box_A"), phase_tag=a.info.get("phase_tag"),
+                         source=a.info.get("source")))
     if skipped:
         print(f"SKIPPED {len(skipped)} frames (GPU out of memory), atoms: {sorted(x[0] for x in skipped)}; use --max-atoms or a bigger GPU")
     if not rows:
@@ -91,6 +95,8 @@ def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
     shift, *_ = np.linalg.lstsq(cnt, dE, rcond=None)  # per-element reference shift
     for r, e, c in zip(rows, dE - cnt @ shift, cnt):
         r["e_ae"] = abs(e) / c.sum()
+        r["e_signed"] = e / c.sum()                       # model - DFT per atom after the per-element shift
+        r["E_mlp_shifted"] = r["E_dft"] + r["e_signed"]
     df = pd.DataFrame(rows)
     g = lambda d: pd.Series(dict(E_MAE_meV_atom=1e3 * d.e_ae.mean(), F_RMSE_eV_A=np.sqrt(d.f_se.mean()),
                                  S_MAE_GPa=d.s_ae.mean(), P_err_GPa=d.dP.mean(), N=len(d)))
