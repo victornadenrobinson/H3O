@@ -88,6 +88,16 @@ def trace(series, n_per, maxn=20):
     return "".join(BARS[int(round((v - lo) / (hi - lo + 1e-12) * 7))] for v in b)
 
 
+def meta():
+    """provenance written into every stage0 json"""
+    import platform, subprocess, ase
+    try:
+        git = subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    except Exception:
+        git = "unknown"
+    return dict(git=git, host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
+
+
 def E_component(c, kE):
     """Einstein springs on the O atoms; for pure hydrogen (no O) the reference potential is zero"""
     if c["nO"] == 0:
@@ -217,7 +227,7 @@ def stage0_given_k(c, kE):
     f_kin = refs.kinetic_free_energy([(c["nO"], mO, False), (c["nH"], mH, True)], a.T); PV = a.P / EV_A3_GPA * V
     print(f"lambda=1 run skipped: Einstein k = {kE:.3f} eV/A^2 given; reference pieces (eV): config {f_ref_cons:.3f}  kinetic {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
     d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=float("nan"), O_struct="not checked (k given)", lindemann=float("nan"),
-             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a))
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a), meta=meta())
     json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
     return d
 
@@ -228,7 +238,7 @@ def stage0_hydrogen(c):
     f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy([(N, float(c["at0"].get_masses()[0]), True)], a.T); PV = a.P / EV_A3_GPA * V
     print(f"pure H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
     d = dict(tag=c["tag"], phase="H", T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=0, nH=N, kE=0.0, P_mlp=float("nan"), O_struct="fluid H (no lattice)", lindemann=float("nan"),
-             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, args=vars(a))
+             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, args=vars(a), meta=meta())
     json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
     return d
 
@@ -265,7 +275,7 @@ def stage0(c):
     if lab != a.phase:
         print(f"WARNING: O sublattice is '{lab}', not {a.phase}: the reference lattice does not describe this system")
     d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=P_mlp, O_struct=lab, lindemann=float(np.sqrt(msd) / d1),
-             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a))
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a), meta=meta())
     json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
     return d
 
@@ -294,6 +304,12 @@ def run_node(c, st, k):
         tl = time.time(); r.advance(per)
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
+        if r.snaps:   # configurations (every 20 recorded samples) for later analysis / DFT single points
+            from ase.io import write
+            for p in r.snaps:
+                fr = c["at0"].copy(); fr.positions = p; fr.info.update(lam=l, node=k, tag=c["tag"], t_ps=ch * a.chunk_ps)
+                write(os.path.join(a.outdir, f"{c['tag']}_node{k}_traj.extxyz"), fr, append=True)
+            r.snaps = []
         m, e = stats(r.series)
         print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
