@@ -233,6 +233,21 @@ def hull_vpa(csv_path, hper, T, P):
     return at(lo) + (at(hi) - at(lo)) * (T - lo) / (hi - lo)
 
 
+def solid_vpa(a):
+    """V/atom of the H(hper)O crystal at (T, P): the DFT EOS of that composition if the inventory has it, else ideal mixing of the DFT H2O crystal (3 atoms/formula) and the DFT pure-H fluid
+    (n = hper - 2 added H per O). Excess volume is neglected: with the PdV_excess of about 0.1-0.2 A^3 per added H (docs/mixing_pv.py) the pressure error is below 1 GPa for a few added H in 108 O,
+    and the free energy error is second order in it."""
+    try:
+        return eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
+    except SystemExit:
+        if a.hper <= 2.0:
+            raise
+        n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], 2.0)[0]; v_h = h_vpa(a.from_dft, a.T, a.P)
+        v = (3 * v_w + n * v_h) / (3 + n)
+        print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase}: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
+        return v
+
+
 def add_ghosts(host, n, seed=0, dmin=0.75):
     """append n H atoms at random positions at least dmin (A) from every atom already present (minimum image); they are ghosts at lambda = 0 and ordinary protons at lambda = 1"""
     from ase import Atoms
@@ -287,7 +302,7 @@ def setup(a):
         at0 = eos.build("fcc", vpa, a.nrep, a.seed, a.hper)
     else:
         a.nrep = a.nrep or eos.CELL[a.phase][2]
-        vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
+        vpa = a.vpa or solid_vpa(a)
         at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
