@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" width="980" height="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+<style>
+:root{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--grid:#e6e5e1;--lit:#6b6a66;--mine:#2a78d6}
+@media (prefers-color-scheme: dark){:root{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--grid:#34342f;--lit:#a9a89f;--mine:#3987e5}}
+text{fill:var(--ink2);font-size:12px}.t{fill:var(--ink);font-size:15px;font-weight:600}.st{font-size:12px}.lab{fill:var(--ink);font-size:12px}
+.grid{stroke:var(--grid);stroke-width:1}.zero{stroke:var(--ink2);stroke-width:1}.axis{stroke:var(--ink2);stroke-width:1}
+.cheng{fill:none;stroke:var(--lit);stroke-width:2}.chengdot{fill:var(--lit)}.wil{fill:var(--surface);stroke:var(--lit);stroke-width:2}.eb{stroke:var(--lit);stroke-width:1.5}
+.mine{fill:var(--mine);stroke:var(--surface);stroke-width:2}.mineh{stroke:var(--mine);stroke-width:2}.mineeb{stroke:var(--mine);stroke-width:1.5}
+</style>
+<rect width="980" height="600" fill="var(--surface)"/>
+<text class="t" x="24" y="30">fcc vs bcc superionic H2O: free-energy difference at 400 GPa-class pressures</text>
+<text class="st" x="24" y="50">G(fcc) - G(bcc), meV per atom (negative = fcc more stable). Error bars: statistical only. Hover a marker for its details.</text>
+<text class="t" x="70" y="76" style="font-size:13px">3000 K</text>
+<line class="grid" x1="70" x2="470" y1="387.0" y2="387.0"/>
+<text x="62" y="391.0" text-anchor="end">-40</text>
+<line class="grid" x1="70" x2="470" y1="321.0" y2="321.0"/>
+<text x="62" y="325.0" text-anchor="end">-30</text>
+<line class="grid" x1="70" x2="470" y1="255.0" y2="255.0"/>
+<text x="62" y="259.0" text-anchor="end">-20</text>
+<line class="grid" x1="70" x2="470" y1="189.0" y2="189.0"/>
+<text x="62" y="193.0" text-anchor="end">-10</text>
+<line class="zero" x1="70" x2="470" y1="123.0" y2="123.0"/>
+<text x="62" y="127.0" text-anchor="end">0</text>
+<line class="grid" x1="104.1" x2="104.1" y1="90" y2="420"/><text x="104.1" y="438" text-anchor="middle">100</text>
+<line class="grid" x1="209.8" x2="209.8" y1="90" y2="420"/><text x="209.8" y="438" text-anchor="middle">200</text>
+<line class="grid" x1="271.7" x2="271.7" y1="90" y2="420"/><text x="271.7" y="438" text-anchor="middle">300</text>
+<line class="grid" x1="349.7" x2="349.7" y1="90" y2="420"/><text x="349.7" y="438" text-anchor="middle">500</text>
+<line class="grid" x1="455.5" x2="455.5" y1="90" y2="420"/><text x="455.5" y="438" text-anchor="middle">1000</text>
+<line class="axis" x1="70" x2="70" y1="90" y2="420"/><line class="axis" x1="70" x2="470" y1="420" y2="420"/>
+<text x="270.0" y="458" text-anchor="middle">pressure (GPa, log scale)</text>
+<polyline class="cheng" points="108.3,134.2 125.1,141.7 142.1,146.9 159.0,154.0 175.9,164.2 192.8,177.4 209.8,192.1 226.7,206.0 243.6,219.2 260.6,230.2 277.5,243.5 294.4,256.3 311.4,265.8 328.3,278.4 345.2,293.5 362.2,307.8"/>
+<text class="lab" x="370.2" y="311.8" style="fill:var(--lit)">Cheng 2021</text>
+<line class="eb" x1="104.1" x2="104.1" y1="103.2" y2="151.6"/><rect x="99.1" y="122.4" width="10" height="10" class="wil"><title>Wilson 2013 (DFT): -0.7 +- 3.7 meV/atom at 100 GPa, 3000 K</title></rect>
+<line class="eb" x1="209.8" x2="209.8" y1="164.8" y2="200.0"/><rect x="204.8" y="177.4" width="10" height="10" class="wil"><title>Wilson 2013 (DFT): -9.0 +- 2.7 meV/atom at 200 GPa, 3000 K</title></rect>
+<line class="eb" x1="349.7" x2="349.7" y1="270.4" y2="301.2"/><rect x="344.7" y="280.8" width="10" height="10" class="wil"><title>Wilson 2013 (DFT): -24.7 +- 2.3 meV/atom at 500 GPa, 3000 K</title></rect>
+<line class="mineeb" x1="209.8" x2="209.8" y1="162.5" y2="194.5"/><circle cx="209.8" cy="178.5" r="5.5" class="mine"><title>this work, 108/128 O cells, H2O (dt 1 fs): -8.4 +- 2.4 meV/atom at 200 GPa, 3000 K</title></circle>
+<line class="mineeb" x1="315.6" x2="315.6" y1="276.4" y2="295.6"/><circle cx="315.6" cy="286.0" r="5.5" class="mine"><title>this work, 108/128 O cells, H2O (dt 1 fs): -24.7 +- 1.4 meV/atom at 400 GPa, 3000 K</title></circle>
+<line class="mineeb" x1="315.6" x2="315.6" y1="332.5" y2="378.4"/><path d="M315.6 349.0 L322.1 361.0 L309.1 361.0 Z" class="mine"><title>this work, 32/54 O cells, H2O (dt 0.5 fs): -35.2 +- 3.5 meV/atom at 400 GPa, 3000 K</title></path>
+<text class="lab" x="219.8" y="182.5" text-anchor="start">-8.4</text>
+<text class="lab" x="305.6" y="290.0" text-anchor="end">-24.7</text>
+<text class="lab" x="305.6" y="359.5" text-anchor="end">-35.2</text>
+<text class="t" x="540" y="76" style="font-size:13px">5000 K</text>
+<line class="grid" x1="540" x2="940" y1="387.0" y2="387.0"/>
+<line class="grid" x1="540" x2="940" y1="321.0" y2="321.0"/>
+<line class="grid" x1="540" x2="940" y1="255.0" y2="255.0"/>
+<line class="grid" x1="540" x2="940" y1="189.0" y2="189.0"/>
+<line class="zero" x1="540" x2="940" y1="123.0" y2="123.0"/>
+<line class="grid" x1="574.1" x2="574.1" y1="90" y2="420"/><text x="574.1" y="438" text-anchor="middle">100</text>
+<line class="grid" x1="679.8" x2="679.8" y1="90" y2="420"/><text x="679.8" y="438" text-anchor="middle">200</text>
+<line class="grid" x1="741.7" x2="741.7" y1="90" y2="420"/><text x="741.7" y="438" text-anchor="middle">300</text>
+<line class="grid" x1="819.7" x2="819.7" y1="90" y2="420"/><text x="819.7" y="438" text-anchor="middle">500</text>
+<line class="grid" x1="925.5" x2="925.5" y1="90" y2="420"/><text x="925.5" y="438" text-anchor="middle">1000</text>
+<line class="axis" x1="540" x2="540" y1="90" y2="420"/><line class="axis" x1="540" x2="940" y1="420" y2="420"/>
+<text x="740.0" y="458" text-anchor="middle">pressure (GPa, log scale)</text>
+<polyline class="cheng" points="730.6,165.1 747.5,171.7 764.4,178.8 781.4,186.7 798.3,197.0 815.2,211.3 832.2,222.3"/>
+<text class="lab" x="840.2" y="226.3" style="fill:var(--lit)">Cheng 2021</text>
+<line class="eb" x1="925.5" x2="925.5" y1="248.4" y2="283.6"/><rect x="920.5" y="261.0" width="10" height="10" class="wil"><title>Wilson 2013 (DFT): -21.7 +- 2.7 meV/atom at 1000 GPa, 5000 K</title></rect>
+<line class="mineeb" x1="785.6" x2="785.6" y1="168.7" y2="214.7"/><circle cx="785.6" cy="191.7" r="5.5" class="mine"><title>this work, 108/128 O cells, H2O (dt 1 fs): -10.4 +- 3.5 meV/atom at 400 GPa, 5000 K</title></circle>
+<line class="mineeb" x1="785.6" x2="785.6" y1="183.7" y2="229.3"/><path d="M785.6 199.5 L792.6 206.5 L785.6 213.5 L778.6 206.5 Z" fill="var(--surface)" class="mineh"><title>this work, H2.25O (not H2O): -12.7 +- 3.5 meV/atom at 400 GPa, 5000 K</title></path>
+<text class="lab" x="775.6" y="195.7" text-anchor="end">-10.4</text>
+<text class="lab" x="775.6" y="210.5" text-anchor="end">-12.7</text>
+<text x="18" y="255.0" transform="rotate(-90 18 255.0)" text-anchor="middle">G(fcc) - G(bcc)  (meV/atom)</text>
+<line class="cheng" x1="70" x2="92" y1="530" y2="530"/><text x="98" y="534">Cheng 2021 (NNP + FEP to PBE)</text>
+<rect x="323.0" y="525.0" width="10" height="10" class="wil"><title></title></rect><text x="342" y="534">Wilson 2013 (DFT, 32/54 molecules)</text>
+<circle cx="76.0" cy="554.0" r="5.5" class="mine"><title></title></circle><text x="88" y="558">this work, 108/128 O cells, H2O (dt 1 fs)</text>
+<path d="M386.6 547.5 L393.1 559.5 L380.1 559.5 Z" class="mine"><title></title></path><text x="398.59999999999997" y="558">this work, 32/54 O cells, H2O (dt 0.5 fs)</text>
+<path d="M697.2 547.0 L704.2 554.0 L697.2 561.0 L690.2 554.0 Z" fill="var(--surface)" class="mineh"><title></title></path><text x="709.1999999999999" y="558">this work, H2.25O (not H2O)</text>
+<text x="24" y="576" style="font-size:11px">Not shown: Wilson at 4000 GPa (3000 K: -71.3 +- 2.3). Ours: MLP level (fine-tuned GRACE), classical nuclei, no correction to PBE, statistical errors only.</text>
+<text x="24" y="592" style="font-size:11px">The 32/54 O points were still drifting down by 4-5 meV/atom; the 108/128 O points at 5000 K ran 1.5 ps per lambda value.</text>
+</svg>
