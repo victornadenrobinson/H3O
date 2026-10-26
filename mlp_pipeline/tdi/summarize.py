@@ -85,6 +85,28 @@ for (P, T, h, cell), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O
                           dt_fcc=f.dt_fs, dt_bcc=b.dt_fs, drift_fcc=f.drift_meV, drift_bcc=b.drift_meV, note=note.strip()))
 if pairs:
     print("\nG_fcc - G_bcc (meV/atom), equal cell-size class:"); print(pd.DataFrame(pairs).round(2).to_string(index=False))
+
+# free-NVT stability checks (17_eos_md.py rows): did the crystal at this composition, P and T keep its O lattice? same verdict rule as plot_pt.py (solid / marginal / melted)
+def _nvt_table():
+    out = []
+    for d in ("runs/melt_tdi", "runs/melt", "runs/melt_comp", "runs/eos_scan"):
+        for f in sorted(glob.glob(os.path.join(d, "*.csv"))):
+            try: t = pd.read_csv(f)
+            except Exception: continue
+            for _, r in t.iterrows():
+                if r.get("branch", "solid") != "solid" or r.get("phase") not in ("fcc", "bcc") or "T_set" not in r or "P_GPa" not in r: continue
+                dl, do = r.get("delta_L", np.nan), r.get("D_O_cm2s", np.nan); keep = (r.get("O_struct") == r["phase"]) and bool(np.isfinite(do) and do < 1e-5)
+                pt = r.get("P_target", np.nan)
+                out.append(dict(phase=r["phase"], hper=float(r["hper"]) if np.isfinite(r.get("hper", np.nan)) else 2.0, T=float(r["T_set"]), P=float(pt) if np.isfinite(pt) else float(r["P_GPa"]), exact=bool(np.isfinite(pt)),
+                                v="solid" if keep and dl < 0.2 else "marginal" if keep and dl < 0.5 else "melted"))
+    return pd.DataFrame(out, columns=["phase", "hper", "T", "P", "exact", "v"])
+NVT = _nvt_table()
+def nvt_flag(phase, h, P, T):
+    """text for the notes column: free NVT verdict of this crystal at (P, T), or 'not NVT-checked'"""
+    g = NVT[(NVT.phase == phase) & ((NVT.hper - h).abs() < 0.02) & (NVT["T"] == T) & (((NVT.P - P).abs() <= 2) | (~NVT.exact & ((NVT.P - P).abs() <= 0.1 * P)))] if len(NVT) else NVT
+    lab = f"H{h:g}O"
+    if not len(g): return f"{lab} not NVT-checked"
+    v = set(g.v); return f"{lab} MELTED in free NVT" if "melted" in v else f"{lab} marginal in free NVT" if "marginal" in v else ""
 # crystal mixing: H(2+n)O crystal (same phase, cell and T, P) -> H2O crystal + n pure-H fluid atoms, per added H; and the dilute limit from the insertion runs (mu_H - G_H)
 solid = []
 for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)].iterrows():
@@ -95,13 +117,13 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         dG = (m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n
         err = ((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n
         solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node, nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_H=int(hh.N),
-                          note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid" if not (m.nodes == w.nodes == hh.nodes) else "")))
+                          note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid " if not (m.nodes == w.nodes == hh.nodes) else "") + "; ".join(x for x in (nvt_flag(m.phase, m.H_per_O, m.P_target_GPa, m.T_K), nvt_flag(m.phase, 2.0, m.P_target_GPa, m.T_K)) if x)))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = pick(hh, m.dt_fs)
         solid.append(dict(phase="insert (fcc H2O, dilute)", P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=2.0, n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
-                          kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note="" if m.dt_fs == hh.dt_fs else "DIFFERENT dt"))
+                          kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ") + nvt_flag("fcc", 2.0, m.P_target_GPa, m.T_K)))
 if solid:
     print("\nMixing free energy per added H, crystal H2O + n H(fluid) -> H(2+n/nO)O crystal (positive = H not soluble); insertion rows: mu_H(fcc H2O) - G_H(pure), meV:")
     print(pd.DataFrame(solid).round(2).to_string(index=False))
