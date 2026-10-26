@@ -15,7 +15,7 @@ for d in dirs:
             do, dl = r.get("D_O_cm2s", np.nan), r.get("delta_L", np.nan); keep = r.get("O_struct") == r["phase"] and bool(np.isfinite(do) and do < 1e-5)
             v = "solid" if keep and dl < 0.2 else "marginal" if keep and dl < 0.5 else "melted"
             hold = r.get("hold_O_ps", 0.0); hold = 0.0 if not np.isfinite(hold) else float(hold); m = re.search(r"_s(\d+)", str(r.get("tag", ""))); seed = m.group(1) if m else "0"
-            rows.append(dict(phase=r["phase"], hper=round(float(r.get("hper", 2.0)), 3), P=round(float(r["P_GPa"]), -1), T=int(r["T_set"]), proto=("free" if hold == 0 else f"hold{hold:g}") + f"_s{seed}",
+            rows.append(dict(phase=r["phase"], hper=round(float(r.get("hper", 2.0)), 3), P=float(r["P_target"]) if np.isfinite(r.get("P_target", np.nan)) else round(float(r["P_GPa"]) / 50) * 50, T=int(r["T_set"]), proto=("free" if hold == 0 else f"hold{hold:g}") + f"_s{seed}",
                              cell=f"{v} | {r.get('D_H_cm2s', np.nan):.1e} | {dl:.2f} | {r['P_GPa']:.0f}"))
 if not rows: raise SystemExit("no free-NVT rows found (run from the repo root)")
 df = pd.DataFrame(rows).drop_duplicates(["phase", "hper", "P", "T", "proto"], keep="last")
