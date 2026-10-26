@@ -11,6 +11,7 @@
 # MINRUNS=8: lower the minimum number of DFT runs per 1000 K bin used for the volume (EOS lookup; default 20; outside the bins the volume is extrapolated at most 2000 K with a WARNING)
 # ADD LAMBDA VALUES to a finished Gauss-Legendre run without repeating it: Gauss-Kronrod keeps the old values and adds ngauss+1 new ones (all 2*ngauss+1 are then integrated, and |K - G| estimates the quadrature error).
 #   e.g. an 8-value run -> 17:  ONLYNODES="8 9 10 11 12 13 14 15 16" RULE=gk NGAUSS=8 NODES=17 <same T P HPER NATOMS PS EQUIL CHUNK DT as the original run> bash mlp_pipeline/young_tdi_par.sh fcc   (same tag; the old node files are kept)
+# WARM START: INIT=<extxyz> starts every lambda point from the last frame of that trajectory (e.g. INIT=runs/tdi/fcc_500GPa_6000K_node16_traj.extxyz, same system), and OUTDIR=runs/tdi_warm writes to a separate folder (summarize.py scans runs/tdi*; run it on that folder alone to keep warm and cold runs apart).
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
@@ -22,7 +23,7 @@
 main() {
 SNAP=runs/code/$(date +%Y%m%d_%H%M%S)_$$; mkdir -p $SNAP && cp -r mlp_pipeline $SNAP/ && CODE=$SNAP/mlp_pipeline; export H3O_RUNS=$PWD/runs; export H3O_GIT=$(git rev-parse HEAD 2>/dev/null)$(git diff --quiet 2>/dev/null || echo "+local")
 PH=${1:?bcc, fcc, liquid, insert or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; NGHOST=${NGHOST:-1}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
-CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
+CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test; [ -n "$OUTDIR" ] && OUT=$OUTDIR
 TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h$(printf %g "$HPER")o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ] || [ $PH = liquid ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)
 # Einstein constant k (eV/A^2): scaled guess unless K is given (k only sets the efficiency, not the result): measured 12.2 (bcc) / 22.0-22.8 (fcc) at 400 GPa 3000 K, 12.8 (bcc) at 5000 K, 7.9 (bcc) at 200 GPa; k ~ P^0.6.
@@ -32,7 +33,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
+COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi

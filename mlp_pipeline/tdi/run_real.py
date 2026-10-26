@@ -297,6 +297,17 @@ def setup(a):
         nh = len(host); ctx.update(nO_real=int((host.numbers == 8).sum()), host_idx=np.arange(nh), nH_host=int((host.numbers == 1).sum()), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)), V=at0.get_volume())
     if a.phase in ("H", "liquid"):   # no lattice: no Einstein springs, no fixed centre of mass; every atom starts as an ideal gas
         ctx.update(nO_real=len(iO), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)))
+    ctx["init_pos"] = None
+    if a.init_from:   # warm start: every lambda point begins from this configuration (last frame of an extxyz) instead of the ideal lattice with H on bond midpoints
+        from ase.io import read
+        fr = read(a.init_from, index=-1)
+        if len(fr) != len(at0) or (fr.numbers != at0.numbers).any():
+            raise SystemExit(f"--init-from {a.init_from}: {len(fr)} atoms / species order differ from this system ({len(at0)} atoms)")
+        pos = fr.positions.copy()
+        if len(iO):   # O next to its own lattice site (minimal image), so that the Einstein displacements and the fixed O centre of mass are as in a cold start
+            pos[iO] = ctx["sitesO"] + find_mic(pos[iO] - ctx["sitesO"], at0.cell, True)[0]
+        ctx["init_pos"] = pos
+        print(f"warm start from the last frame of {a.init_from}", flush=True)
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
     ctx["full"] = engine.full_component(ctx["calc"])
     ctx["steps"] = lambda ps: int(round(ps * 1000 / a.dt))
@@ -389,6 +400,8 @@ def run_node(c, st, k):
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
     comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
+    if c.get("init_pos") is not None:
+        r.at.set_positions(c["init_pos"])
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
     def pfn(at, T):   # MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs
         b = at.copy(); b.calc = c["calc"]; sg = b.get_stress(voigt=True)
@@ -459,7 +472,8 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
+    ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
     ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
