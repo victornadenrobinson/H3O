@@ -67,6 +67,14 @@ class LambdaRun:
                 f"E_spring/atom {np.mean(self.espr[sl]) / N * 1e3:7.2f} meV  min d(H-H) {hh:.2f} d(H-O) {ho:.2f} A  |u_O| now rms {np.sqrt((u ** 2).sum(-1).mean()):.3f} max {np.linalg.norm(u, axis=1).max():.3f} A")
 
 
+def prog(t_start, done, total, t_last=None, n_last=None):
+    """' | 123 ms/step | 40% | ETA 13:42 (in 25 min)' from wall time since t_start; the speed is over the last piece if t_last/n_last are given"""
+    now = time.time(); el = now - t_start
+    sp = (now - t_last) / n_last if t_last and n_last else el / max(done, 1)
+    rem = (total - done) * sp
+    return f" | {sp * 1000:.0f} ms/step | {100 * done / total:.0f}% | ETA {time.strftime('%H:%M', time.localtime(now + rem))} (in {rem / 60:.0f} min)"
+
+
 def stats(series, nb=5):
     s = np.asarray(series, float)
     if len(s) < 5 * nb:
@@ -100,12 +108,12 @@ def stage0(c):
     from ase.neighborlist import neighbor_list
     d1_0 = float(neighbor_list("d", at0[iO], 0.6 * V ** (1 / 3)).min())
     r1 = LambdaRun(at0, {"full": c["full"], "E": engine.einstein_component(c["sitesO"], iO, 1.0)}, 1.0, a.T, iO, a.dt, a.tau, a.seed, a.every, c["steps"](a.equil_ps))
-    r1.start(); print(f"lambda=1 equilibrated ({a.equil_ps} ps), {(time.time() - t0) / 60:.1f} min   {r1.diag.__doc__ and ''}", flush=True)
-    nq = int(round(a.ps1 / 0.25))
+    neq, nq = c["steps"](a.equil_ps), int(round(a.ps1 / 0.25)); st25 = c["steps"](0.25); tot = neq + nq * st25
+    r1.start(); print(f"lambda=1 equilibrated ({a.equil_ps} ps), {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     for q in range(nq):
-        r1.advance(c["steps"](0.25))
+        tl = time.time(); r1.advance(c["steps"](0.25))
         uu = np.array([find_mic(p[iO] - c["sitesO"], at0.cell, True)[0] for p in r1.snaps]); uu -= uu.mean(1, keepdims=True)
-        print(f"  lambda=1 {0.25 * (q + 1):.2f} ps  {r1.diag(last=c['steps'](0.25) // a.every)}  Lindemann {np.sqrt((uu ** 2).sum(-1).mean()) / d1_0:.3f}  <|u|^2>_O {(uu ** 2).sum(-1).mean():.4f}  {(time.time() - t0) / 60:.1f} min", flush=True)
+        print(f"  lambda=1 {0.25 * (q + 1):.2f} ps  {r1.diag(last=c['steps'](0.25) // a.every)}  Lindemann {np.sqrt((uu ** 2).sum(-1).mean()) / d1_0:.3f}  <|u|^2>_O {(uu ** 2).sum(-1).mean():.4f}  {(time.time() - t0) / 60:.1f} min{prog(t0, neq + (q + 1) * st25, tot, tl, st25)}", flush=True)
     u = np.array([find_mic(p[iO] - c["sitesO"], at0.cell, True)[0] for p in r1.snaps]); u -= u.mean(1, keepdims=True)
     msd = float((u ** 2).sum(-1).mean()); kE = 3 * kt / msd
     lab, c1, c2, d1 = import_module("09_label_phase").o_structure(c["sitesO"] + u.mean(0), at0.cell.array)
@@ -133,14 +141,15 @@ def run_node(c, st, k):
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
     comps = {"full": c["full"], "E": engine.einstein_component(c["sitesO"], c["iO"], st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
-    r.start(); print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min", flush=True)
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
+    r.start(); print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
-    nchunk = int(round(a.ps / a.chunk_ps)); n_per = c["steps"](a.chunk_ps) // a.every
+    n_per = per // a.every
     for ch in range(1, nchunk + 1):
-        r.advance(c["steps"](a.chunk_ps))
+        tl = time.time(); r.advance(per)
         np.save(f, np.array(r.series))
         m, e = stats(r.series)
-        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | {(time.time() - t0) / 60:.1f} min", flush=True)
+        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t0, neq + ch * per, tot, tl, per)}", flush=True)
 
 
 def G_from_nodes(st, lam, w, series_list, N):
@@ -173,14 +182,15 @@ if __name__ == "__main__":
     st = stage0(c); t0 = time.time(); lam, w, N = c["lam"], c["w"], c["N"]
     comps = {"full": c["full"], "E": engine.einstein_component(c["sitesO"], c["iO"], st["kE"])}
     runs = [LambdaRun(c["at0"], comps, float(l), a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps)) for k, l in enumerate(lam)]
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = len(runs) * (neq + nchunk * per)
     for k, r in enumerate(runs):
-        r.start(); print(f"   node {k} lam {r.lam:.2e} equilibrated: {r.diag()}  {(time.time() - t0) / 60:.1f} min", flush=True)
+        r.start(); print(f"   node {k} lam {r.lam:.2e} equilibrated: {r.diag()}  {(time.time() - t0) / 60:.1f} min{prog(t0, (k + 1) * neq, tot)}", flush=True)
     print("   t/node (ps)   G (meV/atom)   dF_TDI (meV/atom)   wall (min)", flush=True)
     hist = []; n_per = c["steps"](a.chunk_ps) // a.every
-    for ch in range(1, int(round(a.ps / a.chunk_ps)) + 1):
+    for ch in range(1, nchunk + 1):
         for k, r in enumerate(runs):
-            r.advance(c["steps"](a.chunk_ps))
-            print(f"     chunk {ch} node {k} lam {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min", flush=True)
+            tl = time.time(); r.advance(per)
+            print(f"     chunk {ch} node {k} lam {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min{prog(t0, len(runs) * neq + ((ch - 1) * len(runs) + k + 1) * per, tot, tl, per)}", flush=True)
         G, Ge, dF, m, s = G_from_nodes(st, lam, w, [r.series for r in runs], N)
         hist.append(dict(t_ps=ch * a.chunk_ps, G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF))
         print(f"   {ch * a.chunk_ps:6.2f}      {G:12.2f} +- {Ge:5.2f}   {dF:12.2f}        {(time.time() - t0) / 60:7.1f}", flush=True)

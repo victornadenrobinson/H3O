@@ -25,6 +25,7 @@ seq 0 $((NODES-1)) | xargs -P $NPAR -I{} bash -c "$PY -u mlp_pipeline/tdi/run_re
 XP=$!
 while kill -0 $XP 2>/dev/null; do
   sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
+  for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed s/${TAGNAME}_//): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
   python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME 2>&1 | grep -E "samples per node|t/node" | tail -3
 done
 echo "== done $(date)"; python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME
