@@ -192,28 +192,8 @@ def banner(c):
 
 
 def h_vpa(inv, T, P):
-    """V/atom of pure hydrogen (comp_snap == 'h') at pressure P from the DFT inventory (log P quadratic in V/atom, as dft_vpa). T on a 1000 K bin with >= 5 runs: that bin; any other T between two such bins:
-    linear interpolation in T between the neighbouring bin fits (approximate, printed)."""
-    df0 = import_module("01_bin_inventory").load_inventory(inv)
-    df0 = df0[df0.comp_snap == "h"].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
-    n = df0.groupby("T_bin").size(); good = sorted(int(b) for b in n[n >= 5].index)
-
-    def at(Tb):
-        df = df0[df0.T_bin == Tb]
-        c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2); grid = np.linspace(df.vpa.min(), df.vpa.max(), 400); Pg = np.exp(np.polyval(c, grid))
-        print(f"DFT pure H {Tb} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
-        if not df.True_P_GPa.min() <= P <= df.True_P_GPa.max():
-            print(f"WARNING: {P} GPa is outside the DFT range: volume clipped to the edge of the data")
-        return float(np.interp(-P, -Pg, grid))
-    Tb = int(round(T / 1000.0)) * 1000
-    if abs(T - Tb) < 1 and Tb in good:
-        return at(Tb)
-    lo = [b for b in good if b <= T]; hi = [b for b in good if b >= T]
-    if not lo or not hi:
-        raise SystemExit(f"pure-H DFT runs: T = {T:.0f} K is outside the bins with >= 5 runs ({good}) in {inv}: give --vpa")
-    lo, hi = max(lo), min(hi); vl, vh = at(lo), at(hi)
-    print(f"NOTE: pure-H volume at {T:.0f} K interpolated between the {lo} K and {hi} K DFT fits")
-    return vl + (vh - vl) * (T - lo) / (hi - lo)
+    """pure-H V/atom at (T, P) from the DFT inventory: lives in 17_eos_md.py (shared with the EOS scan)"""
+    return import_module("17_eos_md").h_vpa(inv, T, P)
 
 
 def hull_vpa(csv_path, hper, T, P):
