@@ -53,8 +53,8 @@ and the classical nuclei assumption (nuclear quantum effects for H at these T, P
 Cost (guess; measure ms/step first): 0.2 s/step at about 750 atoms, so 5 ps per lambda point = 10000 steps about 0.5 h; 2 stages x about 12 points x 2 phases = 48 points about 24 GPU-hours plus Step A. Use a Slurm array, one GPU per lambda point.
 
 ## Accuracy: what this can and cannot settle today
-- The fcc-bcc free-energy difference in the literature is small (a few meV/atom class; unverified, check the papers). Our fine-tune had energy MAE 10-70 meV/atom on 30 frames, and its training set contains no labelled fcc/bcc superionic states.
-- So the MLP number is a method check first, not a result. Before it counts: (1) add DFT fcc and bcc superionic frames (you have VASP; 20-40 per phase at the chosen state points) to the training set; (2) correct with free-energy perturbation: dF_corr = -kT ln < exp(-(U_DFT - U_MLP)/kT) >_MLP over 50-100 MLP snapshots per phase, DFT as single points; if the exponential average is noisy, use the cumulant (mean + variance/2kT) form and report both.
+- The fcc-bcc free-energy difference in the literature is small (a few meV/atom class; unverified, check the papers). Our fine-tune had energy MAE 10-70 meV/atom on 30 frames. The h2o data from Perlmutter very probably already contains fcc and bcc superionic runs (e.g. 3000 K; at 5000 K a mix of solid and liquid branches depending on P) but they are not labelled yet: run `mlp_pipeline/16_phase_census.py` and `09_label_phase.py` to count them.
+- So the MLP number is a method check first, not a result. Before it counts: (1) check how many fcc/bcc superionic frames the training tiers hold at the chosen state points and add DFT frames (20-40 per phase) only where they are thin; (2) correct with free-energy perturbation: dF_corr = -kT ln < exp(-(U_DFT - U_MLP)/kT) >_MLP over 50-100 MLP snapshots per phase, DFT as single points; if the exponential average is noisy, use the cumulant (mean + variance/2kT) form and report both.
 - The label convention matters: DFT free energy (TOTEN with sigma = kT) is what we trained on, so the correction uses the same quantity; the electronic entropy is then included in both.
 
 ## Order of work (proposal, nothing started)
@@ -67,4 +67,4 @@ Cost (guess; measure ms/step first): 0.2 s/step at about 750 atoms, so 5 ps per 
 ## Decisions I need from you
 1. The (P, T) points (and whether below 200 GPa is wanted).
 2. How many GPU-hours we may spend; 5 ps per lambda point is my default.
-3. Whether the extra DFT frames for fcc/bcc superionic can be produced soon (otherwise stop at the method check).
+3. After the phase census: whether fcc/bcc superionic coverage at the chosen (P, T) is enough, or extra DFT frames are needed.
