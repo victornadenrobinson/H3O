@@ -6,6 +6,7 @@
 #    T=5000 bash mlp_pipeline/young_tdi_par.sh H          # pure hydrogen fluid (ideal-gas reference, no O): G of H at the same P, T
 #    quick test (a few minutes):  TAG=test NODES=3 PS=0.5 PS1=0.5 CHUNK=0.25 EQUIL=0.2 NPAR=3 bash mlp_pipeline/young_tdi_par.sh bcc
 # K: Einstein constant (eV/A^2); default bcc 12.2, fcc 22.8 (measured at 400 GPa, 3000 K): stage 0 then skips its MD. K=0 re-measures it with a lambda=1 run (also checks MLP pressure and O structure).
+# NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # env knobs: HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
@@ -18,7 +19,7 @@ mkdir -p $OUT
 export GRACE_UQ=1 TF_FORCE_GPU_ALLOW_GROWTH=true
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
+COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER ${NATOMS:+--natoms $NATOMS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi

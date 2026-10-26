@@ -116,7 +116,7 @@ def banner(c):
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
     if a.phase == "H":
         lines = ["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
-                 f"system      : {c['N']} H atoms, pure hydrogen fluid, bcc start lattice ({a.nrep}^3 cells, 2 atoms each) that should melt; cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
+                 f"system      : {c['N']} H atoms, pure hydrogen fluid, cubic start lattice that should melt; cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
                  f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT, target pressure {a.P:.0f} GPa -> G = F + P_target V (per H atom below)",
                  f"potential   : {a.model} (classical nuclei)",
                  "path        : U(lam) = lam U_MLP ; reference (lam=0) = ideal gas of N indistinguishable H atoms: F_ref = -kT N ln V + kinetic terms + kT ln N! (analytic); F = F_ref + integral_0^1 <U_MLP>_lam dlam",
@@ -167,6 +167,18 @@ def h_vpa(inv, T, P):
     return float(np.interp(-P, -Pg, grid))
 
 
+def build_h_n(vpa, natoms):
+    """pure hydrogen with natoms atoms on a cubic lattice (sc n^3, bcc 2n^3 or fcc 4n^3: whichever matches); the lattice melts, only the density matters"""
+    from ase import Atoms
+    for k, basis in ((1, [(0, 0, 0)]), (2, [(0, 0, 0), (.5, .5, .5)]), (4, [(0, 0, 0), (.5, .5, 0), (.5, 0, .5), (0, .5, .5)])):
+        n = round((natoms / k) ** (1 / 3))
+        if k * n ** 3 == natoms:
+            a = (natoms * vpa / n ** 3) ** (1 / 3)
+            sp = [((np.array(b) + (i, j, l)) / n) for i in range(n) for j in range(n) for l in range(n) for b in basis]
+            return Atoms("H" * natoms, scaled_positions=sp, cell=[a * n] * 3, pbc=True)
+    raise SystemExit(f"{natoms} atoms is not n^3, 2n^3 or 4n^3")
+
+
 def build_h(vpa, nrep):
     """pure hydrogen: bcc lattice of 2 nrep^3 atoms (it melts at these conditions: check the displacement column), cubic cell at V/atom = vpa"""
     from ase import Atoms
@@ -182,7 +194,7 @@ def setup(a):
     if a.phase == "H":
         a.nrep = a.nrep or 5
         vpa = a.vpa or h_vpa(a.from_dft, a.T, a.P)
-        at0 = build_h(vpa, a.nrep)
+        at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
     else:
         a.nrep = a.nrep or eos.CELL[a.phase][2]
         vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
@@ -308,7 +320,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
