@@ -6,6 +6,7 @@
 #    T=5000 bash mlp_pipeline/young_tdi_par.sh H          # pure hydrogen fluid (ideal-gas reference, no O): G of H at the same P, T
 #    quick test (a few minutes):  TAG=test NODES=3 PS=0.5 PS1=0.5 CHUNK=0.25 EQUIL=0.2 NPAR=3 bash mlp_pipeline/young_tdi_par.sh bcc
 # K: Einstein constant (eV/A^2); default bcc 12.2, fcc 22.8 (measured at 400 GPa, 3000 K): stage 0 then skips its MD. K=0 re-measures it with a lambda=1 run (also checks MLP pressure and O structure).
+# NREP also sets the liquid cell (liquid: default 2 = 32 O fcc start cell, NREP=3 = 108 O; tag gets _rep<NREP>)
 # NREP=2 (fcc: 32 O, 96 atoms) / NREP=3 (bcc: 54 O, 162 atoms): small cells like Wilson 2013 for a finite-size check; tag gets _rep<NREP> (defaults: fcc 3 = 108 O, bcc 4 = 128 O)
 # MINRUNS=8: lower the minimum number of DFT runs per 1000 K bin used for the volume (EOS lookup; default 20; outside the bins the volume is extrapolated at most 2000 K with a WARNING)
 # ADD LAMBDA VALUES to a finished Gauss-Legendre run without repeating it: Gauss-Kronrod keeps the old values and adds ngauss+1 new ones (all 2*ngauss+1 are then integrated, and |K - G| estimates the quadrature error).
@@ -22,7 +23,7 @@ main() {
 SNAP=runs/code/$(date +%Y%m%d_%H%M%S)_$$; mkdir -p $SNAP && cp -r mlp_pipeline $SNAP/ && CODE=$SNAP/mlp_pipeline; export H3O_RUNS=$PWD/runs; export H3O_GIT=$(git rev-parse HEAD 2>/dev/null)$(git diff --quiet 2>/dev/null || echo "+local")
 PH=${1:?bcc, fcc, liquid, insert or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; NGHOST=${NGHOST:-1}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
-TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h$(printf %g "$HPER")o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
+TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h$(printf %g "$HPER")o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ] || [ $PH = liquid ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)
 # Einstein constant k (eV/A^2): scaled guess unless K is given (k only sets the efficiency, not the result): measured 12.2 (bcc) / 22.0-22.8 (fcc) at 400 GPa 3000 K, 12.8 (bcc) at 5000 K, 7.9 (bcc) at 200 GPa; k ~ P^0.6.
 # K=0 measures it with a lambda=1 run instead (about 6 min; also prints MLP pressure and O structure).
