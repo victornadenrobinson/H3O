@@ -2,6 +2,8 @@
 
 Branch `claude/eloquent-ramanujan-2tjx2p`, open PR victornadenrobinson/H3O#2 (do not open another; push to the branch). Read this file, then `PROJECT.md` (plan, conventions, zero-shot table), `docs/TDI_PLAN.md` (free-energy plan), `docs/LITERATURE_NOTES.md` (paper facts), `mlp_pipeline/README.md`, `envs/README.md`.
 
+Output formats, file list, log-line meanings, run commands and coding rules for new scripts: `docs/TDI_OUTPUT.md`.
+
 ## LATEST STATE (end of session 1, 2026-10-26 afternoon)  -- read this block first
 All TDI results below: fine-tuned GRACE `ft_m2` (runs/grace/ft_m2), classical nuclei, G includes P_target V, errors are statistical (block) only. dt was 1.0 fs unless noted (new default 0.5 fs, user wants 0.5 for everything). Say "lambda" / "lambda values", never "nodes" (user preference).
 
