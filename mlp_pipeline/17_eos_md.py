@@ -86,7 +86,8 @@ def run_one(a, calc, vpa, tag):
             pos.append(at.get_positions().copy()); tpos.append(s * a.dt)
         if s % int(500 / a.dt) == 0 and s:
             r = pd.DataFrame(rows); r = r[r.step >= n_eq]
-            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  T {r["T"].mean() if len(r) else T:.0f}  P {r.P_GPa.mean() if len(r) else P:.1f} GPa  "
+            Tm = r["T"].mean() if len(r) else T; Pm = r["P_GPa"].mean() if len(r) else P
+            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  T {Tm:.0f}  P {Pm:.1f} GPa  "
                   f"{(time.time() - t0) / s * 1000:.0f} ms/step", flush=True)
         step[0] += a.log_every
     dyn.attach(log, interval=a.log_every)
