@@ -51,6 +51,8 @@ A1.legend([plt.Rectangle((0, 0), 1, 1, fc=cols[k % 6], alpha=.7) for k in range(
 rows = []
 for k, d in enumerate(dfs):
     r = dict(model=labs[k], frames=len(d), F_RMSE_eV_A=float(np.sqrt(d.f_se.mean())), S_MAE_GPa=float(d.s_ae.mean()), dP_mean_GPa=float(d.dP.mean()), dP_MAE_GPa=float(d.dP.abs().mean()))
+    if "f_rms_dft" in d:
+        r["F_RMSE_%_of_DFT_F_RMS"] = float(100 * np.sqrt(d.f_se.mean()) / np.sqrt((d.f_rms_dft ** 2).mean()))   # per-component force error relative to the DFT force scale
     if has_e:
         r.update(E_MAE_meV=float(d.e_ae.mean() * 1e3), E_bias_meV=float(d.e_signed.mean() * 1e3))
         r["E_MAE_over_kT"] = float((d.e_ae * 1e3 / (KB * d["T"])).mean())

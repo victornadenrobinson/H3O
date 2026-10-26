@@ -2,6 +2,7 @@
 
 Benchmarking and fine-tuning machine-learning interatomic potentials on DFT data for H2O-H mixtures at extreme pressure and temperature.
 
+- **New session? Start with [HANDOFF.md](HANDOFF.md).**
 - Plan, conventions, data manifest and status: [PROJECT.md](PROJECT.md)
 - Pipeline scripts: [mlp_pipeline/](mlp_pipeline/) (run order in `build_all.sh`)
 - Environments (Perlmutter, Young): [envs/README.md](envs/README.md)
