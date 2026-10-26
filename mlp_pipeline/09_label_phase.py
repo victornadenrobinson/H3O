@@ -1,11 +1,13 @@
 """Label the dynamical phase of each run from its trajectory (MSD of O and H over the 2nd half of the run).
+The restart segments of a run (<run>/out1/OUTCAR, <run>/out2/OUTCAR, ...) are joined into one trajectory first (--per-file turns this off);
+a segment that does not continue the previous one (different cell/atoms or a jump > 1.5 A) starts a new piece and the longest piece is used.
 
 usage: python 09_label_phase.py inventory_binned.csv phase.csv --root ~/work [--workers 64] [--tmin 2000] [--sample N]
 NVT, fixed cell: positions are unwrapped via fractional minimum-image steps. Rates are A^2 per 1000 MD steps over the window
 (2nd half, >= MIN_WINDOW steps). Labels: O rate > O_LIQ -> liquid; else H rate > H_SUPER -> superionic; else solid.
 Pure-H runs: H rate > H_LIQ -> liquid else solid. Print percentiles first and tune the thresholds against known runs.
 """
-import argparse, os
+import argparse, os, re
 from multiprocessing import Pool
 from functools import partial
 import numpy as np
@@ -36,15 +38,16 @@ def o_structure(pos, cell):
 
 def msd_rates(frames):
     """O and H MSD rates (A^2 / 1000 steps) over the second half; fixed-cell, mic-unwrapped."""
-    L = len(frames)
+    return msd_arrays(np.array(frames[0].cell), np.array(frames[0].get_chemical_symbols()), np.array([f.get_scaled_positions(wrap=False) for f in frames]))
+
+
+def msd_arrays(cell, sym, frac):
+    L = len(frac)
     if L < 2 * MIN_WINDOW:
         return None
-    cell = np.array(frames[0].cell)
-    frac = np.array([f.get_scaled_positions(wrap=False) for f in frames])
     d = np.diff(frac, axis=0)
     d -= np.round(d)
     unw = np.concatenate([np.zeros((1,) + frac.shape[1:]), np.cumsum(d, axis=0)]) @ cell
-    sym = np.array(frames[0].get_chemical_symbols())
     i0 = L // 2
     out = {}
     for el in ("O", "H"):
@@ -72,12 +75,66 @@ def label(r, o_liq, h_super, h_liq, lind=0.0):
     return "liquid" if r["H_rate"] > h_liq else "solid"
 
 
-def one(path, root):
-    try:
-        r = msd_rates(read(os.path.join(root, path), index=":", format="vasp-out"))
-        return dict(Path=path, O_rate=np.nan, H_rate=np.nan, window=0) if r is None else dict(Path=path, O_rate=r["O"], H_rate=r["H"], window=r["window"], O_struct=r["struct"], CN1=r["CN1"], CN2=r["CN2"], delta_L=r["delta_L"])
-    except Exception as e:
-        return dict(Path=path, O_rate=np.nan, H_rate=np.nan, window=-1)
+def run_key(path):
+    """Run directory: the folder above out<N>/ (restart segments out1, out2, ... of one MD run share it)."""
+    parts = path.split("/")[:-1]
+    if parts and re.fullmatch(r"out\d*", parts[-1]):
+        parts = parts[:-1]
+    return "/".join(parts)
+
+
+def seg_no(path):
+    m = re.search(r"/out(\d*)/[^/]*$", path)
+    return int(m.group(1)) if m and m.group(1) else 0
+
+
+def read_arrays(path, root):
+    fr = read(os.path.join(root, path), index=":", format="vasp-out")
+    return np.array(fr[0].cell), np.array(fr[0].get_chemical_symbols()), np.array([f.get_scaled_positions(wrap=False) for f in fr])
+
+
+def join_segments(segs, max_jump=1.5, vol_tol=0.005):
+    """Concatenate consecutive (cell, sym, frac) segments into one trajectory. A new piece starts where the atoms/cell differ or the first frame
+    is more than max_jump A (minimum image) from the previous last frame; the longest piece is returned with the piece count."""
+    pieces = [[segs[0]]]
+    for s in segs[1:]:
+        c0, y0, f0 = pieces[-1][-1]; c1, y1, f1 = s
+        ok = len(y0) == len(y1) and bool((y0 == y1).all()) and abs(abs(np.linalg.det(c1)) / abs(np.linalg.det(c0)) - 1) < vol_tol
+        if ok:
+            d = f1[0] - f0[-1]; d -= np.round(d)
+            ok = float(np.linalg.norm(d @ c0, axis=1).max()) < max_jump
+        if ok:
+            pieces[-1].append(s)
+        else:
+            pieces.append([s])
+    best = max(pieces, key=lambda p: sum(len(x[2]) for x in p))
+    return best[0][0], best[0][1], np.concatenate([x[2] for x in best]), len(pieces)
+
+
+def one_chain(args):
+    """All restart segments of one run, joined, analysed once; one result row per member OUTCAR path (same numbers)."""
+    paths, root, max_steps = args
+    segs = []
+    for p in paths:
+        try:
+            segs.append(read_arrays(p, root))
+        except Exception:
+            pass
+    if not segs:
+        return [dict(Path=p, O_rate=np.nan, H_rate=np.nan, window=-1) for p in paths]
+    cell, sym, frac, npieces = join_segments(segs)
+    if max_steps and len(frac) > max_steps:
+        frac = frac[-max_steps:]
+    r = msd_arrays(cell, sym, frac)
+    rows = []
+    for p in paths:
+        row = dict(Path=p, chain_steps=len(frac), n_seg=len(paths), n_pieces=npieces)
+        if r is None:
+            row.update(O_rate=np.nan, H_rate=np.nan, window=0)
+        else:
+            row.update(O_rate=r["O"], H_rate=r["H"], window=r["window"], O_struct=r["struct"], CN1=r["CN1"], CN2=r["CN2"], delta_L=r["delta_L"])
+        rows.append(row)
+    return rows
 
 
 if __name__ == "__main__":
@@ -86,29 +143,39 @@ if __name__ == "__main__":
     ap.add_argument("--root", default="~/work"); ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--tmin", type=float, default=2000); ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--reuse", action="store_true", help="reuse rows already in the output file (skip re-reading those OUTCARs); relabels with the current thresholds")
+    ap.add_argument("--per-file", action="store_true", help="analyse every OUTCAR on its own instead of joining the restart segments (out1, out2, ...) of a run")
+    ap.add_argument("--max-steps", type=int, default=20000, help="use at most the last N MD steps of a joined run (memory)")
     ap.add_argument("--o-liq", type=float, default=2.0, help="A^2 per 1000 steps")
     ap.add_argument("--lindemann", type=float, default=0.0, help="if > 0: liquid when the O Lindemann ratio exceeds this (typical melting value 0.12-0.2); 0 = use --o-liq on the O rate")
     ap.add_argument("--h-super", type=float, default=20.0); ap.add_argument("--h-liq", type=float, default=20.0)
     a = ap.parse_args()
     df = pd.read_csv(inp(a.inv))
     df = df[df.good & (df.True_T_K >= a.tmin) & (df.comp_snap != "unknown")]
-    if a.sample:
-        df = df.sample(min(a.sample, len(df)), random_state=0)
+    df = df.assign(run=df.Path if a.per_file else df.Path.map(run_key))
+    if a.sample:   # sample whole runs, not single OUTCARs
+        runs = pd.Series(df.run.unique()).sample(min(a.sample, df.run.nunique()), random_state=0)
+        df = df[df.run.isin(runs)]
     root = os.path.abspath(os.path.expanduser(a.root))
-    BASE = ["Path", "O_rate", "H_rate", "window", "O_struct", "CN1", "CN2", "delta_L"]
+    BASE = ["Path", "O_rate", "H_rate", "window", "O_struct", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces"]
     old = pd.DataFrame(columns=BASE)
     fn = out(a.out)
-    if a.reuse and os.path.exists(fn):   # keep rows mined earlier; only read OUTCARs that are not in the file yet
+    if a.reuse and os.path.exists(fn):   # keep rows mined earlier; only read runs that are not in the file yet
         o = pd.read_csv(fn); old = o[[c for c in BASE if c in o]]
         old = old[old.Path.isin(df.Path) & (old.window != -1)]
-    todo = [p for p in df.Path if p not in set(old.Path)]
-    print(f"{len(old)} runs reused from {fn}, {len(todo)} to mine")
+        if "chain_steps" not in old or old.chain_steps.isna().any():   # rows from the old per-file version are not joined-run results: drop them
+            n0 = len(old); old = old[old.get("chain_steps", pd.Series(dtype=float)).notna()]
+            print(f"dropped {n0 - len(old)} old per-file rows without chain information (they will be re-mined)")
+    have = set(old.Path)
+    todo = df[~df.Path.isin(have)]
+    chains = [(sorted(g.Path, key=lambda p: (seg_no(p), p)), root, a.max_steps) for _, g in todo.groupby("run")]
+    print(f"{len(old)} OUTCARs reused from {fn}; {len(chains)} runs ({len(todo)} OUTCARs) to mine; {df.run.nunique()} runs selected")
     rows = []
-    if todo:
+    if chains:
         with Pool(a.workers) as p:
-            rows = list(progress(p.imap(partial(one, root=root), todo, chunksize=4), total=len(todo), desc="phase MSD"))
+            for r in progress(p.imap(one_chain, chains, chunksize=2), total=len(chains), desc="phase MSD"):
+                rows += r
     x = pd.concat([d for d in (old, pd.DataFrame(rows)) if len(d)], ignore_index=True)   # skip the empty frame: it would turn every column into dtype object
-    for c in ("O_rate", "H_rate", "window", "CN1", "CN2", "delta_L"):
+    for c in ("O_rate", "H_rate", "window", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces"):
         if c in x:
             x[c] = pd.to_numeric(x[c], errors="coerce")
     keep = [c for c in ("Path", "comp_snap", "True_T_K", "T_bin", "True_P_GPa", "N_ions") if c in df]
@@ -133,6 +200,9 @@ if __name__ == "__main__":
             print("histogram of delta_L over all runs (bin start: count) - a dip separates crystal from liquid:")
             print("  " + "  ".join(f"{b:.2f}:{c}" for b, c in zip(e[:-1], h) if c))
         print("\nwindow (MD steps) percentiles 10/50/90:", ok.window.quantile([.1, .5, .9]).round(0).tolist())
+        if "chain_steps" in ok:
+            print("joined run length (MD steps) percentiles 10/50/90:", ok.chain_steps.quantile([.1, .5, .9]).round(0).tolist(), "; segments per run 50/90/max:", ok.n_seg.quantile([.5, .9, 1]).tolist(),
+                  "; runs with a broken (discontinuous) chain:", int((ok.n_pieces > 1).sum()))
         nl = ok[ok.phase.isin(["solid", "superionic"]) & (ok.O_struct == "other")]
         print(f"\nnon-liquid runs whose O sublattice is neither bcc nor fcc: {len(nl)}; O_msd median {nl.O_msd.median():.2f}, CN1/CN2 value counts:")
         print(nl.groupby(["CN1", "CN2"]).size().sort_values(ascending=False).head(8).to_string())
