@@ -25,6 +25,10 @@ from tdi import refs, engine, analyze
 EV_A3_GPA = 160.21766
 
 
+class Unstable(RuntimeError):
+    pass
+
+
 class LambdaRun:
     def __init__(self, atoms0, components, lam, T, idxO, dt, tau, seed, every, equil_steps):
         self.lam, self.T, self.every, self.equil, self.series, self.tk, self.snaps = lam, T, every, equil_steps, [], [], []
@@ -45,6 +49,8 @@ class LambdaRun:
         p = self.calc.parts
         self.series.append(p["full"] - p["E"]); self.eful.append(p["full"]); self.espr.append(p["E"])
         self.tk.append(2 * self.at.get_kinetic_energy() / (self.ndof * units.kB))
+        if not np.isfinite(self.tk[-1]) or self.tk[-1] > 20 * self.T:   # runaway (e.g. a hard collision at too large a time step): stop at once
+            raise Unstable(f"T_kin {self.tk[-1]:.0f} K (target {self.T:.0f} K) after {len(self.series)} recorded samples")
         if len(self.series) % 20 == 0:
             self.snaps.append(self.at.get_positions().copy())
             self.thermo.append(self._thermo_row())
@@ -312,14 +318,27 @@ def run_node(c, st, k):
         r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
         print(f"node {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
     else:
-        r.start(); print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
+        r.start()
+        Teq = 2 * r.at.get_kinetic_energy() / (r.ndof * units.kB)
+        if not np.isfinite(Teq) or Teq > 20 * a.T:
+            print(f"node {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); sys.exit(5)
+        print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
     n_per = per // a.every
     if done >= nchunk:
         print(f"node {k}: already complete"); return
     t_resume = time.time()
     for ch in range(done + 1, nchunk + 1):
-        tl = time.time(); r.advance(per)
+        tl = time.time(); n_before = len(r.series)
+        try:
+            r.advance(per)
+            Tavg = float(np.mean(r.tk[n_before:]))
+            if Tavg > 2.0 * a.T:
+                raise Unstable(f"mean T_kin {Tavg:.0f} K in the last chunk (target {a.T:.0f} K)")
+        except Unstable as ex:
+            print(f"node {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({done + ch - 1} of {nchunk}). "
+                  f"Rerun this node with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
+            sys.exit(5)
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
         pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
