@@ -25,6 +25,8 @@ hist = []
 for t in np.arange(a.every_ps, tmax + 1e-9, a.every_ps):
     G, Ge, dF, m, s = G_from_nodes(st, lam, w, [x[:int(round(t * per_ps))] for x in ser], st["N"])
     hist.append(dict(t_ps=float(t), G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF)); print(f"  t/node {t:5.2f} ps   G {G:10.2f} +- {Ge:5.2f} meV/atom   (dF_TDI {dF:9.2f})")
+B = "▁▂▃▄▅▆▇█"; g = [h["G_meV_atom"] for h in hist]
+print("G(t) trace: " + "".join(B[int(round((v - min(g)) / (max(g) - min(g) + 1e-12) * 7))] for v in g))
 print("per-node <U_MLP - E_Einstein> (eV, whole cell) over all samples:")
 for k in range(A["nodes"]):
     print(f"   node {k} lam {lam[k]:.3e}  weight {w[k]:.3e}  {m[k]:12.3f} +- {s[k]:8.3f}   contribution {w[k] * m[k] / st['N'] * 1e3:9.2f} meV/atom")

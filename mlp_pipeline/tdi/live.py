@@ -27,6 +27,12 @@ def load(d, tag):
     return st, A, lam, w, ser
 
 
+def block_means(s, per_ps, blk=0.25, maxn=16):
+    n = max(1, int(round(blk * per_ps))); nb = len(s) // n
+    b = [np.mean(s[i * n:(i + 1) * n]) for i in range(nb)]
+    return b[-maxn:]
+
+
 def spark(v):
     v = np.asarray(v, float); ok = np.isfinite(v)
     if not ok.any():
@@ -55,7 +61,7 @@ def show(d, tags):
             print(f"{tag}: no stage0 json in {d} yet"); continue
         st, A, lam, w, ser = L; N = st["N"]; per_ps = 1000 / A["dt"] / A["every"]; n = [len(s) for s in ser]; target = A["ps"] * per_ps
         print(f"\n== {tag}: N {N}, k {st['kE']:.2f}, {A['nodes']} nodes, target {A['ps']} ps/node; done {100 * sum(n) / (target * len(n)):.0f}%  ({time.strftime('%H:%M:%S')})")
-        print("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)")
+        print("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)  time trace (0.25 ps blocks)")
         mm, cc = [], []
         for k, s in enumerate(ser):
             if len(s) < 10:
@@ -64,20 +70,21 @@ def show(d, tags):
             h = len(s) // 2; a1, a2 = np.array(s[:h]), np.array(s[h:])
             drift = (a2.mean() - a1.mean()) / (np.hypot(stats(a1)[1], stats(a2)[1]) + 1e-12) if h >= 25 else float("nan")
             mm.append(m / N * 1e3); cc.append(w[k] * m / N * 1e3)
-            print(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
+            print(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}  {spark(block_means(s, per_ps)):<18s}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
         print(f"  integrand vs node: {spark(mm)}    (lambda increasing ->)")
         print(f"  PREVIEW (interpolated, whatever data exists): G = {preview(st, A, lam, ser, N):9.2f} meV/atom")
         have = min(n) / per_ps
         if have >= 0.25:
             ts = np.arange(0.25, have + 1e-9, 0.25); G = [G_from_nodes(st, lam, w, [s[:int(round(t * per_ps))] for s in ser], N)[:2] for t in ts]
             res[tag] = (ts, np.array([g[0] for g in G]), np.array([g[1] for g in G]))
+            print(f"  G(t) trace {spark([g for g, _ in G])}   ", end="")
             print("  Gauss-Legendre G(t), meV/atom:  " + "   ".join(f"{t:.2f} ps: {g:.1f}+-{e:.1f}" for t, (g, e) in list(zip(ts, G))[-5:]))
         else:
             print("  Gauss-Legendre G(t): waiting until every node has 0.25 ps")
     if len(tags) == 2 and all(t in res for t in tags):
         (t1, g1, e1), (t2, g2, e2) = res[tags[0]], res[tags[1]]; k = min(len(t1), len(t2))
         print(f"\n== {tags[0]} - {tags[1]}  (meV/atom; literature at 400 GPa 3000 K: -22.1):")
-        print("   " + "   ".join(f"{t1[i]:.2f} ps: {g1[i] - g2[i]:+.1f}+-{np.hypot(e1[i], e2[i]):.1f}" for i in range(max(0, k - 6), k)))
+        print(f"   trace {spark(g1[:k] - g2[:k])}   " + "   ".join(f"{t1[i]:.2f} ps: {g1[i] - g2[i]:+.1f}+-{np.hypot(e1[i], e2[i]):.1f}" for i in range(max(0, k - 6), k)))
 
 
 if __name__ == "__main__":

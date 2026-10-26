@@ -71,6 +71,18 @@ class LambdaRun:
                 f"E_spring/atom {np.mean(self.espr[sl]) / N * 1e3:7.2f} meV  min d(H-H) {hh:.2f} d(H-O) {ho:.2f} A  |u_O| now rms {np.sqrt((u ** 2).sum(-1).mean()):.3f} max {np.linalg.norm(u, axis=1).max():.3f} A")
 
 
+BARS = "▁▂▃▄▅▆▇█"
+
+
+def trace(series, n_per, maxn=20):
+    """sparkline of the per-chunk means of the integrand (time evolution of this node)"""
+    b = [float(np.mean(series[i * n_per:(i + 1) * n_per])) for i in range(len(series) // n_per)][-maxn:]
+    if not b:
+        return ""
+    lo, hi = min(b), max(b)
+    return "".join(BARS[int(round((v - lo) / (hi - lo + 1e-12) * 7))] for v in b)
+
+
 def prog(t_start, done, total, t_last=None, n_last=None):
     """' | 123 ms/step | 40% | ETA 13:42 (in 25 min)' from wall time since t_start; the speed is over the last piece if t_last/n_last are given"""
     now = time.time(); el = now - t_start
@@ -208,7 +220,7 @@ def run_node(c, st, k):
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
         m, e = stats(r.series)
-        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
+        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
 
 def G_from_nodes(st, lam, w, series_list, N):
