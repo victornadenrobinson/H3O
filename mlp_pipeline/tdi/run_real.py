@@ -103,7 +103,22 @@ def setup(a):
     return ctx
 
 
+def stage0_given_k(c, kE):
+    """skip the lambda=1 run: use an Einstein constant k (eV/A^2) known from an earlier run (any sensible k gives the same G; it only changes the statistical efficiency)"""
+    a = c["a"]; kt, V, N = c["kt"], c["V"], c["N"]
+    mO, mH = float(c["at0"].get_masses()[c["iO"][0]]), float(c["at0"].get_masses()[c["iH"][0]])
+    f_ref_cons = refs.f_einstein_cons(c["nO"], kE, a.T) + refs.f_ideal_gas(c["nH"], V, a.T)
+    f_kin = refs.kinetic_free_energy([(c["nO"], mO, False), (c["nH"], mH, True)], a.T); PV = a.P / EV_A3_GPA * V
+    print(f"lambda=1 run skipped: Einstein k = {kE:.3f} eV/A^2 given; reference pieces (eV): config {f_ref_cons:.3f}  kinetic {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=float("nan"), O_struct="not checked (k given)", lindemann=float("nan"),
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a))
+    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+    return d
+
+
 def stage0(c):
+    if c["a"].k:
+        return stage0_given_k(c, c["a"].k)
     a = c["a"]; at0, iO, N, V, kt = c["at0"], c["iO"], c["N"], c["V"], c["kt"]; t0 = time.time()
     from ase.neighborlist import neighbor_list
     d1_0 = float(neighbor_list("d", at0[iO], 0.6 * V ** (1 / 3)).min())
@@ -169,7 +184,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
