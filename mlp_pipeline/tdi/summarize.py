@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 from tdi.gcalc import G_from_nodes
 
-ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None)
+ap.add_argument("--discard", type=float, default=0.0, help="discard this fraction of the start of every lambda series before integrating (e.g. 0.5 = use the second half only): a direct test of equilibration / convergence of every table below"); a = ap.parse_args()
 dirs = a.dirs or [d for d in sorted(glob.glob("runs/tdi*")) if os.path.isdir(d) and os.path.basename(d) != "tdi_test"]
 if not dirs:
     raise SystemExit("no runs/tdi* directory here: run from the repo root or give the directory")
@@ -40,6 +41,9 @@ for d in dirs:
         if n < 25:
             skipped.append(f"{os.path.basename(d)}/{tag}: " + ("no samples" if max(len(x) for x in ser) == 0 else f"only {sum(len(x) > 0 for x in ser)}/{A['nodes']} lambda values have samples"))
             continue
+        lo = int(a.discard * n); ser = [x[lo:n] for x in ser]; n = n - lo
+        if n < 25:
+            skipped.append(f"{os.path.basename(d)}/{tag}: fewer than 25 samples left after --discard {a.discard}"); continue
         G, Ge, dF, m, sd = G_from_nodes(st, lam, w, [x[:n] for x in ser], st["N"]); Gh = G_from_nodes(st, lam, w, [x[:n // 2] for x in ser], st["N"])[0]
         qd = G - G_from_nodes(st, gsub[0], gsub[1], [x[:n] for x in ser[:len(gsub[0])]], st["N"])[0] if gsub is not None else float("nan")   # Kronrod minus Gauss: quadrature error estimate
         ps = n / per_ps; P_hi = float("nan"); ft = os.path.join(d, f"{tag}_node{A['nodes'] - 1}_thermo.csv")
@@ -56,7 +60,7 @@ if df.empty:
     raise SystemExit("no tag with samples found in " + ", ".join(dirs) + ("\nskipped: " + "; ".join(skipped) if skipped else ""))
 df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs", "dir"]).reset_index(drop=True)
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
-print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target):")
+print(f"All runs{' (first ' + str(a.discard) + ' of every series discarded)' if a.discard else ''} (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target):")
 print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
 if stale:
     print("\nWARNING, more node files than the json declares: " + "; ".join(stale))
