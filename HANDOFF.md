@@ -2,6 +2,32 @@
 
 Branch `claude/eloquent-ramanujan-2tjx2p`, open PR victornadenrobinson/H3O#2 (do not open another; push to the branch). Read this file, then `PROJECT.md` (plan, conventions, zero-shot table), `docs/TDI_PLAN.md` (free-energy plan), `docs/LITERATURE_NOTES.md` (paper facts), `mlp_pipeline/README.md`, `envs/README.md`.
 
+## LATEST STATE (end of session 1, 2026-10-26 afternoon)  -- read this block first
+All TDI results below: fine-tuned GRACE `ft_m2` (runs/grace/ft_m2), classical nuclei, G includes P_target V, errors are statistical (block) only. dt was 1.0 fs unless noted (new default 0.5 fs, user wants 0.5 for everything). Say "lambda" / "lambda values", never "nodes" (user preference).
+
+| system (400 GPa) | T (K) | result (meV/atom) | notes |
+|---|---|---|---|
+| G_fcc - G_bcc | 3000 | -24.7 +- 1.5 (6 ps/lambda) | Cheng 2021 -22.1, Wilson interp. ~ -19 |
+| G_fcc - G_bcc | 5000 | -10.4 +- 3.5 (1.5 ps) | Cheng PBE-corrected table ~ -10.0 |
+| G_fcc - G_bcc | 3000, 200 GPa | -8.4 +- 2.4 (2 ps) | Cheng -10.5, Wilson -9.0 +- 2.7; bcc G still drifting up |
+| G_bcc / G_fcc | 5000 | 908.9 +- 2.7 / 898.5 +- 2.3 | |
+| pure H, N=500, dt 1 fs | 5000 | 243.9 +- 2.0 per atom | 250-atom run blew up in one lambda at dt 1 (T_kin millions K); needs dt 0.5 rerun (tag H_400GPa_5000K) |
+| H2.25O fcc | 5000 | ~859 per atom after 0.25 ps (run in progress) | 27 extra H (108 O + 243 H) |
+| H2.25O bcc | 5000 | preview 882.9 -> ~872 after the -11 meV preview offset | lambda 0 failed (GPU OOM); use `collect.py ... --copy 0:1` (weight 3e-7) or `ONLYNODES=0` rerun |
+Preliminary mixing free energy per added H (H2O crystal + H fluid -> H2.25O crystal): fcc ~ +144 +- 47 meV, bcc ~ +185 +- 55 meV (weakly unfavourable, ~0.3-0.4 kT); P*dV_excess from the hull EOS is +340..810 meV/H at 5000 K, ~0 at 7000 K, negative at 9000 K (docs/mixing_pv.py, docs/data/mixing_pv.csv).
+Open/unsure: dt 0.5 fs vs 1.0 fs comparison, second quadrature (power 3 or 6), finite size, MLP-vs-DFT (FEP) correction (Cheng's own MLP->PBE shift of dG_fcc-bcc is only 0.8-1.4 meV/atom at 200-400 GPa), nuclear quantum effects ignored.
+
+Tools written this session (all in mlp_pipeline/, see their docstrings): `tdi/run_real.py` (phases bcc, fcc, H, liquid, insert; modes --stage0, --node K; restartable; stability guard; thermo CSV, snapshots), `young_tdi_par.sh` (launcher: lambda values as processes on one GPU; env T P HPER NGHOST NATOMS DT PS EQUIL NPAR K ONLYNODES FRESH TAG; default k scaled, no lambda=1 stage), `young_tdi_scan.sbatch` (pressure/T scan array), `young_tdi_hull.sbatch` (liquid convex hull at 400 GPa, 7000/9000 K), `young_melt_scan.sbatch` + `21_melt_summary.py` (NVT stability of bcc/fcc vs T; superheating caveat), `tdi/live.py` (dashboard), `tdi/plot_tdi.py`, `tdi/collect.py` (--truncate, --copy), `tdi/summarize.py` (table + fcc-bcc pairs + liquid hull mixing dG), `tdi/uq_check.py` (GRACE extrapolation grade gamma on saved snapshots; GRACE_UQ is OFF in production), `18b_inventory_summary.py` (run on Young/Perlmutter and commit docs/data/inventory_*.csv: not done yet).
+New code paths NOT yet run with GRACE: `--phase insert` (ghost-proton chemical potential: U=(1-lam) U_host + lam U_full, mu_H = TDI integral + kT[ln((N+n)!/N!) - n ln V] + 3nkT ln Lambda, per added H, no PV; compare with G per atom of pure H), `--phase liquid`, melt scan, hull sbatch, stability guard.
+
+Immediate to-do for the next session (the user runs commands on Young interactive jobs / sbatch and pastes output):
+1. 5-min insertion test: `TAG=test NGHOST=1 T=5000 P=400 NODES=4 NPAR=4 DT=0.5 EQUIL=0.1 PS=0.25 CHUNK=0.25 bash mlp_pipeline/young_tdi_par.sh insert`; then n=1,2,3 production (est. ~30 min each).
+2. Finish fcc/bcc H2.25O at 5000 K (dt 0.5), rerun pure H (250 atoms) at dt 0.5, compute dG_mix per added H with tdi/summarize.py; compare with the insertion mu_H.
+3. sbatch the scans: `young_tdi_scan.sbatch` (3000 K 300/500 GPa, 5000 K 400 GPa), `young_tdi_hull.sbatch`, `young_melt_scan.sbatch`; run `git pull --no-rebase --no-edit` first on Young (merge commits happen there; plain `git pull` complains about divergent branches).
+4. Liquid H2O G at 5000/6000 K vs solid G as a melting criterion; check whether 5000 K at 400 GPa solid is stable (Cheng: Tm ~4.6-4.8 kK at 200 GPa, higher at 400).
+5. Commit the inventory summaries and TDI results (`summarize.py -o docs/data/tdi_results.csv`) from Young to the repo; runs/ is on Lustre scratch (not in git, may be purged).
+6. Still open from before: fine-tune sweep (young_ft_sweep.sbatch: ft_m4/ft_m3/ft_l3/ft_m5), phase-labelling thresholds on Perlmutter, DFT single points on MLP configurations for the FEP correction.
+
 ## Goal
 Benchmark foundation MLIPs (MACE, MatterSim, GRACE) against VASP AIMD data of H2O-H mixtures at about 200-1400 GPa and 3000-13000 K; build clean production-only fine-tuning sets; fine-tune; then use the fine-tuned potential for thermodynamic integration (TDI) to get G_fcc - G_bcc of superionic H2O versus pressure and compare with the literature (Wilson et al. 2013 DFT numbers, Cheng et al. 2021 MLP numbers). The user ultimately wants free-energy-grade accuracy, and the hull of H2O-H mixtures.
 
