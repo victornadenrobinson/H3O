@@ -43,9 +43,13 @@ class LambdaRun:
         if len(self.series) % 20 == 0:
             self.snaps.append(self.at.get_positions().copy())
 
+    def start(self):
+        """equilibration (nothing recorded), then attach the recorder"""
+        self.dyn.run(self.equil); self.dyn.attach(self._rec, interval=self.every); self.started = True
+
     def advance(self, n):
         if not self.started:
-            self.dyn.run(self.equil); self.dyn.attach(self._rec, interval=self.every); self.started = True
+            self.start()
         self.dyn.run(n); self.steps += n
 
 
@@ -76,6 +80,8 @@ if __name__ == "__main__":
     at0 = eos.build(a.phase, vpa, a.nrep, a.seed)
     N = len(at0); iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]; nO, nH = len(iO), len(iH); V = at0.get_volume()
     sitesO = at0.positions[iO].copy()
+    from ase.neighborlist import neighbor_list
+    d1_0 = float(neighbor_list('d', at0[iO], 0.6 * V ** (1 / 3)).min())   # nearest O-O distance of the ideal lattice
     calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
     full = engine.full_component(calc)
     print(f"{tag}: N {N} (O {nO}, H {nH}), V/atom {vpa:.4f} A^3 (V {V:.1f}), kT {kt * 1e3:.1f} meV, nodes {a.nodes} power {a.power}, dt {a.dt} fs", flush=True)
@@ -85,7 +91,12 @@ if __name__ == "__main__":
     # (1) lambda = 1: MLP dynamics, Einstein constant, pressure, structure
     comps1 = {"full": full, "E": engine.einstein_component(sitesO, iO, 1.0)}
     r1 = LambdaRun(at0, comps1, 1.0, a.T, iO, a.dt, a.tau, a.seed, a.every, dt_steps(a.equil_ps))
-    r1.advance(dt_steps(a.ps1))
+    r1.start(); print(f"lambda=1 equilibrated ({a.equil_ps} ps), {(time.time() - t0) / 60:.1f} min, T_kin now {2 * r1.at.get_kinetic_energy() / (r1.ndof * units.kB):.0f} K", flush=True)
+    for q in range(int(round(a.ps1 / 0.25))):
+        r1.advance(dt_steps(0.25))
+        uu = np.array([find_mic(p[iO] - sitesO, at0.cell, True)[0] for p in r1.snaps]); uu -= uu.mean(1, keepdims=True)
+        print(f"  lambda=1 {0.25 * (q + 1):.2f} ps  T_kin {np.mean(r1.tk):.0f} K  <U_MLP-E>/atom {np.mean(r1.series) / N * 1e3:.1f} meV (dummy spring)  "
+              f"O Lindemann {np.sqrt((uu ** 2).sum(-1).mean()) / d1_0:.3f}  <|u|^2>_O {(uu ** 2).sum(-1).mean():.4f}  {(time.time() - t0) / 60:.1f} min", flush=True)
     P1 = np.array(r1.snaps)
     u = np.array([find_mic(p[iO] - sitesO, at0.cell, True)[0] for p in P1]); u -= u.mean(1, keepdims=True)
     msd = float((u ** 2).sum(-1).mean()); kE = 3 * kt / msd
@@ -110,9 +121,12 @@ if __name__ == "__main__":
     runs = [LambdaRun(at0, comps, float(l), a.T, iO, a.dt, a.tau, a.seed + 1 + k, a.every, dt_steps(a.equil_ps)) for k, l in enumerate(lam)]
     hist = []; nchunk = int(round(a.ps / a.chunk_ps))
     print("   t/node (ps)   G (meV/atom)   dF_TDI (meV/atom)   wall (min)      [G = F_ref + dF + kinetic + P_target V; per-atom values]", flush=True)
+    for k, r in enumerate(runs):   # equilibrate every node first (nothing recorded) and report
+        r.start(); print(f"   node {k} lam {r.lam:.2e} equilibrated: T_kin {2 * r.at.get_kinetic_energy() / (r.ndof * units.kB):.0f} K   {(time.time() - t0) / 60:.1f} min", flush=True)
     for c in range(1, nchunk + 1):
-        for r in runs:
+        for k, r in enumerate(runs):
             r.advance(dt_steps(a.chunk_ps))
+            print(f"     chunk {c} node {k} lam {r.lam:.2e}  <dU/dl> {np.mean(r.series):10.3f} eV  T_kin {np.mean(r.tk):.0f} K  {(time.time() - t0) / 60:.1f} min", flush=True)
         ms = [stats(r.series) for r in runs]
         m = np.array([x[0] for x in ms]); s = np.array([x[1] for x in ms])
         dF, dFe = analyze.integrate(m, s, w)
