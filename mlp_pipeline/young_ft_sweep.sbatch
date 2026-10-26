@@ -5,8 +5,9 @@
 #     cd /lustre/scratch/mmm0037/H3O && sbatch mlp_pipeline/young_ft_sweep.sbatch                 # tasks 0-1 (A and B below)
 #     sbatch --array=0-3 mlp_pipeline/young_ft_sweep.sbatch                                      # all four
 #     sbatch --array=0-3%1 ...                                                                   # all four, one after the other
-#     sbatch -p <partition> -A <account> --qos=<qos> mlp_pipeline/young_ft_sweep.sbatch         # command-line options override the #SBATCH lines below
-# Check what you are allowed to use with:  sinfo -o '%P %l %G' ; sacctmgr show assoc user=$USER format=account,partition,qos
+#     sbatch --mem=200G --time=10:00:00 mlp_pipeline/young_ft_sweep.sbatch                        # command-line options override the #SBATCH lines below
+# Partition gpu, qos freegpu and account allusers are taken from the user's working example jobs (24 h limit there). --mem=160G is NOT from an example: GRACE's data
+# conversion needed far more than 8 GB (an interactive job with the default memory was killed); if tasks stay pending, reduce it (e.g. 120G, which worked for the 747-frame set).
 #
 # task  name    data (train tier)            weights          energy weight   what it tests
 #   0   ft_m4   m (747 frames)               frozen (as ft_m2) 1            A: only longer training
@@ -18,6 +19,7 @@
 #SBATCH --job-name=grace_sweep
 #SBATCH --partition=gpu
 #SBATCH --account=allusers
+#SBATCH --qos=freegpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=160G
