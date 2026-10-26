@@ -11,11 +11,19 @@ using the fine-tuned GRACE model, then a correction to the DFT level from single
 - Millot et al. (2019) report an fcc-oxygen superionic phase (ice XVIII) above 2000 K by x-ray diffraction (secondhand, via https://ar5iv.labs.arxiv.org/html/2103.09035).
 - A 2025 paper reports BCC and FCC signatures together in one P-T range: https://arxiv.org/pdf/2510.24305v1
 I did not read Sun-Clark-Torquato-Car (2015) or Millot 2019 themselves.
-Proposal: pick 2 state points bracketing the bcc/fcc crossover near 100 GPa-class pressures (e.g. about 150 and 300 GPa, T = 3000-5000 K), because
+Revised by the census: our data is richest at 400-500 GPa, 3000-7000 K, so start at 500 GPa (the DFT TDI folders are named 500gpa) at 2000-3000 K and treat the 150/300 GPa idea as a later extension. Original proposal: pick 2 state points bracketing the bcc/fcc crossover near 100 GPa-class pressures (e.g. about 150 and 300 GPa, T = 3000-5000 K), because
 our fine-tune data starts at 200 GPa; below that the model is extrapolating. Decision needed from you: which (P, T), and is going below 200 GPa wanted.
 
+## Data census (16_phase_census.py, 2026-10-26; path words only, so tags are the STARTING structure, not a verified end state)
+h2o runs: 3554. fcc 798 + fcc/solid 370 + fcc/superionic 15; bcc 1132 + bcc/liquid 542 + bcc/liquid/solid 163 + bcc/superionic 18; untagged 514.
+Both phases overlap at 3000 K (200-1000 GPa), 5000 K (200-1000 GPa) and 7000 K (300-1000 GPa), best at 400-500 GPa 3000 K (fcc 123/111 runs, bcc 66/28 runs per 100 GPa bin).
+2000 K superionic is thin: about 15-18 runs per phase (paths `superionic-500gpa-2000K/fcc-h2o-108-2000K`, `bcc-h2o-128-2000K`).
+The DFT cells are fcc-h2o-108 (108 O, 324 atoms) and bcc-h2o-128 (128 O, 384 atoms). Existing VASP TDI runs (`tdi/h3o/500gpa-3000K/...`, `500gpa-7000K-solid`) mean DFT free energies already exist at 500 GPa: use them as the validation target for the MLP-TDI.
+Caveats: the dataset tiers pool fcc and bcc in the same (T, 100 GPa) bin, so each phase gets only part of the 1 (s) / 3 (m) runs per bin; whether a run stayed solid, became superionic or melted is not in its folder name (09_label_phase.py).
+
 ## Cells
-- One cubic supercell per phase, about 250 O each so ΔG per atom is comparable: fcc 4x4x4 conventional (256 O + 512 H = 768 atoms), bcc 6x6x6 (432 O) or 5x5x5 (250 O + 500 H = 750 atoms). Edge must stay above 8.5 A (our box rule) - at about 200-300 GPa these are about 12-14 A.
+- First use the SAME cells as the DFT runs (fcc 108 O, bcc 128 O): the FEP correction needs DFT single points, and 324/384 atoms is what VASP already ran. Then repeat with larger cells (below) as a finite-size check.
+- Larger check: one cubic supercell per phase, about 250 O each so ΔG per atom is comparable: fcc 4x4x4 conventional (256 O + 512 H = 768 atoms), bcc 6x6x6 (432 O) or 5x5x5 (250 O + 500 H = 750 atoms). Edge must stay above 8.5 A (our box rule) - at about 200-300 GPa these are about 12-14 A.
 - H start: random on interstitial sites, then equilibrate (the 11000+ K trick is not needed; superionic H diffuses within ps).
 - Check first: the MLP has not seen cells this large; memory at 768 atoms is fine for GRACE (729 atoms was 10 GiB inference).
 
