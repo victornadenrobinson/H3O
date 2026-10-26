@@ -199,15 +199,26 @@ def h_vpa(inv, T, P):
 
 
 def hull_vpa(csv_path, hper, T, P):
-    """V/atom (A^3) of the fluid H(2+n)O at P, T (T in 5000/7000/9000 K) from the EOS columns of data-h3o-convex-hull.csv (V per O for mixtures)"""
+    """V/atom (A^3) of the fluid H(2+n)O at P, T from the EOS columns of data-h3o-convex-hull.csv (tabulated at 5000, 7000, 9000 K; V per O for mixtures).
+    Other temperatures between 5000 and 9000 K: linear interpolation in T between the two neighbouring columns (approximate)."""
     d = pd.read_csv(csv_path)
     comp = {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(float(hper))
     if comp is None:
         raise SystemExit(f"no hull EOS column for {hper} H per O: give --vpa")
-    p, v = d[f"P {int(T)}K {comp}"], d[f"V {int(T)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
-    if not p.min() <= P <= p.max():
-        print(f"WARNING: {P} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp}: volume clipped")
-    return float(np.interp(P, p[o], v[o])) / (1 + hper)
+
+    def at(Tc):
+        p, v = d[f"P {int(Tc)}K {comp}"], d[f"V {int(Tc)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
+        if not p.min() <= P <= p.max():
+            print(f"WARNING: {P} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp} at {Tc} K: volume clipped")
+        return float(np.interp(P, p[o], v[o])) / (1 + hper)
+    Ts = [5000, 7000, 9000]
+    if T in Ts:
+        return at(T)
+    if not Ts[0] <= T <= Ts[-1]:
+        raise SystemExit(f"hull EOS only covers {Ts[0]}-{Ts[-1]} K: give --vpa")
+    lo = max(t for t in Ts if t <= T); hi = min(t for t in Ts if t >= T)
+    print(f"NOTE: volume at {T} K interpolated between the {lo} K and {hi} K hull columns")
+    return at(lo) + (at(hi) - at(lo)) * (T - lo) / (hi - lo)
 
 
 def build_h_n(vpa, natoms):
