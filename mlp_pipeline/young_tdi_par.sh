@@ -3,12 +3,13 @@
 # usage in an interactive GPU job (repo root on Young):
 #    bash mlp_pipeline/young_tdi_par.sh bcc           # real run: 12 nodes, 4 ps each, 4 processes at a time
 #    bash mlp_pipeline/young_tdi_par.sh fcc
+#    T=5000 bash mlp_pipeline/young_tdi_par.sh H          # pure hydrogen fluid (ideal-gas reference, no O): G of H at the same P, T
 #    quick test (a few minutes):  TAG=test NODES=3 PS=0.5 PS1=0.5 CHUNK=0.25 EQUIL=0.2 NPAR=3 bash mlp_pipeline/young_tdi_par.sh bcc
 # K: Einstein constant (eV/A^2); default bcc 12.2, fcc 22.8 (measured at 400 GPa, 3000 K): stage 0 then skips its MD. K=0 re-measures it with a lambda=1 run (also checks MLP pressure and O structure).
 # env knobs: T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
-PH=${1:?bcc or fcc}; P=${P:-400}; T=${T:-3000}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
+PH=${1:?bcc, fcc or H}; P=${P:-400}; T=${T:-3000}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
 TAGNAME=${PH}_${P}GPa_${T}K
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)

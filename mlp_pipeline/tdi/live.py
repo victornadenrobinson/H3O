@@ -7,7 +7,7 @@ import argparse, json, os, subprocess, sys, time
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
-from tdi.run_real import G_from_nodes, stats, refs
+from tdi.run_real import G_from_nodes, G_total_eV, stats, refs
 
 BARS = "▁▂▃▄▅▆▇█"
 
@@ -49,8 +49,7 @@ def preview(st, A, lam, ser, N):
     x = lam ** (1 / A["power"]); xs = np.linspace(0, 1, 4001); m = np.array([np.mean(ser[k]) for k in ok])
     g = np.interp(xs, x[ok], m) * A["power"] * xs ** (A["power"] - 1)
     dF = float(np.sum((g[1:] + g[:-1]) / 2 * np.diff(xs)))
-    kt = refs.kT(st["T"])
-    return (st["f_ref_cons_eV"] + dF - kt * np.log(st["V"]) + st["f_kin_eV"] + st["PV_eV"]) / N * 1e3
+    return G_total_eV(st, dF) / N * 1e3
 
 
 def show(d, tags):

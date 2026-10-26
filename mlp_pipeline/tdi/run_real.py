@@ -30,8 +30,10 @@ class LambdaRun:
         self.lam, self.T, self.every, self.equil, self.series, self.tk, self.snaps = lam, T, every, equil_steps, [], [], []
         self.eful, self.espr = [], []
         self.calc = engine.TDICalculator(components, {"E": 1 - lam, "full": lam}, needed=("full", "E"))
-        self.at = atoms0.copy(); self.at.calc = self.calc; self.idxO = idxO; self.sites0 = atoms0.positions[idxO].copy()
-        self.at.set_constraint(engine.FixGroupCom(idxO))
+        self.at = atoms0.copy(); self.at.calc = self.calc; self.idxO = idxO
+        self.sites0 = atoms0.positions[idxO].copy() if len(idxO) else atoms0.positions.copy()   # no O: displacement of every H from its start (liquid check)
+        if len(idxO):
+            self.at.set_constraint(engine.FixGroupCom(idxO))
         rng = np.random.default_rng(seed)
         MaxwellBoltzmannDistribution(self.at, temperature_K=T, rng=rng)
         self.at.set_momenta(self.at.get_momenta(), apply_constraint=True)
@@ -66,9 +68,12 @@ class LambdaRun:
         from ase.neighborlist import neighbor_list
         i, j, d = neighbor_list("ijd", at, 1.2)
         hh = d[H[i] & H[j]].min() if (H[i] & H[j]).any() else float("nan"); ho = d[(H[i] != H[j])].min() if (H[i] != H[j]).any() else float("nan")
-        u = find_mic(at.positions[self.idxO] - self.sites0, at.cell, True)[0]; u -= u.mean(0)
+        if len(self.idxO):
+            u = find_mic(at.positions[self.idxO] - self.sites0, at.cell, True)[0]; u -= u.mean(0)
+        else:
+            u = at.positions - self.sites0
         return (f"T_kin {np.mean(self.tk[sl]):6.0f} K  <dU/dl> {np.mean(self.series[sl]):10.3f} eV  U_MLP/atom {np.mean(self.eful[sl]) / N:8.4f} eV  "
-                f"E_spring/atom {np.mean(self.espr[sl]) / N * 1e3:7.2f} meV  min d(H-H) {hh:.2f} d(H-O) {ho:.2f} A  |u_O| now rms {np.sqrt((u ** 2).sum(-1).mean()):.3f} max {np.linalg.norm(u, axis=1).max():.3f} A")
+                f"E_spring/atom {np.mean(self.espr[sl]) / N * 1e3:7.2f} meV  min d(H-H) {hh:.2f} d(H-O) {ho:.2f} A  |u| now rms {np.sqrt((u ** 2).sum(-1).mean()):.3f} max {np.linalg.norm(u, axis=1).max():.3f} A")
 
 
 BARS = "▁▂▃▄▅▆▇█"
@@ -81,6 +86,13 @@ def trace(series, n_per, maxn=20):
         return ""
     lo, hi = min(b), max(b)
     return "".join(BARS[int(round((v - lo) / (hi - lo + 1e-12) * 7))] for v in b)
+
+
+def E_component(c, kE):
+    """Einstein springs on the O atoms; for pure hydrogen (no O) the reference potential is zero"""
+    if c["nO"] == 0:
+        return lambda atoms: (0.0, np.zeros((len(atoms), 3)))
+    return engine.einstein_component(c["sitesO"], c["iO"], kE)
 
 
 def prog(t_start, done, total, t_last=None, n_last=None):
@@ -102,6 +114,17 @@ def banner(c):
     a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
     mode = "stage 0 only" if a.stage0 else (f"node {a.node} only" if a.node is not None else "all in one process")
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
+    if a.phase == "H":
+        lines = ["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
+                 f"system      : {c['N']} H atoms, pure hydrogen fluid, bcc start lattice ({a.nrep}^3 cells, 2 atoms each) that should melt; cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
+                 f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT, target pressure {a.P:.0f} GPa -> G = F + P_target V (per H atom below)",
+                 f"potential   : {a.model} (classical nuclei)",
+                 "path        : U(lam) = lam U_MLP ; reference (lam=0) = ideal gas of N indistinguishable H atoms: F_ref = -kT N ln V + kinetic terms + kT ln N! (analytic); F = F_ref + integral_0^1 <U_MLP>_lam dlam",
+                 f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs; no centre-of-mass constraint",
+                 f"each lambda : {a.equil_ps} ps equilibration + {a.ps} ps production, reports every {a.chunk_ps} ps; the 'rms |u|' in the logs is the displacement of H from its start (liquid if it grows beyond the lattice spacing)",
+                 f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes", "   node   lambda      weight"]
+        lines += [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]
+        print("\n".join(lines), flush=True); return
     lines = [
         "=" * 100,
         f"TDI PLAN  {c['tag']}   ({mode})",
@@ -130,13 +153,40 @@ def banner(c):
     print("\n".join(lines), flush=True)
 
 
+def h_vpa(inv, T, P):
+    """V/atom of pure hydrogen (comp_snap == 'h') at pressure P from the DFT inventory (log P quadratic in V/atom, as dft_vpa)"""
+    df = import_module("01_bin_inventory").load_inventory(inv)
+    df = df[(df.comp_snap == "h") & (df.T_bin == int(round(T / 1000.0)) * 1000)]
+    df = df.assign(vpa=df.True_V_A3 / df.N_ions).dropna(subset=["vpa"])
+    if len(df) < 5:
+        raise SystemExit(f"only {len(df)} pure-H DFT runs at {T:.0f} K in {inv}: give --vpa")
+    c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2); grid = np.linspace(df.vpa.min(), df.vpa.max(), 400); Pg = np.exp(np.polyval(c, grid))
+    print(f"DFT pure H {T:.0f} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
+    if not df.True_P_GPa.min() <= P <= df.True_P_GPa.max():
+        print(f"WARNING: {P} GPa is outside the DFT range: volume clipped to the edge of the data")
+    return float(np.interp(-P, -Pg, grid))
+
+
+def build_h(vpa, nrep):
+    """pure hydrogen: bcc lattice of 2 nrep^3 atoms (it melts at these conditions: check the displacement column), cubic cell at V/atom = vpa"""
+    from ase import Atoms
+    n = 2 * nrep ** 3; a_conv = (n * vpa / nrep ** 3) ** (1 / 3)
+    sp = [((np.array(b) + (i, j, k)) / nrep) for i in range(nrep) for j in range(nrep) for k in range(nrep) for b in ((0, 0, 0), (.5, .5, .5))]
+    return Atoms("H" * n, scaled_positions=sp, cell=[a_conv * nrep] * 3, pbc=True)
+
+
 def setup(a):
     eos = import_module("17_eos_md")
-    a.nrep = a.nrep or eos.CELL[a.phase][2]
-    vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P])[0]
     tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K"
     os.makedirs(a.outdir, exist_ok=True)
-    at0 = eos.build(a.phase, vpa, a.nrep, a.seed)
+    if a.phase == "H":
+        a.nrep = a.nrep or 5
+        vpa = a.vpa or h_vpa(a.from_dft, a.T, a.P)
+        at0 = build_h(vpa, a.nrep)
+    else:
+        a.nrep = a.nrep or eos.CELL[a.phase][2]
+        vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P])[0]
+        at0 = eos.build(a.phase, vpa, a.nrep, a.seed)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
@@ -160,7 +210,20 @@ def stage0_given_k(c, kE):
     return d
 
 
+def stage0_hydrogen(c):
+    """pure hydrogen: nothing to measure; reference = ideal gas of N indistinguishable H atoms (no fixed centre of mass, so no -kT ln V term)"""
+    a = c["a"]; V, N = c["V"], c["N"]
+    f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy([(N, float(c["at0"].get_masses()[0]), True)], a.T); PV = a.P / EV_A3_GPA * V
+    print(f"pure H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase="H", T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=0, nH=N, kE=0.0, P_mlp=float("nan"), O_struct="fluid H (no lattice)", lindemann=float("nan"),
+             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, args=vars(a))
+    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+    return d
+
+
 def stage0(c):
+    if c["a"].phase == "H":
+        return stage0_hydrogen(c)
     if c["a"].k:
         return stage0_given_k(c, c["a"].k)
     a = c["a"]; at0, iO, N, V, kt = c["at0"], c["iO"], c["N"], c["V"], c["kt"]; t0 = time.time()
@@ -198,7 +261,7 @@ def stage0(c):
 def run_node(c, st, k):
     """node k alone; the series of <U_MLP - E> is saved to <outdir>/<tag>_node<k>.npy after every chunk"""
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
-    comps = {"full": c["full"], "E": engine.einstein_component(c["sitesO"], c["iO"], st["kE"])}
+    comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
@@ -223,16 +286,21 @@ def run_node(c, st, k):
         print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
 
+def G_total_eV(st, dF):
+    """whole-cell G (eV) from the TDI integral dF; the -kT ln V translation term applies only when the O centre of mass is held fixed (not for the pure-H fluid)"""
+    kt = refs.kT(st["T"]); tr = 0.0 if st.get("no_com_term") else -kt * np.log(st["V"])
+    return st["f_ref_cons_eV"] + dF + tr + st["f_kin_eV"] + st["PV_eV"]
+
+
 def G_from_nodes(st, lam, w, series_list, N):
     ms = [stats(s) for s in series_list]; m = np.array([x[0] for x in ms]); s = np.array([x[1] for x in ms])
     dF, dFe = analyze.integrate(m, s, w)
-    kt = refs.kT(st["T"])
-    return (st["f_ref_cons_eV"] + dF - kt * np.log(st["V"]) + st["f_kin_eV"] + st["PV_eV"]) / N * 1e3, dFe / N * 1e3, dF / N * 1e3, m, s
+    return G_total_eV(st, dF) / N * 1e3, dFe / N * 1e3, dF / N * 1e3, m, s
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc"], required=True)
+    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H"], required=True)
     ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
     ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
@@ -251,7 +319,7 @@ if __name__ == "__main__":
         run_node(c, st, a.node); sys.exit(0)
     # all in one process
     st = stage0(c); t0 = time.time(); lam, w, N = c["lam"], c["w"], c["N"]
-    comps = {"full": c["full"], "E": engine.einstein_component(c["sitesO"], c["iO"], st["kE"])}
+    comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     runs = [LambdaRun(c["at0"], comps, float(l), a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps)) for k, l in enumerate(lam)]
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = len(runs) * (neq + nchunk * per)
     for k, r in enumerate(runs):
