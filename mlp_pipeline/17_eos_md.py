@@ -49,7 +49,7 @@ def comp_label(hper):
 
 
 def _vpa_bin(df, phase, Tb, Ps):
-    df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).dropna(subset=["vpa"])
+    df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
     c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2)
     grid = np.linspace(df.vpa.min(), df.vpa.max(), 400)
     P = np.exp(np.polyval(c, grid))

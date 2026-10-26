@@ -200,7 +200,7 @@ def h_vpa(inv, T, P):
     """V/atom of pure hydrogen (comp_snap == 'h') at pressure P from the DFT inventory (log P quadratic in V/atom, as dft_vpa). T on a 1000 K bin with >= 5 runs: that bin; any other T between two such bins:
     linear interpolation in T between the neighbouring bin fits (approximate, printed)."""
     df0 = import_module("01_bin_inventory").load_inventory(inv)
-    df0 = df0[df0.comp_snap == "h"].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).dropna(subset=["vpa"])
+    df0 = df0[df0.comp_snap == "h"].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
     n = df0.groupby("T_bin").size(); good = sorted(int(b) for b in n[n >= 5].index)
 
     def at(Tb):
