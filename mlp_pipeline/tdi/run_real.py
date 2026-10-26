@@ -397,9 +397,35 @@ def stage0(c):
     return d
 
 
+def acquire_lock(path, stale_s):
+    """one writer per lambda node: <tag>_node<k>.lock holds host / Slurm job / pid and is touched after every chunk. A lock younger than stale_s whose Slurm job still exists (or cannot be checked) means another job is working on this node:
+    return False (the caller exits). Older locks, and locks of finished Slurm jobs (killed by the time limit, scancel), are taken over. H3O_NOLOCK=1 switches the check off; deleting the file does the same for one node."""
+    import atexit, signal, socket, subprocess
+    if os.environ.get("H3O_NOLOCK"): return True
+    info = f"{socket.gethostname()} job {os.environ.get('SLURM_JOB_ID', '-')} pid {os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    try: fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try: age = time.time() - os.path.getmtime(path); old = open(path).read().strip()
+        except OSError: age, old = 0.0, "?"
+        jid = old.split(" job ")[1].split()[0] if " job " in old else "-"; alive = True
+        if jid not in ("-", ""):
+            try:
+                q = subprocess.run(["squeue", "-h", "-j", jid], capture_output=True, text=True, timeout=20)
+                alive = bool(q.stdout.strip()) or (q.returncode != 0 and "Invalid job id" not in q.stderr)   # unknown job id = finished; any other squeue failure: assume alive
+            except Exception: alive = True
+        if age < stale_s and alive:
+            print(f"LOCKED: {path} is held by [{old}] (touched {age / 60:.0f} min ago): another job is running this lambda node. Not starting. (stale after {stale_s / 60:.0f} min; delete the lock file or set H3O_NOLOCK=1 to override)", flush=True); return False
+        print(f"taking over stale lock [{old}] ({age / 60:.0f} min old, job {'running' if alive else 'finished'})", flush=True); fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY)
+    os.write(fd, info.encode()); os.close(fd)
+    atexit.register(lambda: os.path.exists(path) and os.remove(path)); signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+    return True
+
+
 def run_node(c, st, k):
     """node k alone; the series of <U_MLP - E> is saved to <outdir>/<tag>_node<k>.npy after every chunk"""
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
+    lock = os.path.join(a.outdir, f"{c['tag']}_node{k}.lock")
+    if not acquire_lock(lock, a.lock_stale_min * 60): return
     comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     if c.get("init_pos") is not None:
@@ -444,6 +470,8 @@ def run_node(c, st, k):
                   f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
             sys.exit(5)
         np.save(f, np.array(r.series))
+        try: os.utime(lock)
+        except OSError: pass
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, dt=a.dt, lam=l, T=a.T, natoms=len(c["at0"]), V=c["V"]); os.replace(sf + ".tmp.npz", sf)
         pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
         if r.thermo:
@@ -473,6 +501,7 @@ if __name__ == "__main__":
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
     ap.add_argument("--ps", type=float, default=4.0, help="production per lambda node"); ap.add_argument("--chunk-ps", type=float, default=0.5)
     ap.add_argument("--hot-ps", type=float, default=0.0, help="liquid phase: first heat every lambda to --hot-T for this long so the lattice start melts, then equilibrate at T"); ap.add_argument("--hot-T", type=float, default=12000.0)
+    ap.add_argument("--lock-stale-min", type=float, default=30.0, help="a lambda-node lock file not touched for this long is taken over (see acquire_lock)")
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
