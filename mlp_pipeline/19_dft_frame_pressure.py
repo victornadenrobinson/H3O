@@ -18,6 +18,8 @@ ap.add_argument("--phase", default="bcc"); ap.add_argument("--T", type=float, de
 ap.add_argument("--vpa", type=float, nargs="+", required=True); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
 ap.add_argument("--n", type=int, default=40, help="max frames per volume")
 ap.add_argument("--md-p", type=float, nargs="*", default=None, help="MD pressures (GPa) in the order of --vpa: print their difference to the local DFT fit and the equivalent volume error")
+ap.add_argument("--natoms", type=int, default=None, help="with --inventory: only DFT runs with this many atoms (e.g. 384 = the cell the tier frames come from)")
+ap.add_argument("--no-clean", action="store_true", help="with --inventory: do NOT apply the tier-builder filters (good flag, P 200-1450 GPa, P std <= 20, box >= 8.5 A, exclude_paths.txt) to the population")
 ap.add_argument("--families", action="store_true", help="with --inventory: break the DFT population down by run family (folder above the volume folder): n, V range, mean T, mean P offset from the population fit")
 ap.add_argument("--list", action="store_true", help="with --inventory: list every frame with its source run and its P offset from the local DFT fit")
 ap.add_argument("--inventory", default=None, help="inventory csv: also print the DFT run-level mean P of runs of this phase near each volume (the population the EOS fit is made of)"); ap.add_argument("--device", default="cuda")
@@ -44,6 +46,27 @@ print("P_dft = frame stress + kinetic term; P_run = the run-level mean P stored 
 if a.inventory:
     inv = import_module("01_bin_inventory").load_inventory(a.inventory)
     inv = inv[(inv.comp_snap == "h2o") & ((inv.True_T_K - a.T).abs() <= a.tol_T) & (inv.Path.map(phase_bucket) == a.phase)].assign(vpa=lambda d: d.True_V_A3 / d.N_ions)
+    if not a.no_clean:   # the same filters 02_extract_snapshots.py applies before it picks training runs
+        import re
+        n0 = len(inv); why = {}
+        def drop(mask, name):
+            global inv
+            k = int((~mask).sum())
+            if k: why[name] = k
+            inv = inv[mask]
+        if "good" in inv: drop(inv.good.astype(bool), "not good")
+        drop(inv.True_P_GPa.between(200, 1450), "P outside 200-1450 GPa")
+        if "P_std_GPa" in inv: drop(inv.P_std_GPa.fillna(0) <= 20, "P std > 20 GPa")
+        drop(inv.True_V_A3 ** (1 / 3) >= 8.5, "box edge < 8.5 A")
+        exfile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt")
+        if os.path.exists(exfile):
+            for ln in open(exfile):
+                rx = ln.split("#", 1)[0].strip()
+                if rx:
+                    drop(~inv.Path.str.contains(rx, regex=True, case=False), f"exclude rule {rx}")
+        print(f"cleaning the population like the tier builder: {n0} -> {len(inv)} rows; removed {why}")
+    if a.natoms:
+        n0 = len(inv); inv = inv[inv.N_ions == a.natoms]; print(f"--natoms {a.natoms}: {n0} -> {len(inv)} rows")
     print(f"\nDFT runs of the same phase and T in the inventory ({len(inv)}): run-level mean P near each volume (window +-{a.tol:.2f} A^3/atom)")
     rr = []; coef = {}
     for k, v0 in enumerate(a.vpa):
@@ -65,7 +88,7 @@ if a.inventory:
             w["fam"] = w.Path.map(lambda p: "/".join(run_key(p).split("/")[:-1]))
             w["off"] = w.True_P_GPa - np.polyval(c, w.vpa - v0)
             for fam, g in w.groupby("fam"):
-                rows_f.append(dict(vpa_target=v0, family=fam, n_rows=len(g), n_runs=g.Path.map(run_key).nunique(), vpa_lo=g.vpa.min(), vpa_hi=g.vpa.max(), T_mean=g.True_T_K.mean(), P_mean=g.True_P_GPa.mean(), offset_vs_fit=g.off.mean()))
+                rows_f.append(dict(vpa_target=v0, family=fam, n_rows=len(g), n_runs=g.Path.map(run_key).nunique(), N_atoms=g.N_ions.mean(), vpa_lo=g.vpa.min(), vpa_hi=g.vpa.max(), T_mean=g.True_T_K.mean(), P_mean=g.True_P_GPa.mean(), offset_vs_fit=g.off.mean()))
         print("\nDFT population by family (offset_vs_fit = mean P minus the population's local linear fit at the same volume):")
         print(pd.DataFrame(rows_f).round(2).sort_values(["vpa_target", "n_rows"], ascending=[True, False]).to_string(index=False))
     if a.list and coef:
