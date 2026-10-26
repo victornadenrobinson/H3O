@@ -26,7 +26,13 @@ echo "== stage 0 (lambda = 1 run) $(date)"
 [ -f $OUT/${TAGNAME}_stage0.json ] || { echo "stage 0 failed"; exit 1; }
 [ -n "$ONLY0" ] && exit 0   # ONLY0=1: stop after the lambda=1 run (e.g. to compare DT=0.5 and DT=1.0)
 echo "== nodes 0..$((NODES-1)), $NPAR at a time $(date)"
-seq 0 $((NODES-1)) | xargs -P $NPAR -I{} bash -c "$PY -u mlp_pipeline/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
+# node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
+python3 -c "
+n=$NODES; o=[i for i in (n//2, n-1, 0) if 0<=i<n]
+o=list(dict.fromkeys(o))
+while len(o)<n:
+    o.append(max((i for i in range(n) if i not in o), key=lambda i: min(abs(i-j) for j in o)))
+print(*o, sep=chr(10))" | xargs -P $NPAR -I{} bash -c "$PY -u mlp_pipeline/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
 XP=$!
 while kill -0 $XP 2>/dev/null; do
   sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"

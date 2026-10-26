@@ -32,6 +32,8 @@ tiers s/m/l = 212 / 932 / 1281 frames (train/valid grouped by run directory: tra
 
 TDI parallel mode: `mlp_pipeline/young_tdi_par.sh <bcc|fcc>` = stage 0 (lambda=1) then lambda nodes as separate processes sharing one GPU (A100 is only ~21-30% busy per process; needs TF_FORCE_GPU_ALLOW_GROWTH), `tdi/collect.py runs/tdi <tag>` integrates the node files (works on partial runs). Verbose per-node health lines (T, U, spring energy, min H-H/H-O distance, O displacement). Untested with GRACE.
 
+TDI monitoring: `tdi/live.py runs/tdi <tagA> <tagB> [--loop 60 --png]` (text dashboard: per-node integrand, drift in sigma, preview integral, G(t), dG(t)), `tdi/plot_tdi.py` (PNG), nodes are restartable. First real fcc 400 GPa result (10 GL nodes, power 4, 2 ps/node, dt 1 fs, k 22.8): G = 1978.5 +- 2.2 meV/atom (incl. P V); integrand plateau +1217 eV at lambda<1e-5, steep between lambda 0.003-0.3, -881 eV at 0.95.
+
 ## Open items, in order
 1. `ft_s2` (small model on the new data, about 10 min), then `bash mlp_pipeline/bench_grace_compare.sh valid_m.extxyz 0 runs/grace/ft_m2 runs/grace/ft_s2` (figure `runs/bench_compare_valid_m.png`; points coloured by composition).
 2. Reduce the force/energy error: unfrozen weights and 8000+ updates (compare train vs validation), then decide whether more data is needed.
