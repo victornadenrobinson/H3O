@@ -120,6 +120,8 @@ def meta():
 
 def E_component(c, kE):
     """Einstein springs on the O atoms; for pure hydrogen (no O) the reference potential is zero"""
+    if c.get("host_idx") is not None:   # insertion: the reference potential is the MLP of the host atoms alone
+        return engine.subset_component(c["calc"], c["host_idx"])
     if c["nO"] == 0:
         return lambda atoms: (0.0, np.zeros((len(atoms), 3)))
     return engine.einstein_component(c["sitesO"], c["iO"], kE)
@@ -144,6 +146,16 @@ def banner(c):
     a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
     mode = "stage 0 only" if a.stage0 else (f"node {a.node} only" if a.node is not None else "all in one process")
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
+    if a.phase == "insert":
+        print("\n".join(["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
+            f"system      : fcc H2O host ({c['nO_real']} O + {c['nH_host']} H) + {a.nghost} added H (ghosts), cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 (host volume from the DFT EOS at {a.T:.0f} K, {a.P:.0f} GPa)",
+            f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT at the host volume",
+            f"potential   : {a.model}",
+            "path        : U(lam) = (1-lam) U_MLP(host atoms only) + lam U_MLP(all atoms); ghosts are an ideal gas at lam = 0; dU/dlam = U_full - U_host (the interaction energy of the added H)",
+            "result      : mu_H(in fcc H2O) = <integral> + kT[ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln Lambda_H, per added H (no P V term); compare with G per atom of pure H at the same P, T",
+            f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, no constraints; each lambda {a.equil_ps} ps equilibration + {a.ps} ps production",
+            f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes", "   node   lambda      weight"]
+            + [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]), flush=True); return
     if a.phase in ("H", "liquid"):
         nOr = c.get("nO_real", 0)
         lines = ["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
@@ -221,6 +233,22 @@ def hull_vpa(csv_path, hper, T, P):
     return at(lo) + (at(hi) - at(lo)) * (T - lo) / (hi - lo)
 
 
+def add_ghosts(host, n, seed=0, dmin=0.75):
+    """append n H atoms at random positions at least dmin (A) from every atom already present (minimum image); they are ghosts at lambda = 0 and ordinary protons at lambda = 1"""
+    from ase import Atoms
+    from ase.geometry import get_distances
+    rng = np.random.default_rng(seed); at = host.copy()
+    for _ in range(n):
+        for _try in range(20000):
+            p = rng.random(3) @ at.cell.array
+            _, d = get_distances(p[None, :], at.positions, cell=at.cell, pbc=True)
+            if d.min() >= dmin:
+                at += Atoms("H", positions=[p], cell=at.cell, pbc=True); break
+        else:
+            raise SystemExit(f"could not place ghost {len(at) - len(host) + 1} with dmin {dmin} A")
+    return at
+
+
 def build_h_n(vpa, natoms):
     """pure hydrogen with natoms atoms on a cubic lattice (sc n^3, bcc 2n^3 or fcc 4n^3: whichever matches); the lattice melts, only the density matters"""
     from ase import Atoms
@@ -243,12 +271,16 @@ def build_h(vpa, nrep):
 
 def setup(a):
     eos = import_module("17_eos_md")
-    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "")
+    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "")
     os.makedirs(a.outdir, exist_ok=True)
     if a.phase == "H":
         a.nrep = a.nrep or 5
         vpa = a.vpa or h_vpa(a.from_dft, a.T, a.P)
         at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
+    elif a.phase == "insert":   # fcc H2O host (volume from the DFT EOS at this T, P) + n ghost protons
+        a.nrep = a.nrep or 3
+        vpa = a.vpa or eos.dft_vpa(a.from_dft, "fcc", a.T, [a.P], 2.0)[0]
+        host = eos.build("fcc", vpa, a.nrep, a.seed, 2.0); at0 = add_ghosts(host, a.nghost, a.seed + 7)
     elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
         a.nrep = a.nrep or 2
         vpa = a.vpa or hull_vpa(a.hull, a.hper, a.T, a.P)
@@ -259,6 +291,8 @@ def setup(a):
         at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
+    if a.phase == "insert":
+        nh = len(host); ctx.update(nO_real=int((host.numbers == 8).sum()), host_idx=np.arange(nh), nH_host=int((host.numbers == 1).sum()), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)), V=at0.get_volume())
     if a.phase in ("H", "liquid"):   # no lattice: no Einstein springs, no fixed centre of mass; every atom starts as an ideal gas
         ctx.update(nO_real=len(iO), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)))
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
@@ -294,7 +328,22 @@ def stage0_hydrogen(c):
     return d
 
 
+def stage0_insert(c):
+    """F(N+n) - F(N) = int <U_full - U_host> dlambda + kT [ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln(Lambda_H);  reported per added H (the json 'N' is the number of ghosts), no P V term:
+    at fixed V this is mu_H of the crystal at its pressure ((dF/dN)_V = (dG/dN)_P)"""
+    a = c["a"]; n = a.nghost; V = c["V"]; kt = c["kt"]; NH = c["nH_host"]
+    f_conf = kt * sum(np.log(NH + i) for i in range(1, n + 1)) - n * kt * np.log(V)
+    f_kin = refs.kinetic_free_energy([(n, float(c["at0"].get_masses()[-1]), False)], a.T)
+    print(f"insertion of {n} H into fcc H2O ({c['nO_real']} O + {NH} H, V = {V:.1f} A^3): reference pieces (eV): configurational {f_conf:.3f}  3 n kT ln Lambda {f_kin:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase="insert", T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=n, N_atoms_total=c["N"], nO=c["nO_real"], nH=NH + n, kE=0.0, P_mlp=float("nan"), O_struct="fcc host + ghosts", lindemann=float("nan"),
+             f_ref_cons_eV=f_conf, f_kin_eV=f_kin, PV_eV=0.0, no_com_term=True, per="added H", args=vars(a), meta=meta())
+    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+    return d
+
+
 def stage0(c):
+    if c["a"].phase == "insert":
+        return stage0_insert(c)
     if c["a"].phase in ("H", "liquid"):
         return stage0_hydrogen(c)
     if c["a"].k:
@@ -407,7 +456,7 @@ def G_from_nodes(st, lam, w, series_list, N):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H", "liquid"], required=True)
+    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H", "liquid", "insert"], required=True)
     ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
     ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
@@ -415,7 +464,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
