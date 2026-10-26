@@ -42,5 +42,8 @@ Direct DFT two-phase coexistence (PBEsol, gamma point, 500 eV, 300-450 atoms, 15
 
 **Andriambariarijaona et al., Nat. Commun. 17, 374 (2025), "Observation of a mixed close-packed structure in superionic water"** (https://www.nature.com/articles/s41467-025-67063-2; source data https://doi.org/10.6084/m9.figshare.30624377; EuXFEL data https://doi.org/10.22003/XFEL.EU-DATA-004463-00, embargo until 2026-10-30): ultrafast XRD of multiply shock-compressed water up to about 180 GPa. Above 150 GPa and about 2500 K the patterns need a mixed close-packed (fcc/hcp stacking disorder, hcp probability alpha 0.25-0.32) superionic phase rather than pure fcc; around 20-100 GPa and 2000-2500 K bcc and fcc signatures coexist (their Fig. 5 shows the mu_bcc = mu_fcc region of Cheng et al. as a hatched area near 25-110 GPa, 1600-2500 K). Simulations used the same Cheng potential (n2p2 in LAMMPS, trained on the PBE data set of Cheng et al.), up to 13,824 molecules, 100 ps NPT at 0.25 fs, XRD computed from snapshots. No free energies.
 
+## Suggested by the user, not yet read
+- PNAS, https://www.pnas.org/doi/10.1073/pnas.1921811117 (2020, vol. 117; the sandbox cannot reach pnas.org and a search by DOI found nothing). Upload the PDF to docs/papers/ or paste the abstract; nothing from it is used anywhere yet.
+
 ## Not obtained
 The text of Cheng et al., Nat. Phys. 17, 1228 (2021) itself (the free-energy method is described there: Einstein crystal for O + Uhlenbeck-Ford fluid for the protons, per an earlier search excerpt); only its data repository was read. Upload the PDF if the method details are needed.
