@@ -59,7 +59,8 @@ for i, r in enumerate(runs):
     pts = " ".join(f"{X(t):.1f},{y:.1f}" for t, y in zip(r["t"], up)) + " " + " ".join(f"{X(t):.1f},{y:.1f}" for t, y in zip(r["t"][::-1], lo[::-1]))
     s.append(f'<polygon points="{pts}" fill="{c}" fill-opacity="0.18"/><polyline points="' + " ".join(f"{X(t):.1f},{Y(v):.1f}" for t, v in zip(r["t"], d)) + f'" fill="none" stroke="{c}" stroke-width="2"/>')
     for t, v, e, g in zip(r["t"], d, r["e"], r["G"]):
-        s.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="{2.6 if len(r["t"]) < 25 else 3}" fill="{c}" {'stroke="var(--surface)" stroke-width="1"' if len(r["t"]) < 25 else 'fill-opacity="0" pointer-events="all"'}><title>{r["tag"]} ({r["dir"]}) t = {t:.2f} ps: G = {g:.2f} +- {e:.2f} meV/atom, minus final = {v:+.2f}</title></circle>')
+        dense = len(r["t"]) >= 25; rr = 3 if dense else 2.6; sty = 'fill-opacity="0" pointer-events="all"' if dense else 'stroke="var(--surface)" stroke-width="1"'
+        s.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="{rr}" fill="{c}" {sty}><title>{r["tag"]} ({r["dir"]}) t = {t:.2f} ps: G = {g:.2f} +- {e:.2f} meV/atom, minus final = {v:+.2f}</title></circle>')
     s.append(f'<text x="{cx + 28 + (PW - 36) / 2}" y="{cy + PH + 11}" text-anchor="middle">0 - {tm:g} ps</text>')
 s.append("</svg>")
 os.makedirs(os.path.dirname(os.path.abspath(a.o)), exist_ok=True); open(a.o, "w").write("\n".join(s)); print(f"wrote {a.o}: {len(runs)} runs")
