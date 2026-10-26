@@ -14,7 +14,7 @@ from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from ase.io import read, write
-from common import progress, out, inp, phase_bucket
+from common import progress, out, inp, phase_bucket, run_key, seg_no
 
 MIN_STEP_GAP = 50
 CACHE_VERSION = "v2-free-energy"   # bump when the frame content/label convention changes: invalidates all cached runs
@@ -137,8 +137,15 @@ def select(df, a):
     lam = d.Path.str.contains("lambda_", case=False)
     keep = d.Path.str.contains(a.lambda_keep) if a.lambda_keep else pd.Series(False, index=d.index)
     d = d[~lam | keep]
-    d = d.assign(run=d.Path.map(lambda p: p.rsplit("/", 2)[0]), P100=(d.True_P_GPa // 100 * 100).astype(int))
-    d = d.sort_values("Path").drop_duplicates("run")  # one OUTCAR per run directory (out1/out2... are a chain)
+    d = d.assign(run=d.Path.map(run_key), P100=(d.True_P_GPa // 100 * 100).astype(int))
+    # one OUTCAR per run (out1, out2, ... are the restart segments of one chain). out1 is the START of the run (about 0.2 ps, not equilibrated: its pressure was
+    # measured 15-23 GPa below the later segments at the same volume), so take a segment from late in the chain: position a.late_segment (0 = first, 1 = last)
+    if a.late_segment >= 0:
+        d = d.assign(seg=d.Path.map(seg_no)).sort_values(["run", "seg", "Path"])
+        d = d.groupby("run", group_keys=False).apply(lambda g: g.iloc[[int(round(a.late_segment * (len(g) - 1)))]])
+        print(f"one OUTCAR per run from chain position {a.late_segment}: {len(d)} runs")
+    else:
+        d = d.sort_values("Path").drop_duplicates("run")   # old behaviour: the first segment
     # --by-phase: h2o runs are balanced separately per path-tag bucket (fcc / bcc / liquid / other) so fcc and bcc each get their own runs per state
     lab = {}
     if getattr(a, "phase_csv", None):   # measured labels from 09_label_phase.py: bucket = <O sublattice>-<dynamical phase>, e.g. fcc-superionic
@@ -172,6 +179,7 @@ if __name__ == "__main__":
     ap.add_argument("--exclude-file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt"))
     ap.add_argument("--no-default-exclusions", action="store_true")
     ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
+    ap.add_argument("--late-segment", type=float, default=0.75, help="which restart segment of each run to take: 0 = first, 1 = last, 0.75 = three quarters along the chain (default); -1 = old behaviour (first, out1 = unequilibrated)")
     ap.add_argument("--by-phase", action="store_true", help="h2o only: balance runs per (T, 100 GPa) bin separately for fcc / bcc / liquid / other path tags (adds info['phase_tag'])")
     ap.add_argument("--phase-csv", default=None, help="09_label_phase.py output: bucket h2o runs by measured O sublattice + dynamical phase (implies --by-phase; unlabelled runs fall back to path words)")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")

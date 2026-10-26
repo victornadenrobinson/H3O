@@ -15,7 +15,7 @@ import pandas as pd
 from ase import Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
-from common import progress, out, inp, path_phase_tag
+from common import progress, out, inp, path_phase_tag, run_key, seg_no
 
 MIN_WINDOW = 100
 
@@ -48,6 +48,8 @@ def msd_arrays(cell, sym, frac):
     d = np.diff(frac, axis=0)
     d -= np.round(d)
     unw = np.concatenate([np.zeros((1,) + frac.shape[1:]), np.cumsum(d, axis=0)]) @ cell
+    mass = np.where(sym == "O", 15.999, 1.008)                      # remove the centre-of-mass drift of the whole cell (net momentum), which would
+    unw = unw - ((unw * mass[None, :, None]).sum(1) / mass.sum())[:, None, :]   # otherwise inflate every displacement and smear the time-averaged O sites
     i0 = L // 2
     out = {}
     for el in ("O", "H"):
@@ -75,19 +77,6 @@ def label(r, o_liq, h_super, h_liq, lind=0.0):
     return "liquid" if r["H_rate"] > h_liq else "solid"
 
 
-def run_key(path):
-    """Run directory: the folder above out<N>/ (restart segments out1, out2, ... of one MD run share it)."""
-    parts = path.split("/")[:-1]
-    if parts and re.fullmatch(r"out\d*", parts[-1]):
-        parts = parts[:-1]
-    return "/".join(parts)
-
-
-def seg_no(path):
-    m = re.search(r"/out(\d*)/[^/]*$", path)
-    return int(m.group(1)) if m and m.group(1) else 0
-
-
 def read_arrays(path, root):
     fr = read(os.path.join(root, path), index=":", format="vasp-out")
     return np.array(fr[0].cell), np.array(fr[0].get_chemical_symbols()), np.array([f.get_scaled_positions(wrap=False) for f in fr])
@@ -95,20 +84,28 @@ def read_arrays(path, root):
 
 def join_segments(segs, max_jump=1.5, vol_tol=0.005):
     """Concatenate consecutive (cell, sym, frac) segments into one trajectory. A new piece starts where the atoms/cell differ or the first frame
-    is more than max_jump A (minimum image) from the previous last frame; the longest piece is returned with the piece count."""
-    pieces = [[segs[0]]]
+    is more than max_jump A (minimum image) from the previous last frame. Returns cell, sym, longest piece, number of pieces, total steps, break reasons."""
+    pieces = [[segs[0]]]; why = []
     for s in segs[1:]:
         c0, y0, f0 = pieces[-1][-1]; c1, y1, f1 = s
-        ok = len(y0) == len(y1) and bool((y0 == y1).all()) and abs(abs(np.linalg.det(c1)) / abs(np.linalg.det(c0)) - 1) < vol_tol
-        if ok:
-            d = f1[0] - f0[-1]; d -= np.round(d)
-            ok = float(np.linalg.norm(d @ c0, axis=1).max()) < max_jump
-        if ok:
+        reason = None
+        if len(y0) != len(y1) or not bool((y0 == y1).all()):
+            reason = "atoms"
+        else:
+            dv = abs(abs(np.linalg.det(c1)) / abs(np.linalg.det(c0)) - 1)
+            if dv >= vol_tol:
+                reason = f"volume:{dv:.3f}"
+            else:
+                d = f1[0] - f0[-1]; d -= np.round(d)
+                jump = float(np.linalg.norm(d @ c0, axis=1).max())
+                if jump >= max_jump:
+                    reason = f"jump:{jump:.2f}"
+        if reason is None:
             pieces[-1].append(s)
         else:
-            pieces.append([s])
+            pieces.append([s]); why.append(reason)
     best = max(pieces, key=lambda p: sum(len(x[2]) for x in p))
-    return best[0][0], best[0][1], np.concatenate([x[2] for x in best]), len(pieces)
+    return best[0][0], best[0][1], np.concatenate([x[2] for x in best]), len(pieces), sum(len(x[2]) for p in pieces for x in p), ";".join(why)
 
 
 def one_chain(args):
@@ -122,13 +119,14 @@ def one_chain(args):
             pass
     if not segs:
         return [dict(Path=p, O_rate=np.nan, H_rate=np.nan, window=-1) for p in paths]
-    cell, sym, frac, npieces = join_segments(segs)
+    cell, sym, frac, npieces, total, why = join_segments(segs)
+    piece_steps = len(frac)
     if max_steps and len(frac) > max_steps:
         frac = frac[-max_steps:]
     r = msd_arrays(cell, sym, frac)
     rows = []
     for p in paths:
-        row = dict(Path=p, chain_steps=len(frac), n_seg=len(paths), n_pieces=npieces)
+        row = dict(Path=p, chain_steps=len(frac), n_seg=len(paths), n_pieces=npieces, piece_frac=piece_steps / max(total, 1), breaks=why)
         if r is None:
             row.update(O_rate=np.nan, H_rate=np.nan, window=0)
         else:
@@ -143,6 +141,7 @@ if __name__ == "__main__":
     ap.add_argument("--root", default="~/work"); ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--tmin", type=float, default=2000); ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--reuse", action="store_true", help="reuse rows already in the output file (skip re-reading those OUTCARs); relabels with the current thresholds")
+    ap.add_argument("--comp", default=None, help="only this snapped composition, e.g. h2o (default: all)")
     ap.add_argument("--per-file", action="store_true", help="analyse every OUTCAR on its own instead of joining the restart segments (out1, out2, ...) of a run")
     ap.add_argument("--max-steps", type=int, default=20000, help="use at most the last N MD steps of a joined run (memory)")
     ap.add_argument("--o-liq", type=float, default=2.0, help="A^2 per 1000 steps")
@@ -151,12 +150,14 @@ if __name__ == "__main__":
     a = ap.parse_args()
     df = pd.read_csv(inp(a.inv))
     df = df[df.good & (df.True_T_K >= a.tmin) & (df.comp_snap != "unknown")]
+    if a.comp:
+        df = df[df.comp_snap == a.comp]
     df = df.assign(run=df.Path if a.per_file else df.Path.map(run_key))
     if a.sample:   # sample whole runs, not single OUTCARs
         runs = pd.Series(df.run.unique()).sample(min(a.sample, df.run.nunique()), random_state=0)
         df = df[df.run.isin(runs)]
     root = os.path.abspath(os.path.expanduser(a.root))
-    BASE = ["Path", "O_rate", "H_rate", "window", "O_struct", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces"]
+    BASE = ["Path", "O_rate", "H_rate", "window", "O_struct", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces", "piece_frac", "breaks"]
     old = pd.DataFrame(columns=BASE)
     fn = out(a.out)
     if a.reuse and os.path.exists(fn):   # keep rows mined earlier; only read runs that are not in the file yet
@@ -175,15 +176,17 @@ if __name__ == "__main__":
             for r in progress(p.imap(one_chain, chains, chunksize=2), total=len(chains), desc="phase MSD"):
                 rows += r
     x = pd.concat([d for d in (old, pd.DataFrame(rows)) if len(d)], ignore_index=True)   # skip the empty frame: it would turn every column into dtype object
-    for c in ("O_rate", "H_rate", "window", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces"):
+    for c in ("O_rate", "H_rate", "window", "CN1", "CN2", "delta_L", "chain_steps", "n_seg", "n_pieces", "piece_frac"):
         if c in x:
             x[c] = pd.to_numeric(x[c], errors="coerce")
     keep = [c for c in ("Path", "comp_snap", "True_T_K", "T_bin", "True_P_GPa", "N_ions") if c in df]
     x = x.merge(df[keep], on="Path", how="left")
     x["H_msd"] = x.H_rate * x.window / 1000; x["O_msd"] = x.O_rate * x.window / 1000   # total displacement^2 over the window (A^2)
     x["phase"] = [label(r, a.o_liq, a.h_super, a.h_liq, a.lindemann) if r["window"] > 0 else "unknown" for r in x.to_dict("records")]
+    x["run"] = x.Path if a.per_file else x.Path.map(run_key)
     x.to_csv(out(a.out), index=False)
-    print(x.phase.value_counts().to_string())
+    xr = x.drop_duplicates("run")                      # one row per run for every statistic below
+    print(f"{len(xr)} runs ({len(x)} OUTCARs). phase per RUN:"); print(xr.phase.value_counts().to_string())
     print("O rate percentiles (A^2/1000 steps):", x.O_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
     print("H rate percentiles:", x.H_rate.quantile([.05, .25, .5, .75, .95]).round(2).tolist())
     # thresholds should be judged against total displacement over the window, per temperature (H diffuses slower at 2000 K than at 7000 K)
@@ -196,10 +199,18 @@ if __name__ == "__main__":
             print("\nO Lindemann ratio delta_L by T bin: 10/50/90th percentile (a gap between a low and a high cluster = crystal / liquid)")
             dq = ok.groupby("T_bin")["delta_L"].quantile([.1, .5, .9]).unstack().round(3)
             print(pd.concat([ok.groupby("T_bin").size().rename("n"), dq], axis=1).to_string())
-            h, e = np.histogram(ok.delta_L.dropna(), bins=np.arange(0.0, 0.62, 0.02))
-            print("histogram of delta_L over all runs (bin start: count) - a dip separates crystal from liquid:")
+            h, e = np.histogram(ok.drop_duplicates("run").delta_L.dropna(), bins=np.r_[np.arange(0.0, 0.62, 0.02), [0.8, 1, 1.5, 2, 3, 5, 10]])
+            print("histogram of delta_L over RUNS (bin start: count) - a dip separates crystal from liquid:")
             print("  " + "  ".join(f"{b:.2f}:{c}" for b, c in zip(e[:-1], h) if c))
         print("\nwindow (MD steps) percentiles 10/50/90:", ok.window.quantile([.1, .5, .9]).round(0).tolist())
+        if "piece_frac" in ok:
+            okr = ok.drop_duplicates("run")
+            br = okr[okr.n_pieces > 1]
+            print(f"\nchains: {len(br)} of {len(okr)} runs have more than one continuous piece; the longest piece holds the median {okr.piece_frac.median():.2f} (10th pct {okr.piece_frac.quantile(.1):.2f}) of all steps")
+            kinds = pd.Series([w.split(":")[0] for b in br.breaks.dropna() for w in str(b).split(";") if w])
+            print("break reasons:", kinds.value_counts().to_dict())
+            jv = [float(w.split(":")[1]) for b in br.breaks.dropna() for w in str(b).split(";") if w.startswith("jump")]
+            if jv: print("jump distances (A) 10/50/90:", np.percentile(jv, [10, 50, 90]).round(2).tolist())
         if "chain_steps" in ok:
             print("joined run length (MD steps) percentiles 10/50/90:", ok.chain_steps.quantile([.1, .5, .9]).round(0).tolist(), "; segments per run 50/90/max:", ok.n_seg.quantile([.5, .9, 1]).tolist(),
                   "; runs with a broken (discontinuous) chain:", int((ok.n_pieces > 1).sum()))

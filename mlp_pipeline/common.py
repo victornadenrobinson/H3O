@@ -97,3 +97,19 @@ def phase_bucket(path):
     """Coarse selection bucket from the path tag: liquid > fcc > bcc > other (a 'bcc-...-liquid' run is a liquid)."""
     t = path_phase_tag(path)
     return "liquid" if ("liquid" in t or "melt" in t) else "fcc" if "fcc" in t else "bcc" if "bcc" in t else "other"
+
+
+def run_key(path):
+    """Run directory: the folder above out<N>/ (restart segments out1, out2, ... of one MD run share it); the folder itself if the OUTCAR is not in an out<N>."""
+    import re
+    parts = str(path).split("/")[:-1]
+    if parts and re.fullmatch(r"out\d*", parts[-1]):
+        parts = parts[:-1]
+    return "/".join(parts)
+
+
+def seg_no(path):
+    """Restart segment number from .../out<N>/OUTCAR (0 if there is none)."""
+    import re
+    m = re.search(r"/out(\d*)/[^/]*$", str(path))
+    return int(m.group(1)) if m and m.group(1) else 0
