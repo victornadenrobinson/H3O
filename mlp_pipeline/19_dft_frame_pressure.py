@@ -18,6 +18,7 @@ ap.add_argument("--phase", default="bcc"); ap.add_argument("--T", type=float, de
 ap.add_argument("--vpa", type=float, nargs="+", required=True); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
 ap.add_argument("--n", type=int, default=40, help="max frames per volume")
 ap.add_argument("--md-p", type=float, nargs="*", default=None, help="MD pressures (GPa) in the order of --vpa: print their difference to the local DFT fit and the equivalent volume error")
+ap.add_argument("--list", action="store_true", help="with --inventory: list every frame with its source run and its P offset from the local DFT fit")
 ap.add_argument("--inventory", default=None, help="inventory csv: also print the DFT run-level mean P of runs of this phase near each volume (the population the EOS fit is made of)"); ap.add_argument("--device", default="cuda")
 a = ap.parse_args()
 frames = [f for p in a.data for f in read(inp(p), index=":")]
@@ -32,7 +33,7 @@ for v0 in a.vpa:
         N, V, T = len(f), f.get_volume(), f.info["T_K"]; kin = N * units.kB * T / V * EV_A3_GPA
         Pd = -np.trace(f.get_stress(voigt=False)) / 3 * EV_A3_GPA + kin
         g = f.copy(); g.calc = calc; Pm = -np.trace(g.get_stress(voigt=False)) / 3 * EV_A3_GPA + kin
-        rows.append(dict(vpa_target=v0, vpa=V / N, T=T, P_dft=Pd, P_run=float(f.info.get("P_GPa", np.nan)), P_mlp=Pm, dP=Pm - Pd))
+        rows.append(dict(vpa_target=v0, source=f.info.get("source", ""), N=N, vpa=V / N, T=T, P_dft=Pd, P_run=float(f.info.get("P_GPa", np.nan)), P_mlp=Pm, dP=Pm - Pd))
 r = pd.DataFrame(rows)
 if r.empty:
     raise SystemExit("no frame near the requested volumes: widen --tol or --tol-T")
@@ -43,16 +44,21 @@ if a.inventory:
     inv = import_module("01_bin_inventory").load_inventory(a.inventory)
     inv = inv[(inv.comp_snap == "h2o") & ((inv.True_T_K - a.T).abs() <= a.tol_T) & (inv.Path.map(phase_bucket) == a.phase)].assign(vpa=lambda d: d.True_V_A3 / d.N_ions)
     print(f"\nDFT runs of the same phase and T in the inventory ({len(inv)}): run-level mean P near each volume (window +-{a.tol:.2f} A^3/atom)")
-    rr = []
+    rr = []; coef = {}
     for k, v0 in enumerate(a.vpa):
         w = inv[(inv.vpa - v0).abs() <= a.tol]
         row = dict(vpa_target=v0, n_runs=len(w), P_median=w.True_P_GPa.median(), P_std=w.True_P_GPa.std())
         if len(w) >= 4:   # local linear fit P(V) of the DFT population, evaluated at the exact MD volume (window means are blurred by the steep P(V))
-            c = np.polyfit(w.vpa - v0, w.True_P_GPa, 1); res = w.True_P_GPa - np.polyval(c, w.vpa - v0)
+            c = np.polyfit(w.vpa - v0, w.True_P_GPa, 1); coef[v0] = c; res = w.True_P_GPa - np.polyval(c, w.vpa - v0)
             row.update(P_lin_at_V=c[1], slope_GPa_per_A3=c[0], resid_std=res.std(ddof=2), P_lin_sem=res.std(ddof=2) / np.sqrt(len(w)))
             if a.md_p and k < len(a.md_p):
                 row.update(P_md=a.md_p[k], dP=a.md_p[k] - c[1], dV_pct=(a.md_p[k] - c[1]) / abs(c[0]) / v0 * 100)
         rr.append(row)
     print(pd.DataFrame(rr).round(2).to_string(index=False))
     print("dV_pct = (P_md - P_lin) / |dP/dV| / V: the volume shift that accounts for the pressure difference.")
+    if a.list and coef:
+        r["P_pop"] = [np.polyval(coef[v], x - v) if v in coef else np.nan for v, x in zip(r.vpa_target, r.vpa)]
+        r["offset_vs_pop"] = r.P_run - r.P_pop
+        print("\nframes: P_run minus the DFT population's local fit at the frame's own volume (negative = the frame's run is below the population)")
+        print(r[["vpa", "T", "N", "P_run", "P_pop", "offset_vs_pop", "source"]].round(2).sort_values("vpa").to_string(index=False))
 print("overall mean dP = %.2f GPa over %d frames" % (r.dP.mean(), len(r)))
