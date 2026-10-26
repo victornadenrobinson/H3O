@@ -18,13 +18,13 @@ c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2); fit = lambda v: 
 g = np.linspace(df.vpa.min(), df.vpa.max(), 400); Pg = fit(g)
 Vdft = lambda P: np.interp(P, Pg[::-1], g[::-1])            # DFT fit inverted: V/atom at a given P (P falls with V)
 fig, (A, B, C) = plt.subplots(1, 3, figsize=(14, 4.2))
-A.scatter(df.True_P_GPa, df.vpa, s=8, c="#b8b8b2", label=f"DFT runs ({len(df)})"); A.plot(Pg, g, color="#1a1a19", lw=1, label="DFT fit")
+A.scatter(df.True_P_GPa, df.vpa, s=12, c="#9a9a94", label=f"DFT runs ({len(df)})"); A.plot(Pg, g, color="#1a1a19", lw=1, label="DFT fit")
 cols = ["#2a78d6", "#d62728", "#2e9b4e", "#e66100"]
 for k, f in enumerate(a.csv):
     r = pd.read_csv(f); lab = os.path.basename(f).replace(".csv", "")
     dP = r.P_GPa - fit(r.vpa)                                 # pressure error at the same volume
     dV = (r.vpa - Vdft(r.P_GPa)) / Vdft(r.P_GPa) * 100       # volume error at the same (MLP) pressure, % of the DFT volume
-    A.errorbar(r.P_GPa, r.vpa, xerr=r.P_sem, fmt="o", color=cols[k % 4], ms=5, capsize=2, label=lab)
+    A.errorbar(r.P_GPa, r.vpa, xerr=r.P_sem, fmt=["s", "D", "^", "v"][k % 4], mfc="none", mew=1.6, color=cols[k % 4], ms=9, capsize=2, label=lab, zorder=5)   # open symbols: the DFT dots stay visible underneath
     B.errorbar(fit(r.vpa), dP, r.P_sem, fmt="o-", color=cols[k % 4], ms=5, capsize=2, label=lab)
     C.plot(r.P_GPa, dV, "o-", color=cols[k % 4], ms=5, label=lab)
     print(lab); print(r.assign(dP=dP, dV_pct=dV)[["vpa", "P_GPa", "P_sem", "dP", "dV_pct", "T_mean", "D_H_cm2s", "D_O_cm2s", "msd_O_end"]].round(4).to_string(index=False))

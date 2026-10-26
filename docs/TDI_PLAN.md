@@ -90,12 +90,15 @@ So the MD statistics can reach below 1 meV/atom, but the DFT-level DeltaG is lim
 - So the MLP number is a method check first, not a result. Before it counts: (1) check how many fcc/bcc superionic frames the training tiers hold at the chosen state points and add DFT frames (20-40 per phase) only where they are thin; (2) correct with free-energy perturbation: dF_corr = -kT ln < exp(-(U_DFT - U_MLP)/kT) >_MLP over 50-100 MLP snapshots per phase, DFT as single points; if the exponential average is noisy, use the cumulant (mean + variance/2kT) form and report both.
 - The label convention matters: DFT free energy (TOTEN with sigma = kT) is what we trained on, so the correction uses the same quantity; the electronic entropy is then included in both.
 
-## Order of work (proposal, nothing started)
-1. Finish the m-tier fine-tune (running) and benchmark; decide model.
-2. Pick (P, T) points; build fcc/bcc supercells (`tdi_build.py`); EOS refinement runs (Step A at 3-4 volumes).
-3. Step A diagnostics on both phases; fix dt, k, supercell if the lattice is unstable.
-4. Stage 1 / Stage 2 lambda ladders on a Slurm array; analyse the integrands before trusting any total.
-5. DFT single points + FEP correction; compare ΔG with the literature crossover.
+## Order of work (updated 2026-10-26)
+Done: data rebuilt (late segments), pressure-reference bug found and fixed (EOS-MD of bcc 3000 K: medium model within 3 GPa / 0.35% in volume of DFT), fcc frame check (errors <= 1.5 GPa).
+GPU queue (two interactive jobs):
+1. Job 1: ft_m2 (new data, running) -> ft_s2 (about 10 min) -> bench_grace_compare.sh with both.
+2. Job 2: fcc EOS-MD with ft_m (P = 350-500 GPa; about 40 min) -> bench of the old models (zero-shot, ft_s, ft_m) on the rebuilt valid_m.
+3. Quick tests of ft_m2/ft_s2: bench figure, then bcc and fcc EOS-MD at 400 GPa and 3000 K only.
+No GPU needed (can start now): write and test the TDI engine on a cheap potential (EMT/LJ) in the sandbox: mixed Hamiltonian, Einstein-crystal and proton reference free energies, quadrature, analysis; test against a harmonic crystal where the answer is analytic.
+4. First TDI state point: 400 GPa, 3000 K, bcc and fcc, DFT-sized cells (128 O / 108 O). Why: richest DFT data (fcc exists only for about 330-540 GPa at 3000 K), EOS validated there, superionic (D_H about 7e-4 cm2/s, O frozen), well above the superionic transition and, as far as the data show, below melting. Risk: expected |G_fcc - G_bcc| may be small; 500 GPa (upper edge of the fcc data) has a larger expected difference. Before any TDI: run 20 ps NVT at lambda = 1 at the TDI volumes to check that bcc does not transform to fcc.
+5. Only after the fluctuation sizes are known: decide the lambda grid, the DFT-level correction, and whether to go to 5000 K or higher pressures.
 
 ## Decisions I need from you
 1. The (P, T) points (and whether below 200 GPa is wanted).
