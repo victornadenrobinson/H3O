@@ -14,6 +14,7 @@ import argparse, json, os, sys, time
 from importlib import import_module
 from math import lgamma
 import numpy as np
+import pandas as pd
 from ase import units
 from ase.geometry import find_mic
 from ase.md.langevin import Langevin
@@ -143,9 +144,10 @@ def banner(c):
     a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
     mode = "stage 0 only" if a.stage0 else (f"node {a.node} only" if a.node is not None else "all in one process")
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
-    if a.phase == "H":
+    if a.phase in ("H", "liquid"):
+        nOr = c.get("nO_real", 0)
         lines = ["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
-                 f"system      : {c['N']} H atoms, pure hydrogen fluid, cubic start lattice that should melt; cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
+                 f"system      : {nOr} O + {c['nH']} H = {c['N']} atoms, {'liquid H%gO' % a.hper if a.phase == 'liquid' else 'pure hydrogen fluid'}, start lattice that should melt (check the displacement column); cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
                  f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT, target pressure {a.P:.0f} GPa -> G = F + P_target V (per H atom below)",
                  f"potential   : {a.model} (classical nuclei)",
                  "path        : U(lam) = lam U_MLP ; reference (lam=0) = ideal gas of N indistinguishable H atoms: F_ref = -kT N ln V + kinetic terms + kT ln N! (analytic); F = F_ref + integral_0^1 <U_MLP>_lam dlam",
@@ -196,6 +198,18 @@ def h_vpa(inv, T, P):
     return float(np.interp(-P, -Pg, grid))
 
 
+def hull_vpa(csv_path, hper, T, P):
+    """V/atom (A^3) of the fluid H(2+n)O at P, T (T in 5000/7000/9000 K) from the EOS columns of data-h3o-convex-hull.csv (V per O for mixtures)"""
+    d = pd.read_csv(csv_path)
+    comp = {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(float(hper))
+    if comp is None:
+        raise SystemExit(f"no hull EOS column for {hper} H per O: give --vpa")
+    p, v = d[f"P {int(T)}K {comp}"], d[f"V {int(T)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
+    if not p.min() <= P <= p.max():
+        print(f"WARNING: {P} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp}: volume clipped")
+    return float(np.interp(P, p[o], v[o])) / (1 + hper)
+
+
 def build_h_n(vpa, natoms):
     """pure hydrogen with natoms atoms on a cubic lattice (sc n^3, bcc 2n^3 or fcc 4n^3: whichever matches); the lattice melts, only the density matters"""
     from ase import Atoms
@@ -218,18 +232,24 @@ def build_h(vpa, nrep):
 
 def setup(a):
     eos = import_module("17_eos_md")
-    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_h{a.hper:g}o" if a.hper != 2.0 and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "")
+    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "")
     os.makedirs(a.outdir, exist_ok=True)
     if a.phase == "H":
         a.nrep = a.nrep or 5
         vpa = a.vpa or h_vpa(a.from_dft, a.T, a.P)
         at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
+    elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
+        a.nrep = a.nrep or 2
+        vpa = a.vpa or hull_vpa(a.hull, a.hper, a.T, a.P)
+        at0 = eos.build("fcc", vpa, a.nrep, a.seed, a.hper)
     else:
         a.nrep = a.nrep or eos.CELL[a.phase][2]
         vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
         at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
+    if a.phase in ("H", "liquid"):   # no lattice: no Einstein springs, no fixed centre of mass; every atom starts as an ideal gas
+        ctx.update(nO_real=len(iO), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)))
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
     ctx["full"] = engine.full_component(ctx["calc"])
     ctx["steps"] = lambda ps: int(round(ps * 1000 / a.dt))
@@ -252,18 +272,19 @@ def stage0_given_k(c, kE):
 
 
 def stage0_hydrogen(c):
-    """pure hydrogen: nothing to measure; reference = ideal gas of N indistinguishable H atoms (no fixed centre of mass, so no -kT ln V term)"""
-    a = c["a"]; V, N = c["V"], c["N"]
-    f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy([(N, float(c["at0"].get_masses()[0]), True)], a.T); PV = a.P / EV_A3_GPA * V
-    print(f"pure H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
-    d = dict(tag=c["tag"], phase="H", T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=0, nH=N, kE=0.0, P_mlp=float("nan"), O_struct="fluid H (no lattice)", lindemann=float("nan"),
+    """fluid (pure H or liquid H(2+n)O): nothing to measure; reference = ideal gas of the N atoms, indistinguishable within each species (no fixed centre of mass, so no -kT ln V term)"""
+    a = c["a"]; V, N = c["V"], c["N"]; nOr = c.get("nO_real", 0); nH = c["nH"]; m = c["at0"].get_masses(); nums = c["at0"].numbers
+    species = [(n, float(m[nums == z][0]), True) for n, z in ((nOr, 8), (nH, 1)) if n > 0]
+    f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy(species, a.T); PV = a.P / EV_A3_GPA * V
+    print(f"fluid {nOr} O + {nH} H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N_O! N_H!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=nOr, nH=nH, kE=0.0, P_mlp=float("nan"), O_struct="fluid (no lattice)", lindemann=float("nan"),
              f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, args=vars(a), meta=meta())
     json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
     return d
 
 
 def stage0(c):
-    if c["a"].phase == "H":
+    if c["a"].phase in ("H", "liquid"):
         return stage0_hydrogen(c)
     if c["a"].k:
         return stage0_given_k(c, c["a"].k)
@@ -375,7 +396,7 @@ def G_from_nodes(st, lam, w, series_list, N):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H"], required=True)
+    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H", "liquid"], required=True)
     ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
     ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
@@ -383,7 +404,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)

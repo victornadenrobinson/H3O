@@ -23,5 +23,17 @@ for (P, T, h), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O"]):
         pairs.append(dict(P_GPa=P, T_K=T, H_per_O=h, dG_fcc_minus_bcc_meV_atom=f.G_meV_atom - b.G_meV_atom, err=(f.G_err_meV_atom ** 2 + b.G_err_meV_atom ** 2) ** .5, ps_fcc=f.ps_per_node, ps_bcc=b.ps_per_node))
 if pairs:
     print("\nG_fcc - G_bcc (meV/atom):"); print(pd.DataFrame(pairs).round(2).to_string(index=False))
+hull = []
+for (P, T), g in df.groupby(["P_target_GPa", "T_K"]):
+    w, hh = g[(g.phase == "liquid") & (g.H_per_O == 2.0)], g[g.phase == "H"]
+    if len(w) and len(hh):
+        w, hh = w.iloc[0], hh.iloc[0]
+        for _, m in g[(g.phase == "liquid") & (g.H_per_O > 2.0)].iterrows():
+            n = m.H_per_O - 2.0; fw, fh = 3 / (3 + n), n / (3 + n)   # atom fractions of the H2O part and of the added H in the mixture
+            hull.append(dict(P_GPa=P, T_K=T, H_per_O=m.H_per_O, x_H=n / (1 + n), dG_mix_meV_atom=m.G_meV_atom - fw * w.G_meV_atom - fh * hh.G_meV_atom,
+                             err=(m.G_err_meV_atom ** 2 + (fw * w.G_err_meV_atom) ** 2 + (fh * hh.G_err_meV_atom) ** 2) ** .5))
+if hull:
+    print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom:")
+    print(pd.DataFrame(hull).round(2).to_string(index=False))
 if a.o:
-    df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))
+    df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))
