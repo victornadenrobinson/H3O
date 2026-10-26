@@ -26,6 +26,7 @@ MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; PS=${PS:-10}; PY=${PY:-$HOME/grace-ve
 echo "== task $I: $PH at $P GPa, T = ${TLIST[*]} K, $PS ps each, concurrently on $(hostname) $(date)"
 mkdir -p runs/melt
 for T in "${TLIST[@]}"; do
+  grep -qs "^RESULT" runs/melt/melt_${PH}_${P}GPa_${T}K.log && { echo "skip ${PH} ${P} GPa ${T} K (already has a RESULT line)"; continue; }
   $PY -u mlp_pipeline/17_eos_md.py $MODEL --phase $PH --T $T --from-dft inventory_binned.csv --P $P --ps $PS --equil-ps 1.0 --dt 0.5 --tag melt_${PH}_${P}GPa_${T}K --outdir runs/melt > runs/melt/melt_${PH}_${P}GPa_${T}K.log 2>&1 &
 done
 wait
