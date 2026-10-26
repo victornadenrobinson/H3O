@@ -82,6 +82,38 @@ def stats(series, nb=5):
     return analyze.block_stats(s, nblocks=nb)
 
 
+def banner(c):
+    a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
+    mode = "stage 0 only" if a.stage0 else (f"node {a.node} only" if a.node is not None else "all in one process")
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
+    lines = [
+        "=" * 100,
+        f"TDI PLAN  {c['tag']}   ({mode})",
+        "=" * 100,
+        f"system      : {c['nO']} O + {c['nH']} H = {c['N']} atoms (H2O), {a.phase} O sublattice ({a.nrep}^3 conventional cells), protons start on random O-O bond midpoints",
+        f"cell        : cubic {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom (from the DFT {a.phase} EOS at {a.P:.0f} GPa, {a.T:.0f} K); periodic",
+        f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT; target pressure {a.P:.0f} GPa -> G = F + P_target V",
+        f"potential   : {a.model} (fine-tuned GRACE; classical nuclei, no quantum corrections)",
+        "path        : direct coupling-constant integration  U(lam) = (1-lam) E_Einstein(O) + lam U_MLP",
+        "              E_Einstein = k/2 sum_O |u_i|^2 (u = displacement from the ideal lattice site, minimum image), O centre of mass held fixed (FixGroupCom)",
+        "              reference system (lam=0): O on springs + H ideal gas;   F(lam=1) = F_ref + integral_0^1 <U_MLP - E_Einstein>_lam dlam",
+        "              F_ref = F_Einstein(O, COM fixed) + F_ideal(H) + kinetic terms - kT ln V (translation invariance), all analytic (tdi/refs.py)",
+        f"Einstein k  : {('%.3f eV/A^2 (given: skips the lambda=1 run)' % a.k) if a.k else 'measured from a lambda=1 run (k = 3 kT / <|u|^2>), also gives MLP pressure and O structure'}",
+        f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, forces/energies from the same MLP calls (one GPU evaluation per step per lambda)",
+        f"each lambda : {a.equil_ps} ps equilibration (not used) + {a.ps} ps production = {neq + nprod} steps; sampling every {a.every} steps; reports every {a.chunk_ps} ps",
+        f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} nodes, weight_i = w_i {a.power:g} x_i^{a.power - 1:g}",
+        "   node   lambda      weight     steps   what it samples",
+    ]
+    for k, (l, ww) in enumerate(zip(lam, w)):
+        what = "H nearly ideal gas, O on springs" if l < 1e-2 else ("mixed" if l < 0.3 else "mostly the full MLP")
+        lines.append(f"   {k:4d}   {l:.3e}   {ww:.3e}   {neq + nprod:6d}   {what}")
+    lines += [f"   sum of weights = {w.sum():.6f} (must be 1)",
+              f"total cost  : {a.nodes} nodes x {neq + nprod} steps = {a.nodes * (neq + nprod)} MD steps; at about 150-175 ms/step (384 atoms) that is {a.nodes * (neq + nprod) * 0.16 / 3600:.1f} GPU-hours of work (divided by the number of processes sharing the GPU)",
+              f"outputs     : {a.outdir}/{c['tag']}_stage0.json, {c['tag']}_node<k>.npy / .log, tdi_{c['tag']}.json (from tdi/collect.py)",
+              "=" * 100]
+    print("\n".join(lines), flush=True)
+
+
 def setup(a):
     eos = import_module("17_eos_md")
     a.nrep = a.nrep or eos.CELL[a.phase][2]
@@ -95,11 +127,7 @@ def setup(a):
     ctx["full"] = engine.full_component(ctx["calc"])
     ctx["steps"] = lambda ps: int(round(ps * 1000 / a.dt))
     ctx["lam"], ctx["w"] = analyze.gauss_legendre(a.nodes, a.power)
-    print(f"{tag}: N {ctx['N']} (O {ctx['nO']}, H {ctx['nH']}), V/atom {vpa:.4f} A^3 (V {ctx['V']:.1f}), kT {ctx['kt'] * 1e3:.1f} meV, dt {a.dt} fs, Langevin tau {a.tau} fs", flush=True)
-    print("quadrature: Gauss-Legendre in x on (0,1), lambda = x^%g, weight_i = w_i * %g x_i^%g;  %d nodes:" % (a.power, a.power, a.power - 1, a.nodes))
-    for k, (l, ww) in enumerate(zip(ctx["lam"], ctx["w"])):
-        print(f"   node {k}: lambda {l:.3e}  weight {ww:.3e}")
-    print(f"   sum of weights {ctx['w'].sum():.6f} (must be 1)", flush=True)
+    banner(ctx)
     return ctx
 
 
