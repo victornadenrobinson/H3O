@@ -52,26 +52,28 @@ def preview(st, A, lam, ser, N):
     return G_total_eV(st, dF) / N * 1e3
 
 
-def show(d, tags):
+def show(d, tags, brief=False):
     res = {}
     for tag in tags:
         L = load(d, tag)
         if L is None:
             print(f"{tag}: no stage0 json in {d} yet"); continue
         st, A, lam, w, ser = L; N = st["N"]; per_ps = 1000 / A["dt"] / A["every"]; n = [len(s) for s in ser]; target = A["ps"] * per_ps
+        P_ = (lambda *a_, **k_: None) if brief else print
         print(f"\n== {tag}: N {N}, k {st['kE']:.2f}, {A['nodes']} nodes, target {A['ps']} ps/node; done {100 * sum(n) / (target * len(n)):.0f}%  ({time.strftime('%H:%M:%S')})")
-        print("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)  time trace (0.25 ps blocks)")
+        P_("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)  time trace (0.25 ps blocks)")
         mm, cc = [], []
         for k, s in enumerate(ser):
             if len(s) < 10:
-                print(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   (waiting)"); mm.append(np.nan); cc.append(np.nan); continue
+                P_(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   (waiting)"); mm.append(np.nan); cc.append(np.nan); continue
             m, e = stats(s) if len(s) >= 25 else (float(np.mean(s)), float("nan"))
             h = len(s) // 2; a1, a2 = np.array(s[:h]), np.array(s[h:])
             drift = (a2.mean() - a1.mean()) / (np.hypot(stats(a1)[1], stats(a2)[1]) + 1e-12) if h >= 25 else float("nan")
             mm.append(m / N * 1e3); cc.append(w[k] * m / N * 1e3)
-            print(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}  {spark(block_means(s, per_ps)):<18s}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
-        print(f"  integrand vs node: {spark(mm)}    (lambda increasing ->)")
-        print(f"  PREVIEW (interpolated, whatever data exists): G = {preview(st, A, lam, ser, N):9.2f} meV/atom")
+            P_(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}  {spark(block_means(s, per_ps)):<18s}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
+        P_(f"  integrand vs node: {spark(mm)}    (lambda increasing ->)")
+        nd = sum(len(x) >= 25 for x in ser)
+        print(f"  PREVIEW (interpolated through the {nd}/{len(ser)} nodes that have data): G = {preview(st, A, lam, ser, N):9.2f} meV/atom")
         have = min(n) / per_ps
         if have >= 0.25:
             ts = np.arange(0.25, have + 1e-9, 0.25); G = [G_from_nodes(st, lam, w, [s[:int(round(t * per_ps))] for s in ser], N)[:2] for t in ts]
@@ -88,12 +90,13 @@ def show(d, tags):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("dir"); ap.add_argument("tags", nargs="+"); ap.add_argument("--loop", type=float, default=0, help="seconds between refreshes (0: once)")
+    ap.add_argument("--brief", action="store_true", help="no per-node table: progress, preview G, G(t) and dG(t) only")
     ap.add_argument("--png", action="store_true", help="also rewrite <dir>/tdi_plots.png (plot_tdi.py) at every refresh")
     a = ap.parse_args()
     while True:
         if a.loop:
             print("\033[2J\033[H", end="")
-        show(a.dir, a.tags)
+        show(a.dir, a.tags, a.brief)
         if a.png:
             subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot_tdi.py"), a.dir, *a.tags], capture_output=True)
         if not a.loop:

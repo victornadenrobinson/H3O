@@ -39,6 +39,6 @@ XP=$!
 while kill -0 $XP 2>/dev/null; do
   sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
   for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed s/${TAGNAME}_//): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
-  python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME 2>&1 | grep -E "samples per node|t/node" | tail -3
+  python3 mlp_pipeline/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
 echo "== done $(date)"; python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME
