@@ -30,6 +30,8 @@ tiers s/m/l = 212 / 932 / 1281 frames (train/valid grouped by run directory: tra
 
 `mlp_pipeline/tdi/run_real.py` (+ `young_tdi.sbatch`, `tdi/compare.py`): real-system TDI, direct path (Einstein O + ideal-gas H -> GRACE), all lambda nodes in chunks, prints G(t); smoke-tested only with the LJ stand-in. Known weak point: near lambda=0 the integrand is huge (H overlaps), Wilson used 48 nodes there; G uses P_target*V.
 
+TDI parallel mode: `mlp_pipeline/young_tdi_par.sh <bcc|fcc>` = stage 0 (lambda=1) then lambda nodes as separate processes sharing one GPU (A100 is only ~21-30% busy per process; needs TF_FORCE_GPU_ALLOW_GROWTH), `tdi/collect.py runs/tdi <tag>` integrates the node files (works on partial runs). Verbose per-node health lines (T, U, spring energy, min H-H/H-O distance, O displacement). Untested with GRACE.
+
 ## Open items, in order
 1. `ft_s2` (small model on the new data, about 10 min), then `bash mlp_pipeline/bench_grace_compare.sh valid_m.extxyz 0 runs/grace/ft_m2 runs/grace/ft_s2` (figure `runs/bench_compare_valid_m.png`; points coloured by composition).
 2. Reduce the force/energy error: unfrozen weights and 8000+ updates (compare train vs validation), then decide whether more data is needed.
