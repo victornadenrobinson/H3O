@@ -10,6 +10,7 @@ Steps: (1) lam=1 run: equilibration check, Einstein constant k = 3 kT / <|u|^2> 
 G uses P_target*V (not the MLP pressure at V): this is the Gibbs energy at P_target to second order in (P_MLP - P_target); the MLP pressure is printed as a check.
 usage (GPU, repo root):  GRACE_UQ=1 python mlp_pipeline/tdi/run_real.py grace-ft:runs/grace/ft_m2 --phase bcc --P 400 --T 3000 --from-dft inventory_binned.csv
 """
+import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes can share one GPU (TensorFlow otherwise takes nearly all of its memory in the first one)
 import argparse, json, os, sys, time
 from importlib import import_module
 from math import lgamma

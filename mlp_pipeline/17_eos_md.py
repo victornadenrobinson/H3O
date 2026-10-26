@@ -7,6 +7,8 @@ Per volume writes runs/eos_md/<tag>_v<vpa>/{thermo.csv, traj.extxyz, final.extxy
 Pressure = virial + N kB T_inst / V (same convention as the DFT data: external + ideal-gas term). Bussi thermostat (falls back to Langevin).
 D_H, D_O: slope of the MSD over the second half of production (A^2/fs * 0.1 = cm^2/s). Starting guess only: check the O sublattice stays put (D_O ~ 0).
 """
+import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes can share one GPU (TensorFlow otherwise takes nearly all of its memory in the first one)
+
 import argparse, os, time
 from importlib import import_module
 import numpy as np
