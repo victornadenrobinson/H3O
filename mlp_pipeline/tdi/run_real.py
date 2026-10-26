@@ -58,6 +58,10 @@ class LambdaRun:
     def diag(self, last=None):
         """one-line health report over the last `last` samples (default all): temperatures, energies per atom, closest H-H / H-O contacts, O displacement"""
         sl = slice(-last, None) if last else slice(None)
+        if not self.series:   # nothing recorded yet (right after equilibration)
+            self.series, self.tk, self.eful, self.espr = [float("nan")], [2 * self.at.get_kinetic_energy() / (self.ndof * units.kB)], [float("nan")], [float("nan")]
+            txt = self.diag(); self.series, self.tk, self.eful, self.espr = [], [], [], []
+            return txt
         at = self.at; N = len(at); H = at.numbers == 1
         from ase.neighborlist import neighbor_list
         i, j, d = neighbor_list("ijd", at, 1.2)
@@ -185,14 +189,26 @@ def run_node(c, st, k):
     comps = {"full": c["full"], "E": engine.einstein_component(c["sitesO"], c["iO"], st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
-    r.start(); print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
+    sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
+    if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
+        z = np.load(sf)
+        r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
+        r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
+        r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
+        print(f"node {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
+    else:
+        r.start(); print(f"node {k} lam {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
     n_per = per // a.every
-    for ch in range(1, nchunk + 1):
+    if done >= nchunk:
+        print(f"node {k}: already complete"); return
+    t_resume = time.time()
+    for ch in range(done + 1, nchunk + 1):
         tl = time.time(); r.advance(per)
         np.save(f, np.array(r.series))
+        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
         m, e = stats(r.series)
-        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t0, neq + ch * per, tot, tl, per)}", flush=True)
+        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
 
 def G_from_nodes(st, lam, w, series_list, N):
@@ -212,7 +228,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
