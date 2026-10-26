@@ -28,7 +28,7 @@ EV_A3_GPA = 160.21766
 class LambdaRun:
     def __init__(self, atoms0, components, lam, T, idxO, dt, tau, seed, every, equil_steps):
         self.lam, self.T, self.every, self.equil, self.series, self.tk, self.snaps = lam, T, every, equil_steps, [], [], []
-        self.eful, self.espr = [], []
+        self.eful, self.espr, self.thermo, self.pfn, self.dt = [], [], [], None, dt
         self.calc = engine.TDICalculator(components, {"E": 1 - lam, "full": lam}, needed=("full", "E"))
         self.at = atoms0.copy(); self.at.calc = self.calc; self.idxO = idxO
         self.sites0 = atoms0.positions[idxO].copy() if len(idxO) else atoms0.positions.copy()   # no O: displacement of every H from its start (liquid check)
@@ -47,6 +47,19 @@ class LambdaRun:
         self.tk.append(2 * self.at.get_kinetic_energy() / (self.ndof * units.kB))
         if len(self.series) % 20 == 0:
             self.snaps.append(self.at.get_positions().copy())
+            self.thermo.append(self._thermo_row())
+
+    def _thermo_row(self):
+        """one row of the thermo log (every 20 recorded samples): temperature, energies, MLP virial pressure, O (or H) displacement from the start"""
+        at = self.at; N = len(at); T = 2 * at.get_kinetic_energy() / (self.ndof * units.kB)
+        if len(self.idxO):
+            u = find_mic(at.positions[self.idxO] - self.sites0, at.cell, True)[0]; u = u - u.mean(0)
+        else:
+            u = at.positions - self.sites0
+        P = float("nan")
+        if self.pfn is not None:
+            P = self.pfn(at, T)
+        return dict(t_ps=len(self.series) * self.every * self.dt / 1000, T_inst_K=T, U_MLP_eV=self.eful[-1], E_spring_eV=self.espr[-1], dUdl_eV=self.series[-1], P_MLP_GPa=P, u_rms_A=float(np.sqrt((u ** 2).sum(-1).mean())), u_max_A=float(np.linalg.norm(u, axis=1).max()))
 
     def start(self):
         """equilibration (nothing recorded), then attach the recorder"""
@@ -286,6 +299,10 @@ def run_node(c, st, k):
     comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
+    def pfn(at, T):   # MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs
+        b = at.copy(); b.calc = c["calc"]; sg = b.get_stress(voigt=True)
+        return float(-sg[:3].mean() * EV_A3_GPA + len(at) * units.kB * T / at.get_volume() * EV_A3_GPA)
+    r.pfn = pfn
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
@@ -304,6 +321,15 @@ def run_node(c, st, k):
         tl = time.time(); r.advance(per)
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
+        if r.thermo:
+            import csv
+            ft = os.path.join(a.outdir, f"{c['tag']}_node{k}_thermo.csv"); new = not os.path.exists(ft)
+            with open(ft, "a", newline="") as fh:
+                wr = csv.DictWriter(fh, fieldnames=list(r.thermo[0].keys()))
+                if new:
+                    wr.writeheader()
+                wr.writerows(r.thermo)
+            r.thermo = []
         if r.snaps:   # configurations (every 20 recorded samples) for later analysis / DFT single points
             from ase.io import write
             for p in r.snaps:
