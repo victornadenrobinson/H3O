@@ -25,6 +25,12 @@ for d in dirs:
             except Exception:
                 return np.array([])
         ser = [load(k) for k in range(A["nodes"])]
+        copied = []
+        for k in range(A["nodes"]):   # a failed lambda value with a negligible weight (weight < 1e-4, e.g. lambda 0 after a GPU memory error) takes the series of the next lambda value
+            if len(ser[k]) == 0 and w[k] < 1e-4:
+                j = next((j for j in range(k + 1, A["nodes"]) if len(ser[j]) > 0), None)
+                if j is not None:
+                    ser[k] = ser[j].copy(); copied.append(k)
         n = min(len(x) for x in ser)
         if n < 25:
             skipped.append(f"{os.path.basename(d)}/{tag}: " + ("no samples" if max(len(x) for x in ser) == 0 else f"only {sum(len(x) > 0 for x in ser)}/{A['nodes']} lambda values have samples"))
@@ -37,7 +43,7 @@ for d in dirs:
             except Exception:
                 pass
         rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
-                         nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status="done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%",
+                         nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else ""),
                          G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
@@ -48,32 +54,36 @@ print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all)
 print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
 if skipped:
     print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
-def pick(g, dt):
-    """one row of g: the one with the same dt as `dt` if there is one (then the longest run), else the smallest dt (flagged by the caller)"""
-    same = g[g.dt_fs == dt]
-    return (same if len(same) else g[g.dt_fs == g.dt_fs.min()]).sort_values("ps_per_node").iloc[-1]
+def pick(g, dt, nodes=None):
+    """one row of g: same dt as `dt` if there is one, else the smallest dt; among those the same number of lambda values as `nodes` if there is one; then the longest run (the caller flags differences)"""
+    same = g[g.dt_fs == dt]; g = same if len(same) else g[g.dt_fs == g.dt_fs.min()]
+    if nodes is not None and (g.nodes == nodes).any():
+        g = g[g.nodes == nodes]
+    return g.sort_values("ps_per_node").iloc[-1]
 
 
 pairs = []
-for (P, T, h, nr), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O", "nrep"]):   # same cell size only
+df["cell"] = np.where(df.nO < 75, "small", "big")
+for (P, T, h, cell), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O", "cell"]):   # equal cell-size class only: fcc 32 O with bcc 54 O, fcc 108 O with bcc 128 O
     f, b = g[g.phase == "fcc"], g[g.phase == "bcc"]
     if len(f) and len(b):
-        f = pick(f, b.dt_fs.min()); b = pick(b, f.dt_fs)
-        pairs.append(dict(P_GPa=P, T_K=T, H_per_O=h, nrep=nr, dG_fcc_minus_bcc_meV_atom=f.G_meV_atom - b.G_meV_atom, err=(f.G_err_meV_atom ** 2 + b.G_err_meV_atom ** 2) ** .5, ps_fcc=f.ps_per_node, ps_bcc=b.ps_per_node,
-                          dt_fcc=f.dt_fs, dt_bcc=b.dt_fs, note="" if f.dt_fs == b.dt_fs else "DIFFERENT dt"))
+        f = pick(f, b.dt_fs.min()); b = pick(b, f.dt_fs, f.nodes)
+        note = ("DIFFERENT dt " if f.dt_fs != b.dt_fs else "") + ("DIFFERENT lambda grid" if f.nodes != b.nodes else "") + (" not done" if not (f.status.startswith("done") and b.status.startswith("done")) else "")
+        pairs.append(dict(P_GPa=P, T_K=T, H_per_O=h, cell=cell, nO_fcc=int(f.nO), nO_bcc=int(b.nO), dG_fcc_minus_bcc_meV_atom=f.G_meV_atom - b.G_meV_atom, err=(f.G_err_meV_atom ** 2 + b.G_err_meV_atom ** 2) ** .5, ps_fcc=f.ps_per_node, ps_bcc=b.ps_per_node,
+                          dt_fcc=f.dt_fs, dt_bcc=b.dt_fs, drift_fcc=f.drift_meV, drift_bcc=b.drift_meV, note=note.strip()))
 if pairs:
-    print("\nG_fcc - G_bcc (meV/atom):"); print(pd.DataFrame(pairs).round(2).to_string(index=False))
+    print("\nG_fcc - G_bcc (meV/atom), equal cell-size class:"); print(pd.DataFrame(pairs).round(2).to_string(index=False))
 # crystal mixing: H(2+n)O crystal (same phase, cell and T, P) -> H2O crystal + n pure-H fluid atoms, per added H; and the dilute limit from the insertion runs (mu_H - G_H)
 solid = []
 for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)].iterrows():
-    w = df[(df.phase == m.phase) & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K) & (df.H_per_O == 2.0) & (df.nrep == m.nrep)]
+    w = df[(df.phase == m.phase) & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K) & (df.H_per_O == 2.0) & (df.nO == m.nO)]
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(w) and len(hh):
-        w, hh = pick(w, m.dt_fs), pick(hh, m.dt_fs); n = m.nH - 2 * m.nO
+        w, hh = pick(w, m.dt_fs, m.nodes), pick(hh, m.dt_fs, m.nodes); n = m.nH - 2 * m.nO
         dG = (m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n
         err = ((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n
         solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, N_H=int(hh.N),
-                          note="" if m.dt_fs == w.dt_fs == hh.dt_fs else "DIFFERENT dt"))
+                          note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid" if not (m.nodes == w.nodes == hh.nodes) else "")))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
