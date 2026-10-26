@@ -1,10 +1,10 @@
 # TDI runs: what gets written, how to read it, and the rules for new code
 
-Applies to `mlp_pipeline/tdi/run_real.py` and its launchers (`young_tdi_par.sh`, `young_tdi_scan.sbatch`, `young_tdi_hull.sbatch`, `young_melt_scan.sbatch`). Wording rule: say **lambda / lambda values**,
+Applies to `mlp_pipeline/tdi/run_real.py` and its launchers (`young_tdi_par.sh`, `young_tdi_scan.sbatch`, `young_tdi_hull.sbatch`, `young_melt_scan.sbatch`, `young_tdi_insert.sbatch`). Wording rule: say **lambda / lambda values**,
 never "nodes" (nodes = compute nodes). The names `NODES`, `--node` and `*_node<k>.*` are kept in code and file names only for compatibility.
 
 ## 1. One run = one tag
-`<phase>_<P>GPa_<T>K[_h<x>o][_n<ghosts>][_N<atoms>]`, e.g. `bcc_400GPa_5000K_h2.25o`, `insert_400GPa_5000K_n2`, `H_400GPa_5000K_N500`, `liquid_400GPa_7000K_h3o`.
+`<phase>_<P>GPa_<T>K[_n<ghosts>][_h<x>o][_N<atoms>][_rep<n>]`, e.g. `bcc_400GPa_5000K_h2.25o`, `insert_400GPa_5000K_n2`, `H_400GPa_5000K_N500`, `liquid_400GPa_7000K_h3o`; `_rep<n>` = non-default cell repeat (NREP: fcc 2 = 32 O, bcc 3 = 54 O; defaults fcc 3 = 108 O, bcc 4 = 128 O).
 Phases: `bcc`, `fcc` (Einstein O + ideal-gas H reference), `H` (pure hydrogen fluid), `liquid` (ideal gas of all atoms), `insert` (fcc H2O + n ghost protons).
 All files of a run live in `runs/tdi/` (tests: `runs/tdi_test/`, melt scan: `runs/melt/`). `runs/` is not in git; Lustre scratch may be purged: copy results to the repo (`tdi/summarize.py -o docs/data/tdi_results.csv`).
 
