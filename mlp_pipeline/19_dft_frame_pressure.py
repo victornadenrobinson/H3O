@@ -16,7 +16,8 @@ EV_A3_GPA = 160.21766
 ap = argparse.ArgumentParser(); ap.add_argument("model"); ap.add_argument("data", nargs="+")
 ap.add_argument("--phase", default="bcc"); ap.add_argument("--T", type=float, default=3000); ap.add_argument("--tol-T", type=float, default=250)
 ap.add_argument("--vpa", type=float, nargs="+", required=True); ap.add_argument("--tol", type=float, default=0.12, help="A^3/atom window around each volume")
-ap.add_argument("--n", type=int, default=12, help="max frames per volume"); ap.add_argument("--device", default="cuda")
+ap.add_argument("--n", type=int, default=40, help="max frames per volume")
+ap.add_argument("--inventory", default=None, help="inventory csv: also print the DFT run-level mean P of runs of this phase near each volume (the population the EOS fit is made of)"); ap.add_argument("--device", default="cuda")
 a = ap.parse_args()
 frames = [f for p in a.data for f in read(inp(p), index=":")]
 frames = [f for f in frames if str(f.info.get("config_type", "")).startswith("h2o_") and abs(f.info.get("T_K", 0) - a.T) <= a.tol_T
@@ -30,9 +31,20 @@ for v0 in a.vpa:
         N, V, T = len(f), f.get_volume(), f.info["T_K"]; kin = N * units.kB * T / V * EV_A3_GPA
         Pd = -np.trace(f.get_stress(voigt=False)) / 3 * EV_A3_GPA + kin
         g = f.copy(); g.calc = calc; Pm = -np.trace(g.get_stress(voigt=False)) / 3 * EV_A3_GPA + kin
-        rows.append(dict(vpa_target=v0, vpa=V / N, T=T, P_dft=Pd, P_mlp=Pm, dP=Pm - Pd))
+        rows.append(dict(vpa_target=v0, vpa=V / N, T=T, P_dft=Pd, P_run=float(f.info.get("P_GPa", np.nan)), P_mlp=Pm, dP=Pm - Pd))
 r = pd.DataFrame(rows)
 if r.empty:
     raise SystemExit("no frame near the requested volumes: widen --tol or --tol-T")
-t = r.groupby("vpa_target").agg(n=("dP", "size"), vpa=("vpa", "mean"), T=("T", "mean"), P_dft=("P_dft", "mean"), P_mlp=("P_mlp", "mean"), dP=("dP", "mean"), dP_std=("dP", "std")).round(2)
-print(t.to_string()); print("overall mean dP = %.2f GPa over %d frames" % (r.dP.mean(), len(r)))
+t = r.groupby("vpa_target").agg(n=("dP", "size"), vpa=("vpa", "mean"), T=("T", "mean"), P_dft=("P_dft", "mean"), P_run=("P_run", "mean"), P_mlp=("P_mlp", "mean"), dP=("dP", "mean"), dP_std=("dP", "std")).round(2)
+print(t.to_string())
+print("P_dft = frame stress + kinetic term; P_run = the run-level mean P stored with the frame (inventory convention). If they differ by more than a few GPa on average, the frame stress and the inventory EOS are not the same quantity.")
+if a.inventory:
+    inv = import_module("01_bin_inventory").load_inventory(a.inventory)
+    inv = inv[(inv.comp_snap == "h2o") & ((inv.True_T_K - a.T).abs() <= a.tol_T) & (inv.Path.map(phase_bucket) == a.phase)].assign(vpa=lambda d: d.True_V_A3 / d.N_ions)
+    print(f"\nDFT runs of the same phase and T in the inventory ({len(inv)}): run-level mean P near each volume (window +-{a.tol / 2:.2f} A^3/atom)")
+    rr = []
+    for v0 in a.vpa:
+        w = inv[(inv.vpa - v0).abs() <= a.tol / 2]
+        rr.append(dict(vpa_target=v0, n_runs=len(w), vpa=w.vpa.mean(), P_mean=w.True_P_GPa.mean(), P_median=w.True_P_GPa.median(), P_std=w.True_P_GPa.std(), P_min=w.True_P_GPa.min(), P_max=w.True_P_GPa.max()))
+    print(pd.DataFrame(rr).round(1).to_string(index=False))
+print("overall mean dP = %.2f GPa over %d frames" % (r.dP.mean(), len(r)))
