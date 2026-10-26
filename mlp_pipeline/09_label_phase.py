@@ -75,6 +75,7 @@ if __name__ == "__main__":
     ap.add_argument("inv"); ap.add_argument("out")
     ap.add_argument("--root", default="~/work"); ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--tmin", type=float, default=2000); ap.add_argument("--sample", type=int, default=0)
+    ap.add_argument("--reuse", action="store_true", help="reuse rows already in the output file (skip re-reading those OUTCARs); relabels with the current thresholds")
     ap.add_argument("--o-liq", type=float, default=2.0, help="A^2 per 1000 steps")
     ap.add_argument("--h-super", type=float, default=20.0); ap.add_argument("--h-liq", type=float, default=20.0)
     a = ap.parse_args()
@@ -83,9 +84,19 @@ if __name__ == "__main__":
     if a.sample:
         df = df.sample(min(a.sample, len(df)), random_state=0)
     root = os.path.abspath(os.path.expanduser(a.root))
-    with Pool(a.workers) as p:
-        rows = list(progress(p.imap(partial(one, root=root), list(df.Path), chunksize=4), total=len(df), desc="phase MSD"))
-    x = pd.DataFrame(rows)
+    BASE = ["Path", "O_rate", "H_rate", "window", "O_struct", "CN1", "CN2"]
+    old = pd.DataFrame(columns=BASE)
+    fn = out(a.out)
+    if a.reuse and os.path.exists(fn):   # keep rows mined earlier; only read OUTCARs that are not in the file yet
+        o = pd.read_csv(fn); old = o[[c for c in BASE if c in o]]
+        old = old[old.Path.isin(df.Path) & (old.window != -1)]
+    todo = [p for p in df.Path if p not in set(old.Path)]
+    print(f"{len(old)} runs reused from {fn}, {len(todo)} to mine")
+    rows = []
+    if todo:
+        with Pool(a.workers) as p:
+            rows = list(progress(p.imap(partial(one, root=root), todo, chunksize=4), total=len(todo), desc="phase MSD"))
+    x = pd.concat([old, pd.DataFrame(rows)], ignore_index=True)
     keep = [c for c in ("Path", "comp_snap", "True_T_K", "T_bin", "True_P_GPa", "N_ions") if c in df]
     x = x.merge(df[keep], on="Path", how="left")
     x["H_msd"] = x.H_rate * x.window / 1000; x["O_msd"] = x.O_rate * x.window / 1000   # total displacement^2 over the window (A^2)
