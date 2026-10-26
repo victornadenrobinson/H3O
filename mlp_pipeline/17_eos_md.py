@@ -54,6 +54,9 @@ def dft_vpa(inv, phase, T, Ps):
     grid = np.linspace(df.vpa.min(), df.vpa.max(), 400)
     P = np.exp(np.polyval(c, grid))
     print(f"DFT {phase} {T:.0f} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
+    out_of_range = [p for p in Ps if p < df.True_P_GPa.min() or p > df.True_P_GPa.max()]
+    if out_of_range:   # np.interp clips silently: say so
+        print(f"WARNING: target pressures {out_of_range} GPa are outside the DFT data range {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa for {phase}; their volumes are clipped to the edge of the data")
     return [float(np.interp(-p, -P, grid)) for p in Ps]   # P decreases with V: interpolate on the monotone branch
 
 

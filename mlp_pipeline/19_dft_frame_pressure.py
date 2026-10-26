@@ -87,11 +87,13 @@ if a.inventory:
     for k, v0 in enumerate(a.vpa):
         w = inv[(inv.vpa - v0).abs() <= a.tol]
         row = dict(vpa_target=v0, n_runs=len(w), P_median=w.True_P_GPa.median(), P_std=w.True_P_GPa.std())
-        if len(w) >= 4:   # local linear fit P(V) of the DFT population, evaluated at the exact MD volume (window means are blurred by the steep P(V))
+        if len(w) >= 4 and np.ptp(w.vpa) > 0.02:   # local linear fit (needs a spread of volumes; identical volumes make the slope undefined) P(V) of the DFT population, evaluated at the exact MD volume (window means are blurred by the steep P(V))
             c = np.polyfit(w.vpa - v0, w.True_P_GPa, 1); coef[v0] = c; res = w.True_P_GPa - np.polyval(c, w.vpa - v0)
             row.update(P_lin_at_V=c[1], slope_GPa_per_A3=c[0], resid_std=res.std(ddof=2), P_lin_sem=res.std(ddof=2) / np.sqrt(len(w)))
             if a.md_p and k < len(a.md_p):
                 row.update(P_md=a.md_p[k], dP=a.md_p[k] - c[1], dV_pct=(a.md_p[k] - c[1]) / abs(c[0]) / v0 * 100)
+        if "P_lin_at_V" not in row and len(w):
+            row.update(P_lin_at_V=w.True_P_GPa.mean(), resid_std=w.True_P_GPa.std())   # one volume only: the mean P at that volume, no slope
         rr.append(row)
     print(pd.DataFrame(rr).round(2).to_string(index=False))
     print("dV_pct = (P_md - P_lin) / |dP/dV| / V: the volume shift that accounts for the pressure difference.")
