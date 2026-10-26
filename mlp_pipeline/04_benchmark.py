@@ -21,8 +21,7 @@ def get_calc_spec(spec, device="cuda"):
         import glob
         p = os.path.expanduser(spec.split(":", 1)[1])
         if not os.path.exists(os.path.join(p, "saved_model.pb")):   # gracemaker writes final_model under seed/<n>/; search below the given dir
-            hit = sorted(glob.glob(os.path.join(p, "**", "saved_model.pb"), recursive=True)) or \
-                  sorted(glob.glob(os.path.join(os.path.dirname(p.rstrip("/")), "**", "final_model", "saved_model.pb"), recursive=True))
+            hit = sorted(glob.glob(os.path.join(p, "**", "saved_model.pb"), recursive=True))   # only below the given dir: never another run's model
             if not hit:
                 raise SystemExit(f"no saved_model.pb under {p}: run `find <run dir> -name saved_model.pb`")
             p = os.path.dirname(hit[0]); print("using", p)

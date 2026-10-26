@@ -84,9 +84,9 @@ def run_one(a, calc, vpa, tag):
         rows.append(dict(step=s, t_fs=s * a.dt, T=T, epot=at.get_potential_energy(), ekin=ek, P_GPa=P, **{f"s{k}": sig[k] * EV_A3_GPA for k in range(6)}))
         if s >= n_eq and s % int(10 / a.dt) == 0:
             pos.append(at.get_positions().copy()); tpos.append(s * a.dt)
-        if s % int(1000 / a.dt) == 0 and s:
+        if s % int(500 / a.dt) == 0 and s:
             r = pd.DataFrame(rows); r = r[r.step >= n_eq]
-            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  T {r.T.mean() if len(r) else T:.0f}  P {r.P_GPa.mean() if len(r) else P:.1f} GPa  "
+            print(f"  {tag} vpa {vpa:.3f} step {s}/{n_eq + n_pr}  T {r["T"].mean() if len(r) else T:.0f}  P {r.P_GPa.mean() if len(r) else P:.1f} GPa  "
                   f"{(time.time() - t0) / s * 1000:.0f} ms/step", flush=True)
         step[0] += a.log_every
     dyn.attach(log, interval=a.log_every)

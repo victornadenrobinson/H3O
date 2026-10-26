@@ -57,9 +57,9 @@ def msd_rates(frames):
 
 
 def label(r, o_liq, h_super, h_liq):
-    if not np.isnan(r["O"]):
-        return "liquid" if r["O"] > o_liq else ("superionic" if r["H"] > h_super else "solid")
-    return "liquid" if r["H"] > h_liq else "solid"
+    if not np.isnan(r["O_rate"]):
+        return "liquid" if r["O_rate"] > o_liq else ("superionic" if r["H_rate"] > h_super else "solid")
+    return "liquid" if r["H_rate"] > h_liq else "solid"
 
 
 def one(path, root):
