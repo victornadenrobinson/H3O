@@ -1,6 +1,7 @@
 #!/bin/bash
 # Quick mixing scan at one (P, T): fcc H2O (108 O), fcc H(2+NH/108)O (NH added H) and pure H (250 atoms), one after the other with the same settings, then the summary table.
 # usage on Young, inside a GPU job, repo root:   P=500 T=5000 bash mlp_pipeline/young_mix_scan.sh        NH=27 by default (= H2.25O)
+# add lambda values to finished 8-value scans (Gauss-Kronrod, keeps the old samples):  RULE=gk NGAUSS=8 NODES=17 ONLYNODES="8 9 10 11 12 13 14 15 16" P=500 T=7000 bash mlp_pipeline/young_mix_scan.sh   (settings PS EQUIL CHUNK must match the original scan)
 # env: P (400) T (5000) NH (27) NODES (8) NPAR (8) PS (0.5) EQUIL (0.15) CHUNK (0.25) MINRUNS (8) DT (0.5)
 # prints everything the launcher prints for a single run (plan, per-lambda progress, live dashboard) and saves it to runs/mix/<name>.out; a failed run does not stop the next one; the status lines at the end say which runs produced a result.
 P=${P:-400}; T=${T:-5000}; NH=${NH:-27}; NODES=${NODES:-8}; NPAR=${NPAR:-8}; PS=${PS:-0.5}; EQUIL=${EQUIL:-0.15}; CHUNK=${CHUNK:-0.25}; MINRUNS=${MINRUNS:-8}; DT=${DT:-0.5}

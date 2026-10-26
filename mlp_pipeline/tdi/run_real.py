@@ -319,7 +319,9 @@ def setup(a):
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
     ctx["full"] = engine.full_component(ctx["calc"])
     ctx["steps"] = lambda ps: int(round(ps * 1000 / a.dt))
-    ctx["lam"], ctx["w"] = analyze.gauss_legendre(a.nodes, a.power)
+    if a.rule == "gk" and a.nodes != 2 * a.ngauss + 1:
+        raise SystemExit(f"--rule gk needs --nodes = 2 --ngauss + 1 (got nodes {a.nodes}, ngauss {a.ngauss})")
+    ctx["lam"], ctx["w"], _ = analyze.rule_nodes(dict(nodes=a.nodes, power=a.power, rule=a.rule, ngauss=a.ngauss))
     banner(ctx)
     return ctx
 
@@ -476,7 +478,8 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
+    ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)

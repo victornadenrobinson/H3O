@@ -8,6 +8,8 @@
 # K: Einstein constant (eV/A^2); default bcc 12.2, fcc 22.8 (measured at 400 GPa, 3000 K): stage 0 then skips its MD. K=0 re-measures it with a lambda=1 run (also checks MLP pressure and O structure).
 # NREP=2 (fcc: 32 O, 96 atoms) / NREP=3 (bcc: 54 O, 162 atoms): small cells like Wilson 2013 for a finite-size check; tag gets _rep<NREP> (defaults: fcc 3 = 108 O, bcc 4 = 128 O)
 # MINRUNS=8: lower the minimum number of DFT runs per 1000 K bin used for the volume (EOS lookup; default 20; outside the bins the volume is extrapolated at most 2000 K with a WARNING)
+# ADD LAMBDA VALUES to a finished Gauss-Legendre run without repeating it: Gauss-Kronrod keeps the old values and adds ngauss+1 new ones (all 2*ngauss+1 are then integrated, and |K - G| estimates the quadrature error).
+#   e.g. an 8-value run -> 17:  ONLYNODES="8 9 10 11 12 13 14 15 16" RULE=gk NGAUSS=8 NODES=17 <same T P HPER NATOMS PS EQUIL CHUNK DT as the original run> bash mlp_pipeline/young_tdi_par.sh fcc   (same tag; the old node files are kept)
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
@@ -29,7 +31,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
+COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi

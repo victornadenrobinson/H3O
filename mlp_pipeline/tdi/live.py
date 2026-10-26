@@ -16,7 +16,7 @@ def load(d, tag):
     f = os.path.join(d, f"{tag}_stage0.json")
     if not os.path.exists(f):
         return None
-    st = json.load(open(f)); A = st["args"]; lam, w = analyze.gauss_legendre(A["nodes"], A["power"])
+    st = json.load(open(f)); A = st["args"]; lam, w, _ = analyze.rule_nodes(A)
     ser = []
     for k in range(A["nodes"]):
         g = os.path.join(d, f"{tag}_node{k}.npy")

@@ -12,7 +12,7 @@ ap.add_argument("--copy", nargs="*", default=[], help="K:J ... use node J's seri
 ap.add_argument("--truncate", nargs="*", default=[], help="K:PS ... keep only the first PS ps of node K (e.g. a node whose dynamics blew up after PS ps)")
 a = ap.parse_args()
 st = json.load(open(os.path.join(a.dir, f"{a.tag}_stage0.json"))); A = st["args"]
-lam, w = analyze.gauss_legendre(A["nodes"], A["power"])
+lam, w, _ = analyze.rule_nodes(A)
 ser = []
 for k in range(A["nodes"]):
     f = os.path.join(a.dir, f"{a.tag}_node{k}.npy")

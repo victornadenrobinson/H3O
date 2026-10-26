@@ -17,7 +17,7 @@ rows, skipped = [], []
 for d in dirs:
     for f0 in sorted(glob.glob(os.path.join(d, "*_stage0.json"))):
         tag = os.path.basename(f0)[:-len("_stage0.json")]; st = json.load(open(f0)); A = st.get("args", {})
-        lam, w = analyze.gauss_legendre(A["nodes"], A["power"]); per_ps = 1000 / A["dt"] / A["every"]
+        lam, w, gsub = analyze.rule_nodes(A); per_ps = 1000 / A["dt"] / A["every"]
         def load(k):   # a file being rewritten by a running chunk can be unreadable for a moment: treat as empty
             f = os.path.join(d, f"{tag}_node{k}.npy")
             try:
@@ -31,11 +31,15 @@ for d in dirs:
                 j = next((j for j in range(k + 1, A["nodes"]) if len(ser[j]) > 0), None)
                 if j is not None:
                     ser[k] = ser[j].copy(); copied.append(k)
+        partial_gk = False
+        if gsub is not None and any(len(x) == 0 for x in ser[len(gsub[0]):]) and all(len(x) > 0 for x in ser[:len(gsub[0])]):   # extension to Gauss-Kronrod not finished: use the Gauss values alone
+            lam, w, ser = gsub[0], gsub[1], ser[:len(gsub[0])]; gsub = None; partial_gk = True
         n = min(len(x) for x in ser)
         if n < 25:
             skipped.append(f"{os.path.basename(d)}/{tag}: " + ("no samples" if max(len(x) for x in ser) == 0 else f"only {sum(len(x) > 0 for x in ser)}/{A['nodes']} lambda values have samples"))
             continue
         G, Ge, dF, m, sd = G_from_nodes(st, lam, w, [x[:n] for x in ser], st["N"]); Gh = G_from_nodes(st, lam, w, [x[:n // 2] for x in ser], st["N"])[0]
+        qd = G - G_from_nodes(st, gsub[0], gsub[1], [x[:n] for x in ser[:len(gsub[0])]], st["N"])[0] if gsub is not None else float("nan")   # Kronrod minus Gauss: quadrature error estimate
         ps = n / per_ps; P_hi = float("nan"); ft = os.path.join(d, f"{tag}_node{A['nodes'] - 1}_thermo.csv")
         if os.path.exists(ft):
             try:
@@ -43,15 +47,15 @@ for d in dirs:
             except Exception:
                 pass
         rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
-                         nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else ""),
+                         nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else "") + (f" (Gauss {A['ngauss']} only: Kronrod extension pending)" if partial_gk else ""), quad_diff_meV=qd, rule=A.get("rule") or "gl",
                          G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
     raise SystemExit("no tag with samples found in " + ", ".join(dirs) + ("\nskipped: " + "; ".join(skipped) if skipped else ""))
 df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs", "dir"]).reset_index(drop=True)
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
-print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); P_hi = MLP pressure at the highest lambda, target in P_target):")
-print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
+print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target):")
+print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
 if skipped:
     print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
 def pick(g, dt, nodes=None):
