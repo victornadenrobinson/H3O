@@ -34,6 +34,8 @@ TDI parallel mode: `mlp_pipeline/young_tdi_par.sh <bcc|fcc>` = stage 0 (lambda=1
 
 TDI monitoring: `tdi/live.py runs/tdi <tagA> <tagB> [--loop 60 --png]` (text dashboard: per-node integrand, drift in sigma, preview integral, G(t), dG(t)), `tdi/plot_tdi.py` (PNG), nodes are restartable. First real fcc 400 GPa result (10 GL nodes, power 4, 2 ps/node, dt 1 fs, k 22.8): G = 1978.5 +- 2.2 meV/atom (incl. P V); integrand plateau +1217 eV at lambda<1e-5, steep between lambda 0.003-0.3, -881 eV at 0.95.
 
+**TDI result, 400 GPa 3000 K, ft_m2, 10 GL nodes power 4, dt 1 fs, 6 ps/node:** G_fcc = 1979.50 +- 0.98, G_bcc = 2004.19 +- 1.08 meV/atom (incl. P_target V), **G_fcc - G_bcc = -24.7 +- 1.5 meV/atom** (Cheng 2021: -22.1, Wilson interpolated about -19). Between 2 and 6 ps bcc G fell by 3 meV/atom (the flagged node-7 drift was real), dG moved from -28.5 to -24.7. Not yet checked: dt 0.5 fs, a second quadrature, finite size, MLP-vs-DFT (FEP). Plans: 5000 K (check DFT volumes first), pure-H G (ideal-gas reference, U = lam U_MLP), ghost-H insertion into superionic H2O for the chemical potential.
+
 ## Open items, in order
 1. `ft_s2` (small model on the new data, about 10 min), then `bash mlp_pipeline/bench_grace_compare.sh valid_m.extxyz 0 runs/grace/ft_m2 runs/grace/ft_s2` (figure `runs/bench_compare_valid_m.png`; points coloured by composition).
 2. Reduce the force/energy error: unfrozen weights and 8000+ updates (compare train vs validation), then decide whether more data is needed.
