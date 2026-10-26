@@ -8,8 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 from tdi.gcalc import G_from_nodes
 
-ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default="tdi_G_vs_time.svg"); ap.add_argument("--every", type=float, default=0.25)
-ap.add_argument("--ncol", type=int, default=6); ap.add_argument("--ylim", type=float, default=20.0); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default="tdi_G_vs_time.svg"); ap.add_argument("--every", type=float, default=0.05, help="time step of the G(t) curve in ps"); ap.add_argument("--tmin", type=float, default=0.1, help="first time point (ps); errors at very short times are unreliable (few samples per block)")
+ap.add_argument("--ncol", type=int, default=6); ap.add_argument("--ylim", type=float, default=0.0, help="half-range of the y axis in meV/atom; 0 = automatic per panel (nice number covering the curve and its errors)"); a = ap.parse_args()
 dirs = a.dirs or [d for d in sorted(glob.glob("runs/tdi*")) if os.path.isdir(d) and os.path.basename(d) != "tdi_test"]
 runs = []
 for d in dirs:
@@ -25,8 +25,9 @@ for d in dirs:
                 j = next((j for j in range(k + 1, A["nodes"]) if len(ser[j]) > 0), None)
                 if j is not None: ser[k] = ser[j].copy()
         n = min(len(x) for x in ser)
-        if n < 0.5 * a.every * per_ps: continue
-        ts = np.arange(a.every, n / per_ps + 1e-9, a.every)
+        if n < a.tmin * per_ps: continue
+        tend = n / per_ps; ts = np.arange(a.tmin, tend + 1e-9, a.every)
+        if abs(ts[-1] - tend) > 1e-6: ts = np.append(ts, tend)   # always include the full length
         if len(ts) < 2: continue
         G = [G_from_nodes(st, lam, w, [x[:int(round(t * per_ps))] for x in ser], st["N"])[:2] for t in ts]
         runs.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], P=st["P_target"], T=st["T"], h=A.get("hper", 2.0), N=st["N"], dt=A["dt"], nodes=A["nodes"], t=ts, G=np.array([g[0] for g in G]), e=np.array([g[1] for g in G])))
@@ -41,23 +42,24 @@ s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}"
 text{fill:var(--ink2);font-size:10px}.t{fill:var(--ink);font-size:15px;font-weight:600}.pt{fill:var(--ink);font-size:10px;font-weight:600}.g{stroke:var(--grid);stroke-width:1}.z{stroke:var(--ink2);stroke-width:1}
 </style>''', f'<rect width="{W}" height="{H}" fill="var(--surface)"/>',
      f'<text class="t" x="{M}" y="26">TDI free energy versus simulation time, every run</text>',
-     f'<text x="{M}" y="44">G(t) minus G(final), meV per atom (insertion: per added H). t = time per lambda value. Band = statistical error of G(t). Axis range +-{a.ylim:g} meV (clipped beyond).</text>',
+     f'<text x="{M}" y="44">G(t) minus G(final), meV per atom (insertion: per added H). t = time per lambda value. Band = statistical error of G(t). Axis range per panel: {"fixed +-" + format(a.ylim, "g") + " meV" if a.ylim else "automatic (printed in each panel header)"}.</text>',
      f'<text x="{M}" y="58">A converged run is flat on zero inside its band; a drifting run is a slope. Hover a point for its numbers.</text>']
 lx = M
 for name in ("fcc", "bcc", "liquid", "H", "insert"):
     s.append(f'<rect x="{lx}" y="74" width="12" height="12" fill="{COL[name]}"/><text x="{lx + 17}" y="84">{ {"H": "pure H", "insert": "insertion"}.get(name, name) }</text>'); lx += 90
 for i, r in enumerate(runs):
     cx = M + (i % ncol) * (PW + GX); cy = 134 + (i // ncol) * (PH + GY); gf = r["G"][-1]; d = r["G"] - gf; tm = r["t"][-1]; c = COL.get(r["phase"], "var(--c4)")
-    X = lambda t: cx + 28 + (t / tm) * (PW - 36); Y = lambda v: cy + PH / 2 - max(-a.ylim, min(a.ylim, v)) / a.ylim * (PH / 2 - 6)
+    yl = a.ylim or next(v for v in (1, 2, 5, 10, 20, 50, 100, 200, 500) if v >= 1.15 * max(np.abs(d).max(), 2 * np.median(r["e"])))
+    X = lambda t: cx + 28 + (t / tm) * (PW - 36); Y = lambda v: cy + PH / 2 - max(-yl, min(yl, v)) / yl * (PH / 2 - 6)
     s.append(f'<rect x="{cx}" y="{cy}" width="{PW}" height="{PH}" fill="none" stroke="{c}" stroke-width="1.5" rx="3"/>')
-    s.append(f'<text class="pt" x="{cx + 4}" y="{cy - 28}">{r["tag"]}</text><text x="{cx + 4}" y="{cy - 17}">{r["dir"]} | N {r["N"]} | dt {r["dt"]:g} | {r["nodes"]} lambda</text><text x="{cx + 4}" y="{cy - 6}">G {gf:.1f} +- {r["e"][-1]:.1f} | {tm:g} ps per lambda</text>')
-    for v in (-a.ylim, 0, a.ylim):
+    s.append(f'<text class="pt" x="{cx + 4}" y="{cy - 28}">{r["tag"]}</text><text x="{cx + 4}" y="{cy - 17}">{r["dir"]} | N {r["N"]} | dt {r["dt"]:g} | {r["nodes"]} lambda</text><text x="{cx + 4}" y="{cy - 6}">G {gf:.1f} +- {r["e"][-1]:.1f} | {tm:g} ps | scale +-{yl:g}</text>')
+    for v in (-yl, 0, yl):
         s.append(f'<line class="{"z" if v == 0 else "g"}" x1="{cx + 28}" x2="{cx + PW - 8}" y1="{Y(v):.1f}" y2="{Y(v):.1f}"/><text x="{cx + 24}" y="{Y(v) + 3:.1f}" text-anchor="end">{v:g}</text>')
     up = [Y(dv - e) for dv, e in zip(d, r["e"])]; lo = [Y(dv + e) for dv, e in zip(d, r["e"])]
     pts = " ".join(f"{X(t):.1f},{y:.1f}" for t, y in zip(r["t"], up)) + " " + " ".join(f"{X(t):.1f},{y:.1f}" for t, y in zip(r["t"][::-1], lo[::-1]))
     s.append(f'<polygon points="{pts}" fill="{c}" fill-opacity="0.18"/><polyline points="' + " ".join(f"{X(t):.1f},{Y(v):.1f}" for t, v in zip(r["t"], d)) + f'" fill="none" stroke="{c}" stroke-width="2"/>')
     for t, v, e, g in zip(r["t"], d, r["e"], r["G"]):
-        s.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="2.6" fill="{c}" stroke="var(--surface)" stroke-width="1"><title>{r["tag"]} ({r["dir"]}) t = {t:.2f} ps: G = {g:.2f} +- {e:.2f} meV/atom, minus final = {v:+.2f}</title></circle>')
+        s.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="{2.6 if len(r["t"]) < 25 else 3}" fill="{c}" {'stroke="var(--surface)" stroke-width="1"' if len(r["t"]) < 25 else 'fill-opacity="0" pointer-events="all"'}><title>{r["tag"]} ({r["dir"]}) t = {t:.2f} ps: G = {g:.2f} +- {e:.2f} meV/atom, minus final = {v:+.2f}</title></circle>')
     s.append(f'<text x="{cx + 28 + (PW - 36) / 2}" y="{cy + PH + 11}" text-anchor="middle">0 - {tm:g} ps</text>')
 s.append("</svg>")
 os.makedirs(os.path.dirname(os.path.abspath(a.o)), exist_ok=True); open(a.o, "w").write("\n".join(s)); print(f"wrote {a.o}: {len(runs)} runs")
