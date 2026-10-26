@@ -8,6 +8,7 @@ from tdi import analyze
 from tdi.run_real import G_from_nodes
 
 ap = argparse.ArgumentParser(); ap.add_argument("dir"); ap.add_argument("tag"); ap.add_argument("--every-ps", type=float, default=0.25)
+ap.add_argument("--truncate", nargs="*", default=[], help="K:PS ... keep only the first PS ps of node K (e.g. a node whose dynamics blew up after PS ps)")
 a = ap.parse_args()
 st = json.load(open(os.path.join(a.dir, f"{a.tag}_stage0.json"))); A = st["args"]
 lam, w = analyze.gauss_legendre(A["nodes"], A["power"])
@@ -16,6 +17,8 @@ for k in range(A["nodes"]):
     f = os.path.join(a.dir, f"{a.tag}_node{k}.npy")
     ser.append(np.load(f) if os.path.exists(f) else np.array([]))
 per_ps = 1000 / A["dt"] / A["every"]           # recorded samples per ps
+for t in a.truncate:
+    k_, ps_ = t.split(":"); ser[int(k_)] = ser[int(k_)][:int(float(ps_) * per_ps)]; print(f"node {k_} truncated to the first {ps_} ps ({len(ser[int(k_)])} samples)")
 have = [len(s) / per_ps for s in ser]
 print(f"{a.tag}: samples per node (ps): " + "  ".join(f"{h:.2f}" for h in have))
 tmax = min(have)
