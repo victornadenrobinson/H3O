@@ -81,3 +81,19 @@ def inp(path):
     if not os.path.dirname(p) and (RUNS / p).exists():
         return str(RUNS / p)
     return p
+
+
+PHASE_WORDS = ["fcc", "bcc", "sc", "pbcm", "p21c", "liquid", "solid", "superionic", "melt"]
+
+
+def path_phase_tag(path):
+    """'+'-joined phase words found in the run path (starting structure / intent, not the dynamical phase), or 'untagged'."""
+    import re
+    p = str(path).lower(); hit = [t for t in PHASE_WORDS if re.search(rf"(^|[^a-z0-9]){t}([^a-z]|$)", p)]
+    return "+".join(hit) if hit else "untagged"
+
+
+def phase_bucket(path):
+    """Coarse selection bucket from the path tag: liquid > fcc > bcc > other (a 'bcc-...-liquid' run is a liquid)."""
+    t = path_phase_tag(path)
+    return "liquid" if ("liquid" in t or "melt" in t) else "fcc" if "fcc" in t else "bcc" if "bcc" in t else "other"

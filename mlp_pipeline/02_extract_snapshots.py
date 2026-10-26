@@ -14,7 +14,7 @@ from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from ase.io import read, write
-from common import progress, out, inp
+from common import progress, out, inp, phase_bucket
 
 MIN_STEP_GAP = 50
 CACHE_VERSION = "v2-free-energy"   # bump when the frame content/label convention changes: invalidates all cached runs
@@ -139,8 +139,10 @@ def select(df, a):
     d = d[~lam | keep]
     d = d.assign(run=d.Path.map(lambda p: p.rsplit("/", 2)[0]), P100=(d.True_P_GPa // 100 * 100).astype(int))
     d = d.sort_values("Path").drop_duplicates("run")  # one OUTCAR per run directory (out1/out2... are a chain)
+    # --by-phase: h2o runs are balanced separately per path-tag bucket (fcc / bcc / liquid / other) so fcc and bcc each get their own runs per state
+    d = d.assign(phase_bucket=[phase_bucket(p) if (a.by_phase and c == "h2o") else "all" for p, c in zip(d.Path, d.comp_snap)])
     out = []
-    for _, g in d.groupby(["comp_snap", "T_bin", "P100"]):
+    for _, g in d.groupby(["comp_snap", "T_bin", "P100", "phase_bucket"]):
         g = g.sort_values("True_P_GPa")
         order = spread_order(len(g))[:a.max_runs]
         out.append(g.iloc[order].assign(run_rank=range(len(order))))
@@ -164,6 +166,7 @@ if __name__ == "__main__":
     ap.add_argument("--exclude-file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt"))
     ap.add_argument("--no-default-exclusions", action="store_true")
     ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
+    ap.add_argument("--by-phase", action="store_true", help="h2o only: balance runs per (T, 100 GPa) bin separately for fcc / bcc / liquid / other path tags (adds info['phase_tag'])")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")
     a = ap.parse_args()
     tiers = [(n, *map(int, v.split("x"))) for n, v in (t.split("=") for t in a.tiers.split(","))]
@@ -189,7 +192,7 @@ if __name__ == "__main__":
             m = meta.loc[path]
             for f in fr:
                 f.info.update(config_type=f"{m.comp_snap}_{int(m.T_bin)}K", T_K=float(m.True_T_K), P_GPa=float(m.True_P_GPa), box_A=round(float(m.True_V_A3) ** (1 / 3), 3),
-                              run_rank=int(m.run_rank))
+                              run_rank=int(m.run_rank), phase_tag=str(m.phase_bucket))
             allf += fr
     if a.min_box:
         print(f"{n_narrow} runs dropped because the minimum perpendicular cell width is below {a.min_box} A (sheared/orthorhombic cells)")

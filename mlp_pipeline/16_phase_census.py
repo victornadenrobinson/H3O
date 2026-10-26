@@ -5,13 +5,9 @@ Path words only (fcc, bcc, sc, pbcm, p21c, liquid, solid, superionic, melt); run
 """
 import argparse, os, re
 import pandas as pd
-from common import inp, out
+from common import inp, out, path_phase_tag, phase_bucket
 
-TAGS = ["fcc", "bcc", "sc", "pbcm", "p21c", "liquid", "solid", "superionic", "melt"]
-
-def tag(path):
-    p = path.lower(); hit = [t for t in TAGS if re.search(rf"(^|[^a-z0-9]){t}([^a-z]|$)", p)]
-    return "+".join(hit) if hit else "untagged"
+tag = path_phase_tag
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("inv", nargs="?", default="inventory_binned.csv")
