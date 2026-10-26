@@ -21,9 +21,9 @@ EV_A3_GPA = 160.21766
 CELL = {"bcc": (2, [(0, 0, 0), (.5, .5, .5)], 4), "fcc": (4, [(0, 0, 0), (.5, .5, 0), (.5, 0, .5), (0, .5, .5)], 3)}  # O per cell, basis, default repeats
 
 
-def build(phase, vpa, nrep, seed=0):
+def build(phase, vpa, nrep, seed=0, hper=2.0):
     nO_cell, basis, _ = CELL[phase]
-    N = 3 * nO_cell * nrep ** 3
+    N = int(round((1 + hper) * nO_cell * nrep ** 3))   # all atoms (hper H per O)
     a = (N * vpa / nrep ** 3) ** (1 / 3)
     O = Atoms("O" * (nO_cell * nrep ** 3), scaled_positions=[((np.array(b) + (i, j, k)) / nrep) for i in range(nrep) for j in range(nrep) for k in range(nrep) for b in basis],
               cell=[a * nrep] * 3, pbc=True)
@@ -34,7 +34,7 @@ def build(phase, vpa, nrep, seed=0):
     keep = i < j                                       # one entry per bond (periodic images of the same pair are distinct bonds)
     mid = O.positions[i[keep]] + D[keep] / 2           # bond midpoints
     rng = np.random.default_rng(seed)
-    nH = 2 * len(O)
+    nH = int(round(hper * len(O)))
     if nH > len(mid):
         raise SystemExit(f"only {len(mid)} bonds for {nH} protons")
     H = Atoms("H" * nH, positions=mid[rng.choice(len(mid), nH, replace=False)])
@@ -44,10 +44,14 @@ def build(phase, vpa, nrep, seed=0):
     return at
 
 
-def dft_vpa(inv, phase, T, Ps):
+def comp_label(hper):
+    return f"h{hper:g}o"
+
+
+def dft_vpa(inv, phase, T, Ps, hper=2.0):
     inv_mod = import_module("01_bin_inventory")
     df = inv_mod.load_inventory(inv)
-    df = df[(df.comp_snap == "h2o") & (df.T_bin == int(round(T / 1000.0)) * 1000)]
+    df = df[(df.comp_snap == comp_label(hper)) & (df.T_bin == int(round(T / 1000.0)) * 1000)]
     df = df[df.Path.str.contains(phase, case=False) & ~df.Path.str.contains("liquid|solid|melt", case=False)]
     df = df.assign(vpa=df.True_V_A3 / df.N_ions).dropna(subset=["vpa"])
     c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2)

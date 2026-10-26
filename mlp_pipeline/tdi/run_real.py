@@ -129,7 +129,7 @@ def banner(c):
         "=" * 100,
         f"TDI PLAN  {c['tag']}   ({mode})",
         "=" * 100,
-        f"system      : {c['nO']} O + {c['nH']} H = {c['N']} atoms (H2O), {a.phase} O sublattice ({a.nrep}^3 conventional cells), protons start on random O-O bond midpoints",
+        f"system      : {c['nO']} O + {c['nH']} H = {c['N']} atoms (H{a.hper:g}O), {a.phase} O sublattice ({a.nrep}^3 conventional cells), protons start on random O-O bond midpoints",
         f"cell        : cubic {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom (from the DFT {a.phase} EOS at {a.P:.0f} GPa, {a.T:.0f} K); periodic",
         f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT; target pressure {a.P:.0f} GPa -> G = F + P_target V",
         f"potential   : {a.model} (fine-tuned GRACE; classical nuclei, no quantum corrections)",
@@ -177,7 +177,7 @@ def build_h(vpa, nrep):
 
 def setup(a):
     eos = import_module("17_eos_md")
-    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K"
+    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_h{a.hper:g}o" if a.hper != 2.0 else "")
     os.makedirs(a.outdir, exist_ok=True)
     if a.phase == "H":
         a.nrep = a.nrep or 5
@@ -185,8 +185,8 @@ def setup(a):
         at0 = build_h(vpa, a.nrep)
     else:
         a.nrep = a.nrep or eos.CELL[a.phase][2]
-        vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P])[0]
-        at0 = eos.build(a.phase, vpa, a.nrep, a.seed)
+        vpa = a.vpa or eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
+        at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
     ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
@@ -308,7 +308,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     a = ap.parse_args()
     sys.path.insert(0, HERE)
     c = setup(a)
