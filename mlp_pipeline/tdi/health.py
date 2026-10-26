@@ -13,7 +13,7 @@ rows = []
 for d in dirs:
     for f0 in sorted(glob.glob(os.path.join(d, "*_stage0.json"))):
         tag = os.path.basename(f0)[:-len("_stage0.json")]; st = json.load(open(f0)); A = st.get("args", {})
-        if st["phase"] not in ("fcc", "bcc", "insert"):
+        if st["phase"] not in ("fcc", "bcc"):   # insertion runs have no O springs: their u is the displacement of every atom including the diffusing protons
             continue
         nO = st["nO"]; VO = st["N"] * st["vpa"] / nO if st["phase"] != "insert" else st["V"] / nO    # volume per O
         nn = (4 * VO) ** (1 / 3) / 2 ** 0.5 if st["phase"] in ("fcc", "insert") else (2 * VO) ** (1 / 3) * 3 ** 0.5 / 2

@@ -93,7 +93,7 @@ def thermostat(atoms, T, dt, tau):
 
 
 def run_one(a, calc, vpa, tag):
-    at = build(a.phase, vpa, a.nrep, a.seed); at.calc = calc
+    at = build(a.phase, vpa, a.nrep, a.seed, a.hper); at.calc = calc
     V = at.get_volume(); N = len(at); nO = int((at.numbers == 8).sum())
     d = os.path.join(a.outdir, f"{tag}_v{vpa:.4f}"); os.makedirs(d, exist_ok=True)
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
@@ -158,11 +158,12 @@ if __name__ == "__main__":
     ap.add_argument("--ps", type=float, default=4.0); ap.add_argument("--equil-ps", type=float, default=1.0)
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0, help="thermostat time (fs)")
     ap.add_argument("--log-every", type=int, default=2); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O of the crystal (2 = H2O; 2.25 = H2.25O with 27 added H in the 108 O fcc cell)")
     ap.add_argument("--only", type=int, default=None, help="run only volume index k (for a Slurm array)")
     ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default=None); ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
     a.nrep = a.nrep or CELL[a.phase][2]; a.outdir = a.outdir or outp("eos_md"); os.makedirs(a.outdir, exist_ok=True)
-    vols = a.vpa or dft_vpa(a.from_dft, a.phase, a.T, a.P) if (a.vpa or a.from_dft) else None
+    vols = a.vpa or dft_vpa(a.from_dft, a.phase, a.T, a.P, a.hper) if (a.vpa or a.from_dft) else None
     if not vols:
         raise SystemExit("give --vpa or --from-dft")
     tag = a.tag or f"{os.path.basename(a.model.split(':', 1)[-1].rstrip('/'))}_{a.phase}_{a.T:.0f}K"
