@@ -104,7 +104,7 @@ class TDICalculator(Calculator):
 
 def run_lambda(atoms, components, stage, lam, T, dt_fs=1.0, steps=20000, equil=2000, every=2, com_idx=None, tau_fs=100.0, seed=0, thermostat="langevin"):
     """NVT run at one lambda; returns (series of dU/dlambda in eV after the equilibration, mean kinetic temperature using the constrained degrees of freedom).
-    The atoms should start on the lattice sites. thermostat: 'langevin' (local, ergodic also for harmonic systems; the dynamics are irrelevant for free energies)
+    The atoms should start on the lattice sites. thermostat: 'langevin' (local, ergodic also for harmonic systems; the dynamics are irrelevant for free energies), 'nhc' (Nose-Hoover chain)
     or 'bussi' (global rescaling: does not mix the modes of a harmonic crystal)."""
     from ase.md.bussi import Bussi
     from ase.md.langevin import Langevin
@@ -116,7 +116,10 @@ def run_lambda(atoms, components, stage, lam, T, dt_fs=1.0, steps=20000, equil=2
     rng = np.random.default_rng(seed)
     MaxwellBoltzmannDistribution(at, temperature_K=T, rng=rng)
     at.set_momenta(at.get_momenta(), apply_constraint=True)
-    if thermostat == "bussi":
+    if thermostat == "nhc":
+        from ase.md.nose_hoover_chain import NoseHooverChainNVT
+        dyn = NoseHooverChainNVT(at, dt_fs * units.fs, temperature_K=T, tdamp=tau_fs * units.fs, tchain=3)
+    elif thermostat == "bussi":
         dyn = Bussi(at, timestep=dt_fs * units.fs, temperature_K=T, taut=tau_fs * units.fs, rng=rng)
     else:
         dyn = Langevin(at, dt_fs * units.fs, temperature_K=T, friction=1.0 / (tau_fs * units.fs), fixcm=False, rng=rng)

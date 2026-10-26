@@ -104,3 +104,9 @@ No GPU needed (can start now): write and test the TDI engine on a cheap potentia
 1. The (P, T) points (and whether below 200 GPa is wanted).
 2. How many GPU-hours we may spend; 5 ps per lambda point is my default.
 3. After the phase census: whether fcc/bcc superionic coverage at the chosen (P, T) is enough, or extra DFT frames are needed.
+
+## Thermostat choice for the lambda runs (tested 2026-10-26 on the harmonic-crystal test, 32 atoms, 3 nodes x 8000 steps)
+- Langevin (friction 1/100 fs): kinetic T = 1000 K, integrand within error of the exact one at every node; full 8-node test PASS (-0.46 meV of 8.005 eV).
+- Bussi velocity rescaling: integrand 3-20% too high, FAIL (global rescaling does not mix the modes of a harmonic crystal).
+- Nose-Hoover chain (ASE, 3 chain thermostats, tdamp 100 fs): integrand -7% to +7% off, kinetic T 1015-1022 K, -4.3 sigma, FAIL (same non-ergodicity of deterministic thermostats on harmonic systems; one parameter set and one short run only).
+Free-energy averages need only the configurational distribution, so Langevin is the safe choice; its friction perturbs the dynamics, so use NVE or a chain only for the lambda = 1 diagnostic runs (D, viscosity).
