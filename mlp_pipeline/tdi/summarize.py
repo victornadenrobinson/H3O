@@ -13,7 +13,7 @@ ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argum
 dirs = a.dirs or [d for d in sorted(glob.glob("runs/tdi*")) if os.path.isdir(d) and os.path.basename(d) != "tdi_test"]
 if not dirs:
     raise SystemExit("no runs/tdi* directory here: run from the repo root or give the directory")
-rows, skipped = [], []
+rows, skipped, stale = [], [], []
 for d in dirs:
     for f0 in sorted(glob.glob(os.path.join(d, "*_stage0.json"))):
         tag = os.path.basename(f0)[:-len("_stage0.json")]; st = json.load(open(f0)); A = st.get("args", {})
@@ -25,6 +25,8 @@ for d in dirs:
             except Exception:
                 return np.array([])
         ser = [load(k) for k in range(A["nodes"])]
+        if os.path.exists(os.path.join(d, f"{tag}_node{A['nodes']}.npy")):   # node files beyond what the json declares: the json was probably overwritten by a later launch with other settings
+            stale.append(f"{os.path.basename(d)}/{tag}: node{A['nodes']}.npy exists but stage0.json declares {A['nodes']} lambda values (stale json?)")
         copied = []
         for k in range(A["nodes"]):   # a failed lambda value with a negligible weight (weight < 1e-4, e.g. lambda 0 after a GPU memory error) takes the series of the next lambda value
             if len(ser[k]) == 0 and w[k] < 1e-4:
@@ -56,6 +58,8 @@ df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs",
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
 print("All runs (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target):")
 print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
+if stale:
+    print("\nWARNING, more node files than the json declares: " + "; ".join(stale))
 if skipped:
     print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
 def pick(g, dt, nodes=None):
