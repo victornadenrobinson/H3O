@@ -127,7 +127,11 @@ if __name__ == "__main__":
         print("\nO_msd (A^2 over the window) by T bin: 10/50/90th percentile"); print(pd.concat([ok.groupby("T_bin").size().rename("n"), q("O_msd")], axis=1).to_string())
         if "delta_L" in ok:
             print("\nO Lindemann ratio delta_L by T bin: 10/50/90th percentile (a gap between a low and a high cluster = crystal / liquid)")
-            print(pd.concat([ok.groupby("T_bin").size().rename("n"), q("delta_L").round(3)], axis=1).to_string())
+            dq = ok.groupby("T_bin")["delta_L"].quantile([.1, .5, .9]).unstack().round(3)
+            print(pd.concat([ok.groupby("T_bin").size().rename("n"), dq], axis=1).to_string())
+            h, e = np.histogram(ok.delta_L.dropna(), bins=np.arange(0.0, 0.62, 0.02))
+            print("histogram of delta_L over all runs (bin start: count) - a dip separates crystal from liquid:")
+            print("  " + "  ".join(f"{b:.2f}:{c}" for b, c in zip(e[:-1], h) if c))
         print("\nwindow (MD steps) percentiles 10/50/90:", ok.window.quantile([.1, .5, .9]).round(0).tolist())
         nl = ok[ok.phase.isin(["solid", "superionic"]) & (ok.O_struct == "other")]
         print(f"\nnon-liquid runs whose O sublattice is neither bcc nor fcc: {len(nl)}; O_msd median {nl.O_msd.median():.2f}, CN1/CN2 value counts:")
