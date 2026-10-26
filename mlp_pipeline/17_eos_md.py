@@ -126,11 +126,11 @@ def volumes(a):
     if a.phase == "H":
         return [h_vpa(a.from_dft, a.T, P) for P in a.P]
     try:
-        return list(dft_vpa(a.from_dft, a.phase, a.T, a.P, a.hper))
+        return list(dft_vpa(a.from_dft, a.phase, a.T, a.P, a.hper, min_runs=a.min_runs))
     except SystemExit:
         if a.hper <= 2.0:
             raise
-        n = a.hper - 2.0; vw = dft_vpa(a.from_dft, a.phase, a.T, a.P, 2.0)
+        n = a.hper - 2.0; vw = dft_vpa(a.from_dft, a.phase, a.T, a.P, 2.0, min_runs=a.min_runs)
         print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase} at {a.T:.0f} K: ideal mixing of the H2O crystal and pure H", flush=True)
         return [float((3 * v + n * h_vpa(a.from_dft, a.T, P)) / (3 + n)) for v, P in zip(vw, a.P)]
 
@@ -149,11 +149,17 @@ def run_one(a, calc, vpa, tag):
     at = build(a.phase, vpa, a.nrep, a.seed, a.hper); at.calc = calc
     V = at.get_volume(); N = len(at); nO = int((at.numbers == 8).sum())
     d = os.path.join(a.outdir, f"{tag}_v{vpa:.4f}"); os.makedirs(d, exist_ok=True)
+    t0_hold = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
     if a.branch == "liquid":   # liquid branch: melt the O lattice at a high temperature first, then cool to T (the melting is checked afterwards: O_struct / D_O in the RESULT line)
         MaxwellBoltzmannDistribution(at, temperature_K=a.premelt_T, force_temp=True); Stationary(at)
         thermostat(at, a.premelt_T, a.dt, a.tau).run(int(a.premelt_ps * 1000 / a.dt))
         MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
+    if a.hold_O_ps > 0 and nO > 0 and a.branch == "solid":   # H thermalises in the fixed O lattice first (O held on its sites, zero velocity), then O is released with Maxwell-Boltzmann velocities; not counted in equil / production
+        from ase.constraints import FixAtoms
+        iO = at.numbers == 8; p = at.get_momenta(); p[iO] = 0; at.set_momenta(p, apply_constraint=False); at.set_constraint(FixAtoms(mask=iO))
+        thermostat(at, a.T, a.dt, a.tau).run(int(a.hold_O_ps * 1000 / a.dt)); print(f"  {tag}: O held for {a.hold_O_ps} ps, now released ({time.time() - t0_hold:.0f} s)", flush=True)
+        at.set_constraint(); tmp = at.copy(); MaxwellBoltzmannDistribution(tmp, temperature_K=a.T, force_temp=True); p = at.get_momenta(); p[iO] = tmp.get_momenta()[iO]; at.set_momenta(p); Stationary(at)
     dyn = thermostat(at, a.T, a.dt, a.tau)
     n_eq, n_pr = int(a.equil_ps * 1000 / a.dt), int(a.ps * 1000 / a.dt)
     rows, pos, tpos = [], [], []
@@ -202,7 +208,7 @@ def run_one(a, calc, vpa, tag):
         struct = dict(O_struct=lab, CN1=c1, CN2=c2, delta_L=float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1))
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                branch=a.branch, hper=a.hper, P_target=getattr(a, "p_target", float("nan")), T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
-               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, ms_per_step=(time.time() - t0) / step[0] * 1000)
+               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000)
     print("RESULT", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
     return row
 
@@ -220,6 +226,8 @@ if __name__ == "__main__":
     ap.add_argument("--branch", choices=["solid", "liquid", "fluid"], default="solid", help="solid: start from the lattice; liquid: melt the O lattice at --premelt-T for --premelt-ps first, then cool to T; fluid: pure H (no melting step)")
     ap.add_argument("--premelt-T", type=float, default=12000.0); ap.add_argument("--premelt-ps", type=float, default=1.0)
     ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O of the crystal (2 = H2O; 2.25 = H2.25O with 27 added H in the 108 O fcc cell)")
+    ap.add_argument("--hold-O-ps", type=float, default=0.0, help="solid branch: first hold the O atoms on their lattice sites for this long while H thermalises, then release O (0 = all atoms free from the start)")
+    ap.add_argument("--min-runs", type=int, default=20, help="minimum number of DFT runs per 1000 K bin for the volume lookup")
     ap.add_argument("--only", type=int, default=None, help="run only volume index k (for a Slurm array)")
     ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default=None); ap.add_argument("--device", default="cuda")
     a = ap.parse_args()

@@ -27,7 +27,7 @@ def verdict(r):
     solid = keep and dl < 0.2; marg = keep and 0.2 <= dl < 0.5
     if r.get("branch", "solid") == "liquid": return "not melted" if (solid or marg) else "liquid"
     return "solid" if solid else "marginal" if marg else "melted"
-for d in ("runs/melt_tdi", "runs/melt", "runs/eos_scan"):
+for d in ("runs/melt_tdi", "runs/melt", "runs/melt_comp", "runs/eos_scan"):
     for f in sorted(glob.glob(os.path.join(d, "*.csv"))):
         try: t = pd.read_csv(f)
         except Exception: continue
