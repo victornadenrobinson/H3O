@@ -38,10 +38,15 @@ def load_inventory(path, include_lambda=False):
     df = df.dropna(subset=["True_T_K", "True_P_GPa"])
     # NVT: OUTCAR 'external pressure' omits the ions' ideal-gas term; eos.dat/hull P = external + N kB T / V
     # (verified against 238 eos.dat lines with 08_crosscheck_eos_dat.py: slope 1.001, resid std 0.5 GPa)
-    df["P_ext_GPa"] = df.True_P_GPa
-    nat = df.N_ions if "N_ions" in df else df.get("N_H", 0) + df.get("N_O", 0)
-    df["P_kin_GPa"] = (nat * KB_EV * df.True_T_K / df.True_V_A3 * EV_A3_GPA).fillna(0)
-    df["True_P_GPa"] = df.P_ext_GPa + df.P_kin_GPa
+    if "P_kin_GPa" in df.columns and "P_ext_GPa" in df.columns:
+        # a file written by this function (inventory_binned.csv): True_P_GPa already includes the ideal-gas term. Adding it again overstated every
+        # pressure by N kB T / V (about +16-20 GPa at 3000 K, 2-2.6 A^3/atom) in 17/18/19, which read inventory_binned.csv through this function
+        print("pressure column already includes N kB T / V (file written by 01): not adding it again")
+    else:
+        df["P_ext_GPa"] = df.True_P_GPa
+        nat = df.N_ions if "N_ions" in df else df.get("N_H", 0) + df.get("N_O", 0)
+        df["P_kin_GPa"] = (nat * KB_EV * df.True_T_K / df.True_V_A3 * EV_A3_GPA).fillna(0)
+        df["True_P_GPa"] = df.P_ext_GPa + df.P_kin_GPa
     if "N_H" in df:  # composition from OUTCAR ion counts
         df["Other"] = df.Other.fillna("")
         n = df.N_H.fillna(0) + df.N_O.fillna(0)

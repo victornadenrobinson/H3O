@@ -138,8 +138,9 @@ def select(df, a):
     keep = d.Path.str.contains(a.lambda_keep) if a.lambda_keep else pd.Series(False, index=d.index)
     d = d[~lam | keep]
     d = d.assign(run=d.Path.map(run_key), P100=(d.True_P_GPa // 100 * 100).astype(int))
-    # one OUTCAR per run (out1, out2, ... are the restart segments of one chain). out1 is the START of the run (about 0.2 ps, not equilibrated: its pressure was
-    # measured 15-23 GPa below the later segments at the same volume), so take a segment from late in the chain: position a.late_segment (0 = first, 1 = last)
+    # one OUTCAR per run (out1, out2, ... are the restart segments of one chain). out1 is only ~0.2 ps after the start of the run; a later segment is further from the
+    # initial configuration (H disorder, thermalisation), so take one from late in the chain: position a.late_segment (0 = first, 1 = last).
+    # NOTE: an earlier version of this comment claimed out1 pressures were 15-23 GPa low. That was wrong: it came from a double-counted N kB T / V term in the comparison scripts.
     if a.late_segment >= 0:
         d = d.assign(seg=d.Path.map(seg_no)).sort_values(["run", "seg", "Path"])
         d = d.groupby("run", group_keys=False).apply(lambda g: g.iloc[[int(round(a.late_segment * (len(g) - 1)))]])
@@ -179,7 +180,7 @@ if __name__ == "__main__":
     ap.add_argument("--exclude-file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "exclude_paths.txt"))
     ap.add_argument("--no-default-exclusions", action="store_true")
     ap.add_argument("--min-box", type=float, default=0.0, help="drop runs whose cell edge V^(1/3) is below this many A (e.g. 9.0); 0 = keep all")
-    ap.add_argument("--late-segment", type=float, default=0.75, help="which restart segment of each run to take: 0 = first, 1 = last, 0.75 = three quarters along the chain (default); -1 = old behaviour (first, out1 = unequilibrated)")
+    ap.add_argument("--late-segment", type=float, default=0.75, help="which restart segment of each run to take: 0 = first, 1 = last, 0.75 = three quarters along the chain (default); -1 = old behaviour (first segment, out1)")
     ap.add_argument("--by-phase", action="store_true", help="h2o only: balance runs per (T, 100 GPa) bin separately for fcc / bcc / liquid / other path tags (adds info['phase_tag'])")
     ap.add_argument("--phase-csv", default=None, help="09_label_phase.py output: bucket h2o runs by measured O sublattice + dynamical phase (implies --by-phase; unlabelled runs fall back to path words)")
     ap.add_argument("--lambda-keep", default=None, help="regex of lambda_* paths to keep (default: drop all lambda_* runs)")

@@ -90,6 +90,9 @@ GRACE-2L-SMAX-OMAT-medium fine-tuned on tier s (162 frames, 400 updates, batch 2
 force RMSE 0.46-1.26 eV/A (T-mean 0.86-1.11; zero-shot 1.0-1.6), stress MAE 0.9-6.7 GPa, pressure error -7.3..+8.8 GPa per state with T-means within +-3.4 GPa (zero-shot +5..+49 GPa), energy MAE 3-118 meV/atom after per-element shift. Pressure is fixed by the fine-tune; forces improved only modestly (under-trained). Next: tier m, 2000 updates.
 Open: MatterSim fine-tune feasibility on an 80 GB GPU not yet benchmarked; real training-memory test for GRACE pending (inference x3 is only an estimate).
 
+### EOS-MD vs DFT: the apparent -15..-22 GPa "bias" was an analysis bug (2026-10-26)
+17/18/19 read inventory_binned.csv through load_inventory(), which added the ideal-gas term N kB T / V a second time (the file already contains it). That raised every DFT reference pressure by +16..+20 GPa at 3000 K, 2-2.6 A^3/atom, exactly the size of the offsets. Fixed in 01_bin_inventory.load_inventory (detects an already corrected file). Evidence: the fine-tuned model reproduces DFT frame pressures within about 1.5 GPa and its own MD at the same volumes within about 3 GPa of those frames; offsets vs the (wrong) population tracked N kB T / V (e.g. 20.4 GPa at 2.03 A^3/atom, 18.6 at 2.23, 15.9 at 2.60). Earlier conclusions drawn from the offsets (out1 unequilibrated; model biased in its own ensemble; unfreezing weights or a higher stress weight needed) are withdrawn. The late-segment selection in 02 stays as a choice (later segments are further from the start) but has no pressure evidence behind it.
+
 ## Open questions
 1. H2O offset at 5000/7000 K: tag branch (fcc solid, kp222 small cells) via `09_label_phase.py` and keep as separate config types?
 2. Large-force frames (> 50 eV/A): clip or down-weight in the loss?
