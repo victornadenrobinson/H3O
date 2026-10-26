@@ -102,3 +102,6 @@ fcc H2O 6000 K: fcc, delta_L 0.131, D_O 0, P 506.5 GPa. fcc H2.25O 6000 K: fcc, 
 
 ### Formatting of command blocks for the user (stated 2026-10-26 night)
 One code block per place to paste: a separate block for each interactive GPU job, and login-node / CPU commands never in the same block as GPU-job commands. Say above each block where it runs (login node, which GPU job). No `tail` on long runs (see above). Per-job blocks must be self-contained (cd to the repo, git pull in that block).
+
+### Free NVT stability at 6500 K (springs off, 6 ps, TDI volumes; 2026-10-26 night)
+400 GPa: fcc H2O solid (delta_L 0.153, D_O 0); fcc H2.25O MELTED (label other, O MSD 51 A^2, D_O 1e-4). 500 GPa: fcc H2O solid (0.141); fcc H2.25O marginal (fcc label with CN 11/12, delta_L 0.246, O MSD 1.5 A^2, D_O 0). So the 400 GPa 6500 K H2.25O TDI (G -105.3) and its mixing values are for a melted crystal held by the springs: drop them. Valid solid mixing points: 400 GPa 5000 K, 500 GPa 5000 and 6000 K. H2.25O melting temperature: about 6500-7000 K at 500 GPa, at or below 6500 K at 400 GPa; H2O solid up to 7000 K (6 ps; superheating not excluded). New tools: tdi/plot_all.py (G vs time, all runs), tdi/steps.py (integrand steps per lambda value), tdi/plot_pt.py (P-T map of all runs), 22_eos_summary.py (EOS scan), --discard in summarize.py.
