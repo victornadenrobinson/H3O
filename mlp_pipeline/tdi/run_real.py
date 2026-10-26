@@ -421,6 +421,26 @@ def acquire_lock(path, stale_s):
     return True
 
 
+def prep(c):
+    """start-configuration protocol for crystals with added H: thermalise H with the O atoms held on their lattice sites (--prep-hold-ps), release O and let everything move freely (--prep-free-ps), both with the full MLP at T;
+    the last frame (O centre of mass moved back onto the lattice) is written to <outdir>/<tag>_prep.extxyz and used by every lambda node as its start configuration (--init-from)"""
+    a = c["a"]; out = os.path.join(a.outdir, f"{c['tag']}_prep.extxyz")
+    if a.phase not in ("fcc", "bcc"): print(f"prep: not for phase {a.phase} (crystals only), skipped", flush=True); return
+    if os.path.exists(out) and not a.fresh: print(f"prep: {out} exists, kept (--fresh to redo)", flush=True); return
+    from ase.constraints import FixAtoms
+    from ase.io import write
+    at = c["at0"].copy(); at.calc = c["calc"]; iO = c["iO"]; rng = np.random.default_rng(a.seed + 777); t0 = time.time()
+    MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = 0; at.set_momenta(p, apply_constraint=False); at.set_constraint(FixAtoms(indices=iO))
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng); dyn.run(c["steps"](a.prep_hold_ps))
+    print(f"prep: H thermalised with O held for {a.prep_hold_ps} ps ({time.time() - t0:.0f} s), T_kin {at.get_temperature():.0f} K", flush=True)
+    at.set_constraint(); tmp = at.copy(); MaxwellBoltzmannDistribution(tmp, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = tmp.get_momenta()[iO]; at.set_momenta(p)
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng); dyn.run(c["steps"](a.prep_free_ps))
+    d = find_mic(at.positions[iO] - c["sitesO"], c["at0"].cell, True)[0]; shift = d.mean(0); at.positions -= shift   # O lattice drifted as a whole: put its centre of mass back (the TDI fixes it)
+    d = d - shift; print(f"prep: O released for {a.prep_free_ps} ps ({time.time() - t0:.0f} s): rms O displacement from the ideal sites {np.sqrt((d ** 2).sum(-1).mean()):.3f} A, max {np.sqrt((d ** 2).sum(-1)).max():.3f} A, T_kin {at.get_temperature():.0f} K "
+          f"(compare: Einstein-spring rms at k = 25 eV/A^2 is {np.sqrt(3 * units.kB * a.T / 25.0):.3f} A; much larger = the lattice is melting)", flush=True)
+    write(out, at); print(f"prep: wrote {out}", flush=True)
+
+
 def run_node(c, st, k):
     """node k alone; the series of <U_MLP - E> is saved to <outdir>/<tag>_node<k>.npy after every chunk"""
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
@@ -502,6 +522,7 @@ if __name__ == "__main__":
     ap.add_argument("--ps", type=float, default=4.0, help="production per lambda node"); ap.add_argument("--chunk-ps", type=float, default=0.5)
     ap.add_argument("--hot-ps", type=float, default=0.0, help="liquid phase: first heat every lambda to --hot-T for this long so the lattice start melts, then equilibrate at T"); ap.add_argument("--hot-T", type=float, default=12000.0)
     ap.add_argument("--lock-stale-min", type=float, default=30.0, help="a lambda-node lock file not touched for this long is taken over (see acquire_lock)")
+    ap.add_argument("--prep", action="store_true", help="only build the start configuration (hold O, thermalise H, release O): see prep()"); ap.add_argument("--prep-hold-ps", type=float, default=1.0); ap.add_argument("--prep-free-ps", type=float, default=1.0)
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
@@ -513,6 +534,8 @@ if __name__ == "__main__":
     c = setup(a)
     if a.stage0:
         stage0(c); sys.exit(0)
+    if a.prep:
+        prep(c); sys.exit(0)
     if a.node is not None:
         st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
         run_node(c, st, a.node); sys.exit(0)

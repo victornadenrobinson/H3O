@@ -13,6 +13,7 @@
 #   e.g. an 8-value run -> 17:  ONLYNODES="8 9 10 11 12 13 14 15 16" RULE=gk NGAUSS=8 NODES=17 <same T P HPER NATOMS PS EQUIL CHUNK DT as the original run> bash mlp_pipeline/young_tdi_par.sh fcc   (same tag; the old node files are kept)
 # WARM START: INIT=<extxyz> starts every lambda point from the last frame of that trajectory (e.g. INIT=runs/tdi/fcc_500GPa_6000K_node16_traj.extxyz, same system), and OUTDIR=runs/tdi_warm writes to a separate folder (summarize.py scans runs/tdi*; run it on that folder alone to keep warm and cold runs apart).
 # HOT=0.5 (HOTT=12000): liquid only: heat every lambda to HOTT K for HOT ps before the equilibration, so the fcc start melts also below the melting temperature
+# PREPHOLD=1 (PREPFREE=1): crystals: before the lambda runs, hold O on its sites for PREPHOLD ps while H thermalises, release O for PREPFREE ps (full MLP, free MD), and start EVERY lambda from that frame (O centre of mass put back on the lattice); log <tag>_prep.log shows the O rms displacement (melting check). New runs only: nodes that restart from a saved state ignore it.
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
@@ -34,7 +35,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}}"
+COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi
@@ -42,6 +43,13 @@ echo "== stage 0 (lambda = 1 run) $(date)"
 [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ]; } && echo "stage 0 already done (measured k kept; FRESH=1 to redo)" || $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"
 [ -f $OUT/${TAGNAME}_stage0.json ] || { echo "stage 0 failed"; exit 1; }
 [ -n "$ONLY0" ] && exit 0   # ONLY0=1: stop after the lambda=1 run (e.g. to compare DT=0.5 and DT=1.0)
+if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; } && ls $OUT/${TAGNAME}_node*_state.npz >/dev/null 2>&1; then echo "== start configuration skipped: lambda states already exist (a continued run keeps its own start)"
+elif [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=<ps>: start every lambda from a configuration made by holding O, thermalising H, releasing O (PREPFREE ps, default 1)
+  echo "== start configuration: O held $PREPHOLD ps, then released ${PREPFREE:-1} ps $(date)"
+  $PY -u $CODE/tdi/run_real.py $COMMON --prep 2>&1 | tee $OUT/${TAGNAME}_prep.log | grep --line-buffered -vE "$NOISE"
+  [ -f $OUT/${TAGNAME}_prep.extxyz ] || { echo "prep failed"; exit 1; }
+  [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"
+fi
 echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
 if [ -n "$ONLYNODES" ]; then echo $ONLYNODES | tr ' ' '\n'; else
