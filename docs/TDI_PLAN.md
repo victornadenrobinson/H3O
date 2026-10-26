@@ -18,7 +18,7 @@ our fine-tune data starts at 200 GPa; below that the model is extrapolating. Dec
 h2o runs: 3554. fcc 798 + fcc/solid 370 + fcc/superionic 15; bcc 1132 + bcc/liquid 542 + bcc/liquid/solid 163 + bcc/superionic 18; untagged 514.
 Both phases overlap at 3000 K (200-1000 GPa), 5000 K (200-1000 GPa) and 7000 K (300-1000 GPa), best at 400-500 GPa 3000 K (fcc 123/111 runs, bcc 66/28 runs per 100 GPa bin).
 2000 K superionic is thin: about 15-18 runs per phase (paths `superionic-500gpa-2000K/fcc-h2o-108-2000K`, `bcc-h2o-128-2000K`).
-The DFT cells are fcc-h2o-108 (108 O, 324 atoms) and bcc-h2o-128 (128 O, 384 atoms). Existing VASP TDI runs (`tdi/h3o/500gpa-3000K/...`, `500gpa-7000K-solid`) mean DFT free energies already exist at 500 GPa: use them as the validation target for the MLP-TDI.
+The DFT cells are fcc-h2o-108 (108 O, 324 atoms) and bcc-h2o-128 (128 O, 384 atoms). Existing VASP TDI runs (`tdi/h3o/500gpa-3000K/...`, `500gpa-7000K-solid`) mean DFT free energies already exist at 500 GPa: compare the MLP-TDI against them, but do NOT treat them as reliable reference values (user's call: they are a cross-check only).
 Caveats: the dataset tiers pool fcc and bcc in the same (T, 100 GPa) bin, so each phase gets only part of the 1 (s) / 3 (m) runs per bin; whether a run stayed solid, became superionic or melted is not in its folder name (09_label_phase.py).
 
 ## Cells
