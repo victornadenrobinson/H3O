@@ -13,6 +13,10 @@
 # env knobs: HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
+# Design: the code is copied to runs/code/<time>_<pid> at launch and every process runs from that snapshot, and the body is one function parsed before it runs,
+# so a git pull / edit during a run cannot change a running job (bash reads scripts incrementally; python processes started later would also pick up new code).
+main() {
+SNAP=runs/code/$(date +%Y%m%d_%H%M%S)_$$; mkdir -p $SNAP && cp -r mlp_pipeline $SNAP/ && CODE=$SNAP/mlp_pipeline; export H3O_GIT=$(git rev-parse HEAD 2>/dev/null)$(git diff --quiet 2>/dev/null || echo "+local")
 PH=${1:?bcc, fcc, liquid, insert or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; NGHOST=${NGHOST:-1}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
 TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h${HPER}o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
@@ -29,7 +33,7 @@ NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I00
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi
 echo "== stage 0 (lambda = 1 run) $(date)"
-[ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && echo "stage 0 already done (measured k kept; FRESH=1 to redo)" || $PY -u mlp_pipeline/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"
+[ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && echo "stage 0 already done (measured k kept; FRESH=1 to redo)" || $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"
 [ -f $OUT/${TAGNAME}_stage0.json ] || { echo "stage 0 failed"; exit 1; }
 [ -n "$ONLY0" ] && exit 0   # ONLY0=1: stop after the lambda=1 run (e.g. to compare DT=0.5 and DT=1.0)
 echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
@@ -41,11 +45,14 @@ o=list(dict.fromkeys(o))
 while len(o)<n:
     o.append(max((i for i in range(n) if i not in o), key=lambda i: min(abs(i-j) for j in o)))
 print(*o, sep=chr(10))"
-fi | xargs -P $NPAR -I{} bash -c "$PY -u mlp_pipeline/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
+fi | xargs -P $NPAR -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
 XP=$!
 while kill -0 $XP 2>/dev/null; do
   sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
   for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed "s/${TAGNAME}_node/lambda /"): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
-  python3 mlp_pipeline/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
+  python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
-echo "== done $(date)"; python3 mlp_pipeline/tdi/collect.py $OUT $TAGNAME
+echo "== done $(date)"; python3 $CODE/tdi/collect.py $OUT $TAGNAME
+}
+main "$@"
+exit $?
