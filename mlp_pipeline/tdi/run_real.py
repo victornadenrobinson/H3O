@@ -322,6 +322,7 @@ def run_node(c, st, k):
         tl = time.time(); r.advance(per)
         np.save(f, np.array(r.series))
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr); os.replace(sf + ".tmp.npz", sf)
+        pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
         if r.thermo:
             import csv
             ft = os.path.join(a.outdir, f"{c['tag']}_node{k}_thermo.csv"); new = not os.path.exists(ft)
@@ -338,7 +339,7 @@ def run_node(c, st, k):
                 write(os.path.join(a.outdir, f"{c['tag']}_node{k}_traj.extxyz"), fr, append=True)
             r.snaps = []
         m, e = stats(r.series)
-        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
+        print(f"node {k} lam {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
 
 
 def G_total_eV(st, dF):

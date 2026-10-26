@@ -33,6 +33,16 @@ def block_means(s, per_ps, blk=0.25, maxn=16):
     return b[-maxn:]
 
 
+def node_pressure(d, tag, k):
+    """mean MLP pressure (GPa) over the thermo rows of node k, or nan"""
+    f = os.path.join(d, f"{tag}_node{k}_thermo.csv")
+    try:
+        import pandas as pd
+        return float(pd.read_csv(f).P_MLP_GPa.mean())
+    except Exception:
+        return float("nan")
+
+
 def spark(v):
     v = np.asarray(v, float); ok = np.isfinite(v)
     if not ok.any():
@@ -61,7 +71,7 @@ def show(d, tags, brief=False):
         st, A, lam, w, ser = L; N = st["N"]; per_ps = 1000 / A["dt"] / A["every"]; n = [len(s) for s in ser]; target = A["ps"] * per_ps
         P_ = (lambda *a_, **k_: None) if brief else print
         print(f"\n== {tag}: N {N}, k {st['kE']:.2f}, {A['nodes']} nodes, target {A['ps']} ps/node; done {100 * sum(n) / (target * len(n)):.0f}%  ({time.strftime('%H:%M:%S')})")
-        P_("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)  time trace (0.25 ps blocks)")
+        P_("  node     lambda     ps    integrand meV/atom  [eV cell]  +- sem    contribution  drift(sigma)  P_MLP   time trace (0.25 ps blocks)")
         mm, cc = [], []
         for k, s in enumerate(ser):
             if len(s) < 10:
@@ -70,8 +80,11 @@ def show(d, tags, brief=False):
             h = len(s) // 2; a1, a2 = np.array(s[:h]), np.array(s[h:])
             drift = (a2.mean() - a1.mean()) / (np.hypot(stats(a1)[1], stats(a2)[1]) + 1e-12) if h >= 25 else float("nan")
             mm.append(m / N * 1e3); cc.append(w[k] * m / N * 1e3)
-            P_(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}  {spark(block_means(s, per_ps)):<18s}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
+            P_(f"  {k:3d}  {lam[k]:10.3e}  {len(s) / per_ps:5.2f}   {m / N * 1e3:12.1f}  [{m:9.1f}]  {e / N * 1e3:7.2f}   {cc[-1]:11.2f}   {drift:+6.1f}  {node_pressure(d, tag, k):6.1f}  {spark(block_means(s, per_ps)):<18s}{'  <-- not equilibrated?' if abs(drift) > 2 else ''}")
         P_(f"  integrand vs node: {spark(mm)}    (lambda increasing ->)")
+        pp = [node_pressure(d, tag, k) for k in range(len(ser))]; pp = [x for x in pp if x == x]
+        if pp:
+            print(f"  MLP pressure over {len(pp)} nodes: mean {np.mean(pp):.1f} GPa (target {st['P_target']:.0f}), range {min(pp):.1f}-{max(pp):.1f}  (the integrand nodes mix the MLP with springs, so the spread is expected)")
         nd = sum(len(x) >= 25 for x in ser)
         print(f"  PREVIEW (interpolated through the {nd}/{len(ser)} nodes that have data): G = {preview(st, A, lam, ser, N):9.2f} meV/atom")
         have = min(n) / per_ps

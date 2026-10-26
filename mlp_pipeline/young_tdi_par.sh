@@ -14,9 +14,11 @@ PH=${1:?bcc, fcc or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; MODEL=${MODE
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
 TAGNAME=${PH}_${P}GPa_${T}K; [ "$HPER" != 2 ] && [ $PH != H ] && TAGNAME=${TAGNAME}_h${HPER}o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)
-if [ -z "$K" ] && [ "$T" = 3000 ] && [ "$P" = 400 ] && [ "$HPER" = 2 ]; then [ $PH = bcc ] && K=12.2 || K=22.8; fi; [ "$K" = 0 ] && K=   # other T or P: k is measured by the lambda=1 run unless K is given
+# Einstein constant k (eV/A^2): scaled guess unless K is given (k only sets the efficiency, not the result): measured 12.2 (bcc) / 22.0-22.8 (fcc) at 400 GPa 3000 K, 12.8 (bcc) at 5000 K, 7.9 (bcc) at 200 GPa; k ~ P^0.6.
+# K=0 measures it with a lambda=1 run instead (about 6 min; also prints MLP pressure and O structure).
+if [ -z "$K" ] && [ "$PH" != H ]; then K=$(awk -v p=$P -v k4=$([ $PH = bcc ] && echo 12.5 || echo 22.5) 'BEGIN{printf "%.2f", k4*(p/400)^0.6}'); fi; [ "$K" = 0 ] && K=
 mkdir -p $OUT
-export GRACE_UQ=1 TF_FORCE_GPU_ALLOW_GROWTH=true
+export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
 COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER ${NATOMS:+--natoms $NATOMS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
