@@ -1,0 +1,70 @@
+# Plan: MLP thermodynamic integration, superionic H2O fcc vs bcc
+
+Status: PLAN ONLY, no code run yet. Numbers marked (guess) are not measured.
+
+## Goal
+G_fcc - G_bcc of superionic H2O (O on fcc / bcc sites, mobile protons) at one (P, T) where the literature says the difference is resolvable,
+using the fine-tuned GRACE model, then a correction to the DFT level from single-point VASP snapshots.
+
+## Where to run it (literature, from a quick search; confirm in the papers before fixing P, T)
+- Wilson, Wong, Militzer (2013), DFT free energies: bcc becomes unstable against denser fcc above about 1.0 +- 0.5 Mbar; fcc has lower proton mobility. https://arxiv.org/pdf/1211.6482
+- Millot et al. (2019) report an fcc-oxygen superionic phase (ice XVIII) above 2000 K by x-ray diffraction (secondhand, via https://ar5iv.labs.arxiv.org/html/2103.09035).
+- A 2025 paper reports BCC and FCC signatures together in one P-T range: https://arxiv.org/pdf/2510.24305v1
+I did not read Sun-Clark-Torquato-Car (2015) or Millot 2019 themselves.
+Proposal: pick 2 state points bracketing the bcc/fcc crossover near 100 GPa-class pressures (e.g. about 150 and 300 GPa, T = 3000-5000 K), because
+our fine-tune data starts at 200 GPa; below that the model is extrapolating. Decision needed from you: which (P, T), and is going below 200 GPa wanted.
+
+## Cells
+- One cubic supercell per phase, about 250 O each so ΔG per atom is comparable: fcc 4x4x4 conventional (256 O + 512 H = 768 atoms), bcc 6x6x6 (432 O) or 5x5x5 (250 O + 500 H = 750 atoms). Edge must stay above 8.5 A (our box rule) - at about 200-300 GPa these are about 12-14 A.
+- H start: random on interstitial sites, then equilibrate (the 11000+ K trick is not needed; superionic H diffuses within ps).
+- Check first: the MLP has not seen cells this large; memory at 768 atoms is fine for GRACE (729 atoms was 10 GiB inference).
+
+## Volume
+Our rule: NVT at V* from an EOS. Recommendation: use the DFT EOS only as the starting guess (the repo's DFT hull data has a bcc-128 curve and fcc-solid runs sitting on another branch,
+PROJECT.md line 30), then refine with the MLP itself: 3-4 volumes x 5 ps NVT per phase, fit P(V), take V* where <P_MLP> = P_target.
+Reason: G = F(V*) + P V*, and the pressure error of the MLP shifts V* by dV = dP/B; using MLP-consistent V* removes that, and the DFT-vs-MLP pressure gap (a few GPa after fine-tune)
+is then handled in the DFT correction. Each phase gets its own V*; do not force the same volume.
+
+## Step A: plain NVT at lambda = 1 (diagnostics, 10-20 ps per phase)
+Bussi velocity-rescaling NVT (canonical, perturbs dynamics less than Langevin), dt 0.5 fs (check by a 2 ps NVE energy-drift test first), 5 ps equilibration + 15 ps production.
+Files per run (all in one folder, names fixed so postprocessing is trivial):
+- `thermo.csv` every step or every 2 steps: step, t_fs, T, Epot, Ekin, Etot, P_GPa, the six stress components (GPa; for Green-Kubo viscosity), E_O_only (stage 1 below), dEdlambda.
+- `traj.extxyz` every 20 fs: positions UNWRAPPED (ASE does not wrap, so do not call wrap), velocities, forces, cell, step; enough for MSD/D for O and H (no rewrap needed).
+- `vacf` data derivable from velocities every 5 fs for the first 2 ps of production (separate `vel.extxyz`).
+- `log.txt`: ms/step, ms/atom/step, GPU memory, running averages (T, P, D_H from MSD over the last 2 ps) every 1 ps, plus the gamma (UQ extrapolation grade) max/mean per frame so we see when the MLP leaves its training domain.
+Postprocess `tdi_analyze.py` (to write): D_H and D_O from MSD slope, RDFs O-O/O-H/H-H, O-site occupancy (is the lattice intact), viscosity by Green-Kubo (only meaningful if the O sublattice melts; in a solid it will not converge - expected), P and T averages with block errors.
+Sanity: fcc and bcc runs must keep their O sublattice (check structure factor peaks) and D_H must be superionic-size (about 1e-4 to 1e-3 cm2/s is the usual range, verify in the DFT D values you already have).
+
+## Step B: free energy, two stages as you proposed
+Reference system: O harmonic Einstein crystal (spring k per O about its starting lattice site) + H ideal gas in the box.
+Define U_all(r) = U_MLP of all atoms, U_O(r_O) = U_MLP of the O sublattice alone (H deleted; one extra, small evaluation), U_E = sum_i k/2 |r_i - R_i|^2.
+- Stage 1, proton gas -> interacting protons, O pinned by U_E:
+  U1(lambda) = U_E + lambda * (U_all - U_O)   (lambda 0 -> 1). dF1 = integral of <U_all - U_O>_lambda.
+  Start: F_E + F_ideal gas(H); end: O Einstein + fully interacting H, no O-O interaction.
+- Stage 2, Einstein O -> interacting O, H fully interacting:
+  U2(lambda) = (U_all - U_O) + (1 - lambda) U_E + lambda U_O ... equivalently U_all at lambda = 1. dF2 = integral of <U_O - U_E>_lambda.
+- Total: F_MLP = F_E + F_ig(H) + dF1 + dF2 (+ the Einstein centre-of-mass correction). Then G = F + P V*.
+Known risk (Stage 1): at lambda -> 0 protons sit on top of O and on each other and the MLP is evaluated at tiny distances it was never trained on; the integrand is then large and noisy.
+Mitigation, to test before committing: integrate in x = lambda^(1/m) with Gauss-Legendre points (m = 3-4), 12-16 points, and plot <dU/dlambda> against lambda for both stages.
+Fallback if the lambda -> 0 end is unphysical: add a short-range repulsive wall (soft-core or ZBL) to U1 only at small lambda, or start Stage 1 from an H lattice-gas reference instead of the ideal gas.
+Choose k in U_E from the real <u^2> of O at lambda = 1 (k = 3 kT / <u^2>) so Stage 2 is flat; Einstein k does not change the final F, only the noise.
+Closed forms to implement (and unit-test against the harmonic limit): F_E, F_ig(H) with the exact ln N!, the fixed-centre-of-mass correction for Stage 1/2 (we run momentum-conserving MD),
+and the classical nuclei assumption (nuclear quantum effects for H at these T, P are ignored in both phases - state this in any result).
+Cost (guess; measure ms/step first): 0.2 s/step at about 750 atoms, so 5 ps per lambda point = 10000 steps about 0.5 h; 2 stages x about 12 points x 2 phases = 48 points about 24 GPU-hours plus Step A. Use a Slurm array, one GPU per lambda point.
+
+## Accuracy: what this can and cannot settle today
+- The fcc-bcc free-energy difference in the literature is small (a few meV/atom class; unverified, check the papers). Our fine-tune had energy MAE 10-70 meV/atom on 30 frames, and its training set contains no labelled fcc/bcc superionic states.
+- So the MLP number is a method check first, not a result. Before it counts: (1) add DFT fcc and bcc superionic frames (you have VASP; 20-40 per phase at the chosen state points) to the training set; (2) correct with free-energy perturbation: dF_corr = -kT ln < exp(-(U_DFT - U_MLP)/kT) >_MLP over 50-100 MLP snapshots per phase, DFT as single points; if the exponential average is noisy, use the cumulant (mean + variance/2kT) form and report both.
+- The label convention matters: DFT free energy (TOTEN with sigma = kT) is what we trained on, so the correction uses the same quantity; the electronic entropy is then included in both.
+
+## Order of work (proposal, nothing started)
+1. Finish the m-tier fine-tune (running) and benchmark; decide model.
+2. Pick (P, T) points; build fcc/bcc supercells (`tdi_build.py`); EOS refinement runs (Step A at 3-4 volumes).
+3. Step A diagnostics on both phases; fix dt, k, supercell if the lattice is unstable.
+4. Stage 1 / Stage 2 lambda ladders on a Slurm array; analyse the integrands before trusting any total.
+5. DFT single points + FEP correction; compare ΔG with the literature crossover.
+
+## Decisions I need from you
+1. The (P, T) points (and whether below 200 GPa is wanted).
+2. How many GPU-hours we may spend; 5 ps per lambda point is my default.
+3. Whether the extra DFT frames for fcc/bcc superionic can be produced soon (otherwise stop at the method check).
