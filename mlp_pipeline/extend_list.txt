@@ -1,0 +1,20 @@
+# one TDI job per line (array task i = i-th non-comment line of this file).
+#   EXT <runs/dir/tag> <ps per lambda>      extend an existing run in time to this many ps per lambda (settings are read from its stage0 json; see tdi/extend.py)
+#   NEW <env assignments> <phase>           a new run with the settings written out (young_tdi_par.sh environment)
+# 400 GPa 5000 K mixing: dt 0.5 H2O references (the existing fcc/bcc H2O runs there use dt 1.0, so the mixing rows say DIFFERENT dt), then the H2.25O and pure H runs from 1.5 to 3 ps like the H2O
+NEW P=400 T=5000 HPER=2 NODES=10 NPAR=10 DT=0.5 EQUIL=1 PS=3 PS1=1.5 CHUNK=0.5 OUTDIR=runs/tdi_dt05 fcc
+NEW P=400 T=5000 HPER=2 NODES=10 NPAR=10 DT=0.5 EQUIL=1 PS=3 PS1=1.5 CHUNK=0.5 OUTDIR=runs/tdi_dt05 bcc
+EXT runs/tdi/fcc_400GPa_5000K_h2.25o 3
+EXT runs/tdi/bcc_400GPa_5000K_h2.25o 3
+EXT runs/tdi/H_400GPa_5000K 3
+# 500 GPa 6000 K (the solid that stays solid): trio from 1 to 3 ps
+EXT runs/tdi/fcc_500GPa_6000K 3
+EXT runs/tdi/fcc_500GPa_6000K_h2.25o 3
+EXT runs/tdi/H_500GPa_6000K_N250 3
+# liquid hull at 400 GPa: H2O and H2.25O have the largest errors (10-12 meV/atom): 2 -> 6 ps
+EXT runs/tdi/liquid_400GPa_7000K_h2o 6
+EXT runs/tdi/liquid_400GPa_7000K_h2.25o 6
+EXT runs/tdi/liquid_400GPa_9000K_h2o 6
+EXT runs/tdi/liquid_400GPa_9000K_h2.25o 6
+# unfinished: 9 of 10 lambda values have samples
+EXT runs/tdi/bcc_500GPa_3000K 3
