@@ -303,6 +303,7 @@ def run_node(c, st, k):
         b = at.copy(); b.calc = c["calc"]; sg = b.get_stress(voigt=True)
         return float(-sg[:3].mean() * EV_A3_GPA + len(at) * units.kB * T / at.get_volume() * EV_A3_GPA)
     r.pfn = pfn
+    r.at.get_forces(); t0 = time.time()   # warm-up evaluation: XLA compile / model graph build stays out of the speed and ETA numbers
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
