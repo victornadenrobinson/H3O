@@ -48,20 +48,33 @@ def comp_label(hper):
     return f"h{hper:g}o"
 
 
-def dft_vpa(inv, phase, T, Ps, hper=2.0):
-    inv_mod = import_module("01_bin_inventory")
-    df = inv_mod.load_inventory(inv)
-    df = df[(df.comp_snap == comp_label(hper)) & (df.T_bin == int(round(T / 1000.0)) * 1000)]
-    df = df[df.Path.str.contains(phase, case=False) & ~df.Path.str.contains("liquid|solid|melt", case=False)]
-    df = df.assign(vpa=df.True_V_A3 / df.N_ions).dropna(subset=["vpa"])
+def _vpa_bin(df, phase, Tb, Ps):
+    df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).dropna(subset=["vpa"])
     c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2)
     grid = np.linspace(df.vpa.min(), df.vpa.max(), 400)
     P = np.exp(np.polyval(c, grid))
-    print(f"DFT {phase} {T:.0f} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
+    print(f"DFT {phase} {Tb:.0f} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
     out_of_range = [p for p in Ps if p < df.True_P_GPa.min() or p > df.True_P_GPa.max()]
     if out_of_range:   # np.interp clips silently: say so
         print(f"WARNING: target pressures {out_of_range} GPa are outside the DFT data range {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa for {phase}; their volumes are clipped to the edge of the data")
-    return [float(np.interp(-p, -P, grid)) for p in Ps]   # P decreases with V: interpolate on the monotone branch
+    return np.array([float(np.interp(-p, -P, grid)) for p in Ps])   # P decreases with V: interpolate on the monotone branch
+
+
+def dft_vpa(inv, phase, T, Ps, hper=2.0, min_runs=20):
+    """V/atom at pressures Ps from the DFT EOS of this phase/composition at temperature T. T on a 1000 K bin with >= min_runs runs: that bin's fit;
+    any other T between two such bins: linear interpolation in T between the neighbouring bin fits (approximate)."""
+    df = import_module("01_bin_inventory").load_inventory(inv)
+    df = df[(df.comp_snap == comp_label(hper)) & df.Path.str.contains(phase, case=False) & ~df.Path.str.contains("liquid|solid|melt", case=False)]
+    n = df.groupby("T_bin").size(); good = sorted(int(b) for b in n[n >= min_runs].index)
+    Tb = int(round(T / 1000.0)) * 1000
+    if abs(T - Tb) < 1 and Tb in good:
+        return list(_vpa_bin(df, phase, Tb, Ps))
+    lo = [b for b in good if b <= T]; hi = [b for b in good if b >= T]
+    if not lo or not hi:
+        raise SystemExit(f"{phase} {hper}: T = {T:.0f} K is outside the DFT bins with >= {min_runs} runs ({good}): give --vpa")
+    lo, hi = max(lo), min(hi)
+    print(f"NOTE: {phase} volume at {T:.0f} K interpolated between the {lo} K and {hi} K DFT EOS fits")
+    return list(_vpa_bin(df, phase, lo, Ps) + (_vpa_bin(df, phase, hi, Ps) - _vpa_bin(df, phase, lo, Ps)) * (T - lo) / (hi - lo))
 
 
 def thermostat(atoms, T, dt, tau):
