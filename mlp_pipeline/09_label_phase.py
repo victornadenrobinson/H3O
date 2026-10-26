@@ -107,7 +107,10 @@ if __name__ == "__main__":
     if todo:
         with Pool(a.workers) as p:
             rows = list(progress(p.imap(partial(one, root=root), todo, chunksize=4), total=len(todo), desc="phase MSD"))
-    x = pd.concat([old, pd.DataFrame(rows)], ignore_index=True)
+    x = pd.concat([d for d in (old, pd.DataFrame(rows)) if len(d)], ignore_index=True)   # skip the empty frame: it would turn every column into dtype object
+    for c in ("O_rate", "H_rate", "window", "CN1", "CN2", "delta_L"):
+        if c in x:
+            x[c] = pd.to_numeric(x[c], errors="coerce")
     keep = [c for c in ("Path", "comp_snap", "True_T_K", "T_bin", "True_P_GPa", "N_ions") if c in df]
     x = x.merge(df[keep], on="Path", how="left")
     x["H_msd"] = x.H_rate * x.window / 1000; x["O_msd"] = x.O_rate * x.window / 1000   # total displacement^2 over the window (A^2)
