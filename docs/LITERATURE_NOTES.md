@@ -32,5 +32,10 @@ Same group, same TI machinery: DFT -> classical non-bonding pair potentials fitt
 ## Gupta, Stixrude, Schlichting (arXiv:2407.04685): H2-H2O miscibility
 Direct DFT two-phase coexistence (PBEsol, gamma point, 500 eV, 300-450 atoms, 150-300 ps), critical curve up to 2000 GPa, no H3O molecules found in the fluid. No MLP and no free-energy method for solids; not used for the fcc/bcc work. Possibly relevant for the H-water hull.
 
+## Two Nature Communications papers the user named as having Delta G figures (not readable here; hosts blocked; titles/abstract facts from search excerpts only)
+- https://www.nature.com/articles/s41467-022-32374-1 : "Thermodynamics of high-pressure ice phases explored with atomistic simulations", Nat. Commun. 13, 4707 (2022). PBE machine-learning potential; says the MLP reproduces the free energies of the PBE reference with very small residual error; bcc-oxygen ices VII, VII', X are one thermodynamic phase, superionic VII'' has a first-order boundary with VII'; X -> Pbcm near 300 GPa; liquid-solid coexistence by TI; phase diagram below 100 GPa. Whether it contains an fcc-bcc Delta G is unknown.
+- https://www.nature.com/articles/s41467-025-67063-2 : Andriambariarijaona et al., "Observation of a mixed close-packed structure in superionic water", Nat. Commun. 17, 374 (2025; PMC12796318). Ultrafast X-ray diffraction on shock-compressed water: above about 150 GPa and 2500 K the patterns favour a mixed close-packed (fcc + hcp stacking) superionic phase over pure fcc; signatures of bcc and fcc together at lower pressure. Energetics not seen.
+To use their Delta G numbers: upload the PDFs or screenshots of the figures (axis labels and units visible) and say whether the quantity is per atom or per molecule and which sign (G_bcc - G_fcc or the reverse).
+
 ## Not obtained
 Cheng, Bethkenhagen, Pickard, Hamel, Nat. Phys. 17, 1228 (2021) (MLP free energies, fcc/bcc/Pbcm; UF-fluid reference): not available in this sandbox (hosts blocked); the user believes the paper is public and has ML dG numbers. If you can upload the PDF it can be read like these.
