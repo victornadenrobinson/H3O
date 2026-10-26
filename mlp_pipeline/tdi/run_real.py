@@ -248,6 +248,7 @@ def solid_vpa(a):
     """V/atom of the H(hper)O crystal at (T, P): the DFT EOS of that composition if the inventory has it, else ideal mixing of the DFT H2O crystal (3 atoms/formula) and the DFT pure-H fluid
     (n = hper - 2 added H per O). Excess volume is neglected: with the PdV_excess of about 0.1-0.2 A^3 per added H (docs/mixing_pv.py) the pressure error is below 1 GPa for a few added H in 108 O,
     and the free energy error is second order in it."""
+    eos = import_module("17_eos_md")
     try:
         return eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper)[0]
     except SystemExit:
