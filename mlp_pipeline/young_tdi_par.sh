@@ -12,6 +12,7 @@
 # ADD LAMBDA VALUES to a finished Gauss-Legendre run without repeating it: Gauss-Kronrod keeps the old values and adds ngauss+1 new ones (all 2*ngauss+1 are then integrated, and |K - G| estimates the quadrature error).
 #   e.g. an 8-value run -> 17:  ONLYNODES="8 9 10 11 12 13 14 15 16" RULE=gk NGAUSS=8 NODES=17 <same T P HPER NATOMS PS EQUIL CHUNK DT as the original run> bash mlp_pipeline/young_tdi_par.sh fcc   (same tag; the old node files are kept)
 # WARM START: INIT=<extxyz> starts every lambda point from the last frame of that trajectory (e.g. INIT=runs/tdi/fcc_500GPa_6000K_node16_traj.extxyz, same system), and OUTDIR=runs/tdi_warm writes to a separate folder (summarize.py scans runs/tdi*; run it on that folder alone to keep warm and cold runs apart).
+# HOT=0.5 (HOTT=12000): liquid only: heat every lambda to HOTT K for HOT ps before the equilibration, so the fcc start melts also below the melting temperature
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
@@ -33,7 +34,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}"
+COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
 if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi

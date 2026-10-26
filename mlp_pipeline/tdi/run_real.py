@@ -44,7 +44,7 @@ class LambdaRun:
         rng = np.random.default_rng(seed)
         MaxwellBoltzmannDistribution(self.at, temperature_K=T, rng=rng)
         self.at.set_momenta(self.at.get_momenta(), apply_constraint=True)
-        self.dyn = Langevin(self.at, dt * units.fs, temperature_K=T, friction=1.0 / (tau * units.fs), fixcm=False, rng=rng)
+        self.dyn = Langevin(self.at, dt * units.fs, temperature_K=T, friction=1.0 / (tau * units.fs), fixcm=False, rng=rng); self.hot, self._tau, self._rng = None, tau, rng
         self.ndof = self.at.get_number_of_degrees_of_freedom(); self.started = False; self.steps = 0; self.t0 = time.time()
 
     def _rec(self):
@@ -72,6 +72,8 @@ class LambdaRun:
 
     def start(self):
         """equilibration (nothing recorded), then attach the recorder"""
+        if self.hot:   # liquid at low T: heat to hot_T for hot_steps so that the lattice start melts (superheated crystal otherwise), then equilibrate at T as usual
+            Langevin(self.at, self.dt * units.fs, temperature_K=self.hot[0], friction=1.0 / (self._tau * units.fs), fixcm=False, rng=self._rng).run(self.hot[1])
         self.dyn.run(self.equil); self.dyn.attach(self._rec, interval=self.every); self.started = True
 
     def advance(self, n):
@@ -402,6 +404,7 @@ def run_node(c, st, k):
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     if c.get("init_pos") is not None:
         r.at.set_positions(c["init_pos"])
+    if a.hot_ps > 0 and a.phase == "liquid": r.hot = (a.hot_T, c["steps"](a.hot_ps))
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
     def pfn(at, T):   # MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs
         b = at.copy(); b.calc = c["calc"]; sg = b.get_stress(voigt=True)
@@ -469,6 +472,7 @@ if __name__ == "__main__":
     ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
     ap.add_argument("--ps", type=float, default=4.0, help="production per lambda node"); ap.add_argument("--chunk-ps", type=float, default=0.5)
+    ap.add_argument("--hot-ps", type=float, default=0.0, help="liquid phase: first heat every lambda to --hot-T for this long so the lattice start melts, then equilibrate at T"); ap.add_argument("--hot-T", type=float, default=12000.0)
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
