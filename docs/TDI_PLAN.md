@@ -58,7 +58,7 @@ Fallback if the lambda -> 0 end is unphysical: add a short-range repulsive wall 
 Choose k in U_E from the real <u^2> of O at lambda = 1 (k = 3 kT / <u^2>) so Stage 2 is flat; Einstein k does not change the final F, only the noise.
 Closed forms to implement (and unit-test against the harmonic limit): F_E, F_ig(H) with the exact ln N!, the fixed-centre-of-mass correction for Stage 1/2 (we run momentum-conserving MD),
 and the classical nuclei assumption (nuclear quantum effects for H at these T, P are ignored in both phases - state this in any result).
-Cost (guess; measure ms/step first): 0.2 s/step at about 750 atoms, so 5 ps per lambda point = 10000 steps about 0.5 h; 2 stages x about 12 points x 2 phases = 48 points about 24 GPU-hours plus Step A. Use a Slurm array, one GPU per lambda point.
+Cost: MEASURED 172 ms/step for 384 atoms on an A100 (GRACE-2L medium fine-tune, 0.5 fs) = 10.5 ps/h = 250 ps/day. If cost scales about linearly with atoms (not measured), 750 atoms is about 0.34 s/step = 5 ps/h, so 5 ps per lambda point = 1 h; 2 stages x about 12 points x 2 phases = 48 points about 48 GPU-hours plus Step A. With the DFT-sized cells (324/384 atoms) it is half of that. Use a Slurm array, one GPU per lambda point.
 
 ## Accuracy: what this can and cannot settle today
 - The fcc-bcc free-energy difference in the literature is small (a few meV/atom class; unverified, check the papers). Our fine-tune had energy MAE 10-70 meV/atom on 30 frames. The h2o data from Perlmutter very probably already contains fcc and bcc superionic runs (e.g. 3000 K; at 5000 K a mix of solid and liquid branches depending on P) but they are not labelled yet: run `mlp_pipeline/16_phase_census.py` and `09_label_phase.py` to count them.
