@@ -20,7 +20,7 @@ main() {
 SNAP=runs/code/$(date +%Y%m%d_%H%M%S)_$$; mkdir -p $SNAP && cp -r mlp_pipeline $SNAP/ && CODE=$SNAP/mlp_pipeline; export H3O_RUNS=$PWD/runs; export H3O_GIT=$(git rev-parse HEAD 2>/dev/null)$(git diff --quiet 2>/dev/null || echo "+local")
 PH=${1:?bcc, fcc, liquid, insert or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; NGHOST=${NGHOST:-1}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test
-TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h${HPER}o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
+TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h$(printf %g "$HPER")o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)
 # Einstein constant k (eV/A^2): scaled guess unless K is given (k only sets the efficiency, not the result): measured 12.2 (bcc) / 22.0-22.8 (fcc) at 400 GPa 3000 K, 12.8 (bcc) at 5000 K, 7.9 (bcc) at 200 GPa; k ~ P^0.6.
 # K=0 measures it with a lambda=1 run instead (about 6 min; also prints MLP pressure and O structure).
