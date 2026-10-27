@@ -72,7 +72,7 @@ Status words: DONE (results seen), RUNNING, PENDING, UNKNOWN (never reported bac
 | 10-27 | 115899 | tdihcp 11 tasks (submitted with submit.sh, first entry of runs/JOBS_LOG.tsv) | PENDING |
 | 10-27 | 115892, 115952 | interactive bash jobs (the two allowed) | RUNNING |
 | 10-27 12:20 | - | last 3 days finished (sacct): about 265 GPU-h: meltcomp 54 tasks 67, eosscan 33 tasks 36 (RESULTS NOT ANALYSED YET: 22_eos_summary.py), tdiprep 14 tasks 26, tdiins 29 tasks 29, tdiliq 37 ok / 47 FAILED, tdilong 14, bash/interactive 41 | |
-| 10-27 12:20 | - | tdiliq 47 FAILED = the 28 expected (4000 K: hull EOS covers 5000-9000 K only) + 19 UNEXPLAINED (check slurm_tdiliq_115476_*.out) | |
+| 10-27 12:40 | - | tdiliq 47 FAILED explained: 24 = H2.5O and H4O have no column in the hull EOS sheet (every P,T); 16 = 4000 K (hull EOS covers 5000-9000 K); rest unclear. Also 300 GPa h3o/h5o and pure H 300 GPa ran with a CLIPPED volume (P_hi 319-346 instead of 300): second-order G bias about 2-8 meV/atom. Fix pushed: hull_vpa interpolates the missing compositions linearly in H per O (5000-6000 K only); 4000 K and 300 GPa need MLP volumes from eosmap | |
 | 10-27 12:20 | - | pending total estimate about 1000 GPU-h (tdifb 330-430, tdiins about 200, tdiend about 150, eosmap 77, meltcomp 56, tdiliq 60, tdiprep 47, tdihcp 28, tdidil 21) | |
 
 ## Things to check first in a new chat
