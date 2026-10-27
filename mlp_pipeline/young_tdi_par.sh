@@ -17,7 +17,7 @@
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
-# env knobs: BULK (bulk modulus GPa, insert with VPA) HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
+# env knobs: SEED (MD seed; not in the tag: use another OUTDIR) BULK (bulk modulus GPa, insert with VPA) HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
 # Design: the code is copied to runs/code/<time>_<pid> at launch and every process runs from that snapshot, and the body is one function parsed before it runs,
@@ -36,7 +36,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL ${BULK:+--bulk-gpa $BULK }--phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${HOSTPHASE:+--host-phase $HOSTPHASE} ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
+COMMON="$MODEL ${BULK:+--bulk-gpa $BULK }--phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${HOSTPHASE:+--host-phase $HOSTPHASE} ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${SEED:+ --seed $SEED}${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 TAGNAME=$($PY $CODE/tdi/run_real.py $COMMON --print-tag 2>/dev/null | tail -n1)   # the tag of the files run_real.py writes (one definition: make_tag)
 [ -n "$TAGNAME" ] || { echo "cannot build the run tag ($PY $CODE/tdi/run_real.py ... --print-tag failed)"; exit 1; }
