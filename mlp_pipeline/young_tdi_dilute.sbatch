@@ -13,11 +13,11 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
 #SBATCH --time=08:00:00
-#SBATCH --array=0-7%4
+#SBATCH --array=0-6%4
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
 ARRAY_KEEP="PS"; . mlp_pipeline/array_env.sh
-DEFAULT="500 6000 2;500 6000 5;500 6000 11;500 5500 5;500 5500 11;400 5000 5;400 5000 11;500 6000 27"
+DEFAULT="500 6000 2;500 6000 5;500 6000 11;500 5500 5;500 5500 11;400 5000 5;400 5000 11"
 IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"
 I=${SLURM_ARRAY_TASK_ID:-0}; read -r P T NH <<< "${TABLE[$I]}"
 [ -n "$NH" ] || { echo "no table entry for array task $I"; exit 2; }
