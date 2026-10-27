@@ -22,7 +22,8 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
 . mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 DEFAULT="400 5000 2;400 5000 4;400 6500 1;400 6500 2;400 6500 4;500 5000 1;500 5000 2;500 5000 4;500 7000 1;500 7000 2;500 7000 4"
 IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"
-I=${SLURM_ARRAY_TASK_ID:-0}; read -r P T N <<< "${TABLE[$I]}"
+I=${SLURM_ARRAY_TASK_ID:-0}; read -r P T N R <<< "${TABLE[$I]}"   # optional 4th field R = NREP of the host cell (3 = default 108 O; 2 = 32 O; 4 = 256 O): other sizes go to runs/tdi_ins_rep<R> (the insert tag has no size in it)
 [ -n "$N" ] || { echo "no table entry for array task $I"; exit 2; }
-echo "== task $I: insert n=$N at $P GPa, $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
-NGHOST=$N P=$P T=$T NODES=${NODES:-10} NPAR=${NPAR:-10} DT=${DT:-0.5} EQUIL=${EQUIL:-0.5} PS=${PS:-8} CHUNK=0.5 bash mlp_pipeline/young_tdi_par.sh insert
+echo "== task $I: insert n=$N, host NREP ${R:-3} at $P GPa, $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
+SIZE=(); [ -n "$R" ] && [ "$R" != 3 ] && SIZE=(NREP=$R OUTDIR=runs/tdi_ins_rep$R)
+env "${SIZE[@]}" NGHOST=$N P=$P T=$T NODES=${NODES:-10} NPAR=${NPAR:-10} DT=${DT:-0.5} EQUIL=${EQUIL:-0.5} PS=${PS:-8} CHUNK=0.5 bash mlp_pipeline/young_tdi_par.sh insert
