@@ -58,6 +58,22 @@ Status words: DONE (results seen), RUNNING, PENDING, UNKNOWN (never reported bac
 | 10-27 | (interactive) | insp0 test on insert_400GPa_5000K_n2 | DONE: correction -40.6 +- 9.1 meV per H |
 | 10-27 | ? | tdiins JOBS="500 6000 4;500 6000 11;500 6000 27" PS=10 NODES=12 | SUBMITTED by the user (job id not reported) |
 | 10-27 | - | tdiend PS=12; tdiliq PLIST=400 TLIST="5500 6000" --array=6,13 (pure H); tdiliq PLIST="400 500" TLIST="5500 6500" PS=4; tdiins JOBS with n = 2, 8, 16, 54 and NREP 2/4 at 500/6000; tdiins T/P table (n = 4, 12); insp0 full set; tdifs; tdifb; tdidil; eosmap; meltcomp 9-composition tables; bcc-host insertion table (6 tasks); tdihcp | PROPOSED (status UNKNOWN: ask the user / read JOBS_LOG.tsv) |
+| 10-27 | 115854 | tdifb (fcc/bcc scan, 95 tasks, PS 8) | PENDING (all 95), as of 12:20 |
+| 10-27 | 115855 | tdiliq PLIST="400 500" TLIST="5500 6500" (28 tasks) | PENDING |
+| 10-27 | 115857 | tdiend (37 end-member tags, PS 12) | PENDING |
+| 10-27 | 115858 | tdiliq tasks 6,13 = pure H at 400 GPa 5500/6000 K | PENDING |
+| 10-27 | 115860 | tdiins 6 tasks: 500/6000 n = 2, 8, 16, 54 and n=4 in 32-O / 256-O hosts | PENDING |
+| 10-27 | 115861 | tdiins 13 tasks: T/P table n = 4, 12 (300-500 GPa, 3000-7000 K) | PENDING |
+| 10-27 | 115862 | insp0 (pressure correction for existing insertion tags); one task was cancelled | PENDING |
+| 10-27 | 115863 | tdidil 7 tasks (H2.02-2.10O) | PENDING |
+| 10-27 | 115887 | eosmap 77 tasks | PENDING |
+| 10-27 | 115888, 115889 | meltcomp 27-task (300-500 GPa) and 18-task (100/200 GPa) 9-composition tables | PENDING |
+| 10-27 | 115894-115897 | four small tdiins arrays (1, 1, 2, 4 tasks): not identified (bcc-host test and table?) | PENDING |
+| 10-27 | 115899 | tdihcp 11 tasks (submitted with submit.sh, first entry of runs/JOBS_LOG.tsv) | PENDING |
+| 10-27 | 115892, 115952 | interactive bash jobs (the two allowed) | RUNNING |
+| 10-27 12:20 | - | last 3 days finished (sacct): about 265 GPU-h: meltcomp 54 tasks 67, eosscan 33 tasks 36 (RESULTS NOT ANALYSED YET: 22_eos_summary.py), tdiprep 14 tasks 26, tdiins 29 tasks 29, tdiliq 37 ok / 47 FAILED, tdilong 14, bash/interactive 41 | |
+| 10-27 12:20 | - | tdiliq 47 FAILED = the 28 expected (4000 K: hull EOS covers 5000-9000 K only) + 19 UNEXPLAINED (check slurm_tdiliq_115476_*.out) | |
+| 10-27 12:20 | - | pending total estimate about 1000 GPU-h (tdifb 330-430, tdiins about 200, tdiend about 150, eosmap 77, meltcomp 56, tdiliq 60, tdiprep 47, tdihcp 28, tdidil 21) | |
 
 ## Things to check first in a new chat
 1. `bash mlp_pipeline/jobs_status.sh` (what is running / finished / failed, GPU hours per job name).
