@@ -43,9 +43,13 @@ for el, R in rows.items():
     print(f"\nproton at r from a host {el} atom ({len(R)} probes): r (A), dU median, min, max (eV)")
     for j, r in enumerate(a.r):
         print(f"  {r:4.2f}  {np.median(R[:, j]):10.3f} {R[:, j].min():10.3f} {R[:, j].max():10.3f}")
-    ref = np.median(R[:, a.r.index(1.0)]) if 1.0 in a.r else np.median(R[:, -1])
-    holes = int((R[:, [j for j, r in enumerate(a.r) if r <= 0.6]].min(1) < ref).sum())
-    print(f"  probes with dU(r <= 0.6 A) below the median dU at 1.0 A ({ref:.3f} eV): {holes} of {len(R)}" + ("   <- NOT REPULSIVE AT SHORT RANGE" if holes else ""))
+    kt = 8.617333262e-5 * st["T"]; js = [j for j, r in enumerate(a.r) if r <= 0.6]; jp = [j for j, r in enumerate(a.r) if 0.85 <= r <= 1.25]
+    low_short = float(R[:, js].min()); low_phys = float(R[:, jp].min()) if jp else float("nan")
+    mono = int(np.sum(np.any(np.diff(R[:, js], axis=1) > 0, axis=1)))   # dU must fall as r grows inside 0.6 A
+    gap = (low_short - low_phys) / kt
+    print(f"  lowest dU at r <= 0.6 A: {low_short:.3f} eV; lowest at 0.85-1.25 A (where protons sit): {low_phys:.3f} eV; gap {gap:+.1f} kT;"
+          f" probes not monotonically repulsive inside 0.6 A: {mono} of {len(R)}"
+          + ("   <- HOLE: short-range states compete with physical sites (gap < 3 kT)" if gap < 3 or mono else "   (repulsive enough: short range not visited at lambda = 1)"))
 u = np.array(uni)
 print(f"\nuniform random points ({len(u)}): dU median {np.median(u):.3f}, mean {u.mean():.3f}, min {u.min():.3f}, max {u.max():.3f} eV; fraction below 0: {np.mean(u < 0):.2f}")
 if a.widom and st["phase"] == "insert":

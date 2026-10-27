@@ -92,3 +92,28 @@ if a.o:
     for ext in ("pdf", "png"):
         fig.savefig(f"{a.o}.{ext}", dpi=150, bbox_inches="tight")
     print(f"wrote {a.o}.pdf / .png")
+
+# dynamic stability of the host WITH the added H: the largest-lambda node is (almost) free full-MLP MD of host + n H with untethered O (no springs, no fixed centre of mass),
+# i.e. an NVT stability run of composition H(2+n/nO)O at the host volume. Same verdict rule as the free-NVT scans (tdi/verdict.py); short runs cannot exclude superheating.
+if st.get("nO"):
+    from importlib import import_module
+    from tdi.verdict import verdict
+    k = int(np.argmax(lam)); frames = read(f"{a.run}_node{k}_traj.extxyz", index=":"); Z = frames[0].numbers; iO = np.where(Z[:len(Z) - ng] == 8)[0]
+    t = np.array([fr.info.get("t_ps", np.nan) for fr in frames], float)
+    if not np.all(np.isfinite(t)):
+        t = np.arange(len(frames)) * (A["chunk_ps"] if len(frames) < 2 else float("nan"))
+    P0 = np.array([fr.positions[iO] for fr in frames]); P0 = P0 - P0.mean(1, keepdims=True)   # O centre of mass removed (MD positions are unwrapped)
+    h = len(P0) // 2; O = P0[h:]; mean = O.mean(0)
+    msd = ((P0 - P0[0]) ** 2).sum(-1).mean(1); ok = np.isfinite(t)
+    D_O = float(np.polyfit(t[ok][h:], msd[ok][h:], 1)[0] * 1e-4) if ok.sum() > h + 2 else float("nan")   # A^2/ps -> cm^2/s
+    hp = A.get("host_phase") or "fcc"
+    try:
+        lab, c1, c2, d1 = import_module("09_label_phase").o_structure(mean, frames[0].cell.array)
+    except Exception as ex:
+        lab, d1 = f"unknown ({type(ex).__name__})", float(np.sort(get_distances(mean[:1], mean[1:], cell=frames[0].cell, pbc=True)[1][0])[0])
+    dl = float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1)
+    v = verdict(dict(phase=hp, O_struct=lab, D_O_cm2s=D_O, delta_L=dl))
+    nO = len(iO); x = (int(st.get("nH", 0)) - 2 * nO) / nO if nO else float("nan")
+    print(f"\nhost stability at the largest lambda ({lam[k]:.3f}): composition H{2 + x:.3f}O ({ng} added H on {nO} O), {len(frames)} frames over {np.nanmax(t) - np.nanmin(t):.2f} ps: "
+          f"O sublattice '{lab}', Lindemann delta_L {dl:.3f}, D_O {D_O:.1e} cm2/s, O MSD at the end {msd[-1]:.2f} A^2 -> {v.upper()}"
+          + ("" if v == "solid" else "  (the insertion then describes a melting/molten host: not a solid-solution chemical potential)"))

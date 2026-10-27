@@ -6,11 +6,13 @@
 #  1. node_stats.py: per lambda value, mean / error / median / max, share of the sum carried by the top 1% of samples (heavy tail), drift between halves, contribution
 #     to G, closest H-H / H-O contacts: is the small-lambda end converged, and where does the integral come from?
 #  1b. mu_breakdown.py: mu_H - G_H split into reference pieces, the TDI integral by lambda range (with its drift) and the pressure correction; figure runs/checks/..._mu.pdf.
-#  1c. ghost_rdf.py: g(r) of the inserted proton to host O and H for every lambda, overlap fraction, comparison with the host protons at the largest lambda.
+#  1c. ghost_rdf.py: g(r) of the inserted proton to host O and H for every lambda, overlap fraction, comparison with the host protons at the largest lambda,
+#      and the dynamic stability (solid / marginal / melted) of the host + n H at the largest lambda (free MD, O untethered).
 #  2. collect.py: G versus simulation time of the insertion runs.
 #  3. short_range.py: energy cost of an extra proton at 0.1-1.2 A from host O and H atoms and at uniform random points (the lambda -> 0 integrand), on frames of
 #     an insertion run and of the H2.25O crystal: is the MLP repulsive at short range? ('NOT REPULSIVE AT SHORT RANGE' = the free energies are not trustworthy);
-#     plus, for insertion runs, a Widom test-particle estimate of mu_ex and the insertion 'acceptance' (WIDOM points per frame) to compare with the TDI integral.
+#  4. pair_scan.py: isolated dimers H-H, O-H, O-O (MODEL, default grace-ft:runs/grace/ft_m2): monotonic core repulsion? soft core vs ZBL?
+#     plus (step 3), for insertion runs, a Widom test-particle estimate of mu_ex and the insertion 'acceptance' (WIDOM points per frame) to compare with the TDI integral.
 # Every tag is looked up in runs/tdi_long and runs/tdi (both are reported when both exist).
 main() {
 PY=${PY:-$HOME/grace-venv/bin/python}; FRAMES=${FRAMES:-5}; DIRS=${DIRS:-20}; UNIFORM=${UNIFORM:-200}; WIDOM=${WIDOM:-200}
@@ -35,6 +37,8 @@ for t in $PROBE; do
   [ -n "$d" ] || { echo "-- $t: not found"; continue; }
   echo "-- $d/$t"; $PY -u mlp_pipeline/tdi/short_range.py $d $t --frames $FRAMES --dirs $DIRS --uniform $UNIFORM --widom $WIDOM 2>&1 | grep -vE "tensorflow|XLA|cuda|absl|E0000|W0000|I0000|ptxas|^$"
 done
+echo; echo "== 4. 1D pair scan of the model: isolated H-H, O-H, O-O dimers (repulsive by construction?) -> ${LOG%.txt}_pairs.pdf/.png"
+MODEL_SPEC=${MODEL:-grace-ft:runs/grace/ft_m2}; $PY -u mlp_pipeline/tdi/pair_scan.py $MODEL_SPEC -o ${LOG%.txt}_pairs 2>&1 | grep -vE "tensorflow|XLA|cuda|absl|E0000|W0000|I0000|ptxas|^$"
 echo; echo "== done $(date)"
 } 2>&1 | tee $LOG
 echo "wrote $LOG"
