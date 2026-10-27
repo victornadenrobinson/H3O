@@ -8,6 +8,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 from tdi.gcalc import G_from_nodes
+from tdi.verdict import verdict
 
 ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None)
 ap.add_argument("--discard", type=float, default=0.0, help="discard this fraction of the start of every lambda series before integrating (e.g. 0.5 = use the second half only): a direct test of equilibration / convergence of every table below"); a = ap.parse_args()
@@ -95,16 +96,15 @@ def _nvt_table():
             except Exception: continue
             for _, r in t.iterrows():
                 if r.get("branch", "solid") != "solid" or r.get("phase") not in ("fcc", "bcc") or "T_set" not in r or "P_GPa" not in r: continue
-                dl, do = r.get("delta_L", np.nan), r.get("D_O_cm2s", np.nan); keep = (r.get("O_struct") == r["phase"]) and bool(np.isfinite(do) and do < 1e-5)
                 pt = r.get("P_target", np.nan)
                 out.append(dict(hold=float(r["hold_O_ps"]) if np.isfinite(r.get("hold_O_ps", np.nan)) else 0.0, phase=r["phase"], hper=float(r["hper"]) if np.isfinite(r.get("hper", np.nan)) else 2.0, T=float(r["T_set"]), P=float(pt) if np.isfinite(pt) else float(r["P_GPa"]), exact=bool(np.isfinite(pt)),
-                                v="solid" if keep and dl < 0.2 else "marginal" if keep and dl < 0.5 else "melted"))
+                                v=verdict(r)))
     return pd.DataFrame(out, columns=["hold", "phase", "hper", "T", "P", "exact", "v"])
 NVT = _nvt_table()
 def nvt_flag(phase, h, P, T):
     """text for the notes column: free NVT verdict of this crystal at (P, T), or 'not NVT-checked'"""
     g = NVT[(NVT.phase == phase) & ((NVT.hper - h).abs() < 0.02) & (NVT["T"] == T) & (((NVT.P - P).abs() <= 2) | (~NVT.exact & ((NVT.P - P).abs() <= 0.1 * P)))] if len(NVT) else NVT
-    lab = f"H{h:g}O"
+    lab = f"H{h:g}O"; g = g[g.v != "unknown"] if len(g) else g   # too short to judge: as if not checked
     if not len(g): return f"{lab} not NVT-checked"
     nm = int((g.v == "melted").sum()); ng = int((g.v == "marginal").sum())
     if not (nm or ng): return ""

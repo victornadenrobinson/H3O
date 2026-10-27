@@ -1,11 +1,13 @@
 """P-T map of every simulation we have, one panel per composition (H per O; pure H), as a standalone SVG (no matplotlib).
 usage (repo root):  ~/grace-venv/bin/python mlp_pipeline/tdi/plot_pt.py [-o runs/pt_map.svg]
 Sources: TDI runs (runs/tdi*/*_stage0.json: filled symbols, shape by phase: fcc square, bcc triangle, liquid circle, pure H diamond, insertion cross-hair circle; plotted at the target pressure) and free NVT runs written by 17_eos_md.py
-(runs/melt_tdi, runs/melt, runs/eos_scan: rings; plotted at the MLP pressure measured in the run). Free-NVT verdict (same rule as 21_melt_summary.py, three-way): solid = O lattice kept (fcc label, Lindemann ratio < 0.2, D_O < 1e-5 cm2/s),
-marginal = lattice kept but 0.2 <= ratio < 0.5, melted = anything else on the solid branch; liquid branch: liquid = melted, 'not melted' = the pre-melting step failed. Hover a symbol for its details."""
-import argparse, glob, json, os, re
+(runs/melt_tdi, runs/melt, runs/eos_scan: rings; plotted at the MLP pressure measured in the run). Free-NVT verdict (tdi/verdict.py, shared with melt_table.py, summarize.py, 21_melt_summary.py): solid = O lattice kept (fcc label, Lindemann ratio < 0.2, D_O < 1e-5 cm2/s),
+marginal = lattice kept but 0.2 <= ratio < 0.5, melted = anything else on the solid branch, unknown = too few frames for D_O / delta_L; liquid branch: liquid = melted, 'not melted' = the pre-melting step failed. Hover a symbol for its details."""
+import argparse, glob, json, os, re, sys
 import numpy as np
 import pandas as pd
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tdi.verdict import verdict   # the one free-NVT rule (also melt_table.py, summarize.py, 21/22 summaries)
 
 ap = argparse.ArgumentParser(); ap.add_argument("-o", default="runs/pt_map.svg"); ap.add_argument("--ncol", type=int, default=3)
 ap.add_argument("--si-D", type=float, default=1e-4, help="free-NVT solid O lattice with D_H above this (cm2/s) is shaded superionic (assumed threshold, not derived)")
@@ -20,13 +22,6 @@ for d in sorted(glob.glob("runs/tdi*")):
         if not glob.glob(os.path.join(d, f"{tag}_node*.npy")): continue
         h = "pure H" if st["phase"] == "H" else float(st.get("args", {}).get("hper", 2.0))
         pts.append(dict(src="tdi", kind=st["phase"], comp=h, P=float(st["P_target"]), T=float(st["T"]), label=f"TDI {tag} ({os.path.basename(d)}), N {st['N']}"))
-def verdict(r):
-    if r.get("phase") == "H": return "fluid"
-    lab = r.get("O_struct"); dl = r.get("delta_L", np.nan); do = r.get("D_O_cm2s", np.nan); ph = r.get("phase", "fcc")
-    keep = (lab == ph) and (do < 1e-5 if np.isfinite(do) else False)
-    solid = keep and dl < 0.2; marg = keep and 0.2 <= dl < 0.5
-    if r.get("branch", "solid") == "liquid": return "not melted" if (solid or marg) else "liquid"
-    return "solid" if solid else "marginal" if marg else "melted"
 for d in ("runs/melt_tdi", "runs/melt", "runs/melt_comp", "runs/eos_scan"):
     for f in sorted(glob.glob(os.path.join(d, "*.csv"))):
         try: t = pd.read_csv(f)
@@ -40,8 +35,8 @@ if not pts: raise SystemExit("no runs found (run from the repo root)")
 order = sorted({p["comp"] for p in pts}, key=lambda c: (1e9 if c == "pure H" else c))
 SH = {"fcc": "sq", "bcc": "tri", "liquid": "circ", "H": "dia", "insert": "circx"}
 COL = {"fcc": "var(--c1)", "bcc": "var(--c2)", "liquid": "var(--c3)", "H": "var(--c4)", "insert": "var(--c5)",
-       "solid": "var(--c1)", "marginal": "var(--warn)", "melted": "var(--bad)", "liquid_n": "var(--c3)", "fluid": "var(--c4)", "not melted": "var(--c5)"}
-NV = {"solid": "o", "marginal": "dia", "melted": "x", "liquid": "o", "fluid": "o", "not melted": "x"}
+       "solid": "var(--c1)", "marginal": "var(--warn)", "melted": "var(--bad)", "liquid_n": "var(--c3)", "fluid": "var(--c4)", "not melted": "var(--c5)", "unknown": "var(--ink2)"}
+NV = {"solid": "o", "marginal": "dia", "melted": "x", "liquid": "o", "fluid": "o", "not melted": "x", "unknown": "dia"}
 PW, PH = 330, 250; GX, GY = 24, 50; M = 24; ncol = a.ncol; nrow = (len(order) + ncol - 1) // ncol; W = 2 * M + ncol * (PW + GX); H = 150 + nrow * (PH + GY)
 def nice(lo, hi, steps=(50, 100, 200, 250, 500, 1000, 2000)):
     st = next((q for q in steps if (hi - lo) / q <= 6), steps[-1]); return st, np.floor(lo / st) * st, np.ceil(hi / st) * st
@@ -64,8 +59,9 @@ def mark(kind, x, y, col, fill=True, r=5.5, title=""):
     return f'{m}><title>{title}</title></' + ("rect" if kind == "sq" else "circle" if kind in ("circ", "circx", "o") else "path") + '>'
 ly = 66; lx = M
 for lab, kind, col, fl in (("TDI fcc", "sq", "var(--c1)", True), ("TDI bcc", "tri", "var(--c2)", True), ("TDI liquid", "circ", "var(--c3)", True), ("TDI pure H", "dia", "var(--c4)", True), ("TDI insertion", "circx", "var(--c5)", True),
-                           ("NVT solid", "o", "var(--c1)", False), ("NVT marginal", "dia", "var(--warn)", False), ("NVT melted", "x", "var(--bad)", False), ("NVT liquid branch", "o", "var(--c3)", False), ("NVT pure H", "o", "var(--c4)", False)):
+                           ("NVT solid", "o", "var(--c1)", False), ("NVT marginal", "dia", "var(--warn)", False), ("NVT melted", "x", "var(--bad)", False), ("NVT liquid branch", "o", "var(--c3)", False), ("NVT pure H", "o", "var(--c4)", False), ("NVT too short", "dia", "var(--ink2)", False)):
     s.append(mark(kind, lx + 7, ly, col, fl, 5) + f'<text x="{lx + 17}" y="{ly + 4}">{lab}</text>'); lx += 118 if lx < 600 else 126
+    if lx > W - 130: lx, ly = M, ly + 18   # wrap: the legend is wider than one panel row
     if lx > W - 140: lx = M; ly += 22
 for i, c in enumerate(order):
     cx = M + (i % ncol) * (PW + GX); cy = 150 + (i // ncol) * (PH + GY) + 6; X = lambda p: cx + 36 + (p - X0) / (X1 - X0) * (PW - 46); Y = lambda t: cy + PH - 28 - (t - Y0) / (Y1 - Y0) * (PH - 40)

@@ -122,6 +122,81 @@ def meta():
     return dict(git=git, host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
 
 
+def write_json(path, d):
+    """atomic json write (a reader or a kill mid-write never sees a truncated file)"""
+    with open(path + ".tmp", "w") as fh:
+        json.dump(d, fh, indent=1)
+    os.replace(path + ".tmp", path)
+
+
+def stage0_path(c):
+    return os.path.join(c["a"].outdir, f"{c['tag']}_stage0.json")
+
+
+def check_stage0_compatible(c, kE):
+    """refuse to rewrite <tag>_stage0.json with settings that would mix samples: when node files of this tag exist, the old json must have the same sample-defining settings
+    (dt, chunk, sampling interval, model, cell, composition, T, P, V, Einstein k) and lambda values that the new ones only extend (Gauss -> Gauss-Kronrod keeps the old values first).
+    kE None = k is measured by this stage 0 (not compared). --fresh skips the check (its files are deleted anyway)."""
+    a = c["a"]; f = stage0_path(c)
+    if a.fresh or not os.path.exists(f):
+        return
+    import glob
+    if not glob.glob(os.path.join(a.outdir, f"{c['tag']}_node*.npy")) and not glob.glob(os.path.join(a.outdir, f"{c['tag']}_node*_state.npz")):
+        return
+    old = json.load(open(f)); A, now = old.get("args", {}), vars(a)
+    def differ(x, y):
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)) and not isinstance(x, bool):
+            return abs(float(x) - float(y)) > 1e-9 * max(1.0, abs(float(y)))
+        return x != y
+    bad = [f"{k} {A[k]!r} -> {now[k]!r}" for k in ("dt", "every", "chunk_ps", "model", "hper", "nghost", "natoms", "nrep", "tau") if k in A and differ(A[k], now[k])]
+    bad += [f"{k} {old[k]!r} -> {v!r}" for k, v in (("T", a.T), ("P_target", a.P), ("V", c["V"])) if k in old and differ(old[k], v)]
+    if kE is not None and "kE" in old and differ(old["kE"], kE):
+        bad.append(f"Einstein k {old['kE']!r} -> {kE!r}")
+    try:
+        lam_old = analyze.rule_nodes(A)[0]
+        if len(c["lam"]) < len(lam_old) or not np.allclose(c["lam"][:len(lam_old)], lam_old, rtol=1e-12, atol=0):
+            bad.append(f"lambda values ({A.get('rule') or 'gl'} {A.get('nodes')} -> {a.rule} {a.nodes}: the old values must come first)")
+    except (KeyError, AssertionError):
+        pass
+    if bad:
+        raise SystemExit(f"{f}: node files of {c['tag']} exist and were made with other settings ({'; '.join(bad)}). Not overwriting the json (the samples would be integrated with the wrong settings). "
+                         f"Use the original settings (tdi/extend.py prints them), another OUTDIR, or FRESH=1 to start over.")
+
+
+def mlp_pressure_fn(calc):
+    """f(atoms, T) = MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs"""
+    def pfn(at, T):
+        b = at.copy(); b.calc = calc; sg = b.get_stress(voigt=True)
+        return float(-sg[:3].mean() * EV_A3_GPA + len(at) * units.kB * T / at.get_volume() * EV_A3_GPA)
+    return pfn
+
+
+def free_md_pressure(c, atoms0, seed, label):
+    """mean MLP pressure (GPa) and its 5-block error over a free full-MLP Langevin run of atoms0 at T (no springs, no fixed centre of mass): --equil-ps, then --ps1 of production
+    (one pressure every 20 recorded samples, as in the thermo log)"""
+    a = c["a"]; t0 = time.time()
+    zero = lambda at: (0.0, np.zeros((len(at), 3)))
+    r = LambdaRun(atoms0, {"full": c["full"], "E": zero}, 1.0, a.T, np.array([], dtype=int), a.dt, a.tau, seed, a.every, c["steps"](a.equil_ps))
+    r.pfn = mlp_pressure_fn(c["calc"]); r.advance(c["steps"](a.ps1))
+    p = [x["P_MLP_GPa"] for x in r.thermo]; m, e = stats(p)
+    if not np.isfinite(e):
+        raise SystemExit(f"{label}: only {len(p)} pressure samples in --ps1 {a.ps1} ps (need 25): increase --ps1")
+    print(f"MLP pressure of {label} ({len(atoms0)} atoms; free NVT {a.equil_ps} + {a.ps1} ps): {m:.2f} +- {e:.2f} GPa (target {a.P:g})  {r.diag()}  {(time.time() - t0) / 60:.1f} min", flush=True)
+    return m, e
+
+
+def bulk_modulus(a, eps=0.03):
+    """isothermal bulk modulus B = -V dP/dV (GPa) at (T, P) of the same DFT EOS that gave the volume (central difference of V(P) over P(1 -+ eps)); --bulk-gpa overrides it
+    (and is the only source with --vpa). nan when unavailable (P too close to the edge of the EOS data)."""
+    if a.bulk_gpa:
+        return float(a.bulk_gpa)
+    if a.vpa:
+        return float("nan")
+    v1, v2 = vpa_at(a, a.P * (1 - eps)), vpa_at(a, a.P * (1 + eps))
+    B = -0.5 * (v1 + v2) * 2 * eps * a.P / (v2 - v1) if v2 != v1 else float("nan")
+    return float(B) if np.isfinite(B) and B > 0 else float("nan")
+
+
 def E_component(c, kE):
     """Einstein springs on the O atoms; for pure hydrogen (no O) the reference potential is zero"""
     if c.get("host_idx") is not None:   # insertion: the reference potential is the MLP of the host atoms alone
@@ -209,7 +284,8 @@ def hull_vpa(csv_path, hper, T, P):
     def at(Tc):
         p, v = d[f"P {int(Tc)}K {comp}"], d[f"V {int(Tc)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
         if not p.min() <= P <= p.max():
-            print(f"WARNING: {P} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp} at {Tc} K: volume clipped")
+            print(f"WARNING: {P:g} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp} at {Tc} K")
+            return float("nan")
         return float(np.interp(P, p[o], v[o])) / (1 + hper)
     Ts = [5000, 7000, 9000]
     if T in Ts:
@@ -221,20 +297,34 @@ def hull_vpa(csv_path, hper, T, P):
     return at(lo) + (at(hi) - at(lo)) * (T - lo) / (hi - lo)
 
 
-def solid_vpa(a):
+def vpa_at(a, P):
+    """V/atom (A^3) of this run's system at pressure P from the DFT data: the volume source of setup(), also used for the bulk modulus. nan if P is outside the EOS data."""
+    if a.phase == "H":
+        return h_vpa(a.from_dft, a.T, P)
+    if a.phase == "insert":   # fcc H2O host
+        return import_module("17_eos_md").dft_vpa(a.from_dft, "fcc", a.T, [P], 2.0, min_runs=a.min_runs)[0]
+    if a.phase == "liquid":
+        return hull_vpa(a.hull, a.hper, a.T, P)
+    return solid_vpa(a, P)
+
+
+def solid_vpa(a, P):
     """V/atom of the H(hper)O crystal at (T, P): the DFT EOS of that composition if the inventory has it, else ideal mixing of the DFT H2O crystal (3 atoms/formula) and the DFT pure-H fluid
     (n = hper - 2 added H per O). Excess volume is neglected: with the PdV_excess of about 0.1-0.2 A^3 per added H (docs/mixing_pv.py) the pressure error is below 1 GPa for a few added H in 108 O,
     and the free energy error is second order in it."""
     eos = import_module("17_eos_md")
     try:
-        return eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], a.hper, min_runs=a.min_runs)[0]
-    except SystemExit:
+        v = eos.dft_vpa(a.from_dft, a.phase, a.T, [P], a.hper, min_runs=a.min_runs)[0]
+    except SystemExit:   # no DFT EOS of this composition near this T
         if a.hper <= 2.0:
             raise
-        n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [a.P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, a.P)
-        v = (3 * v_w + n * v_h) / (3 + n)
-        print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase}: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
+        v = float("nan")
+    if np.isfinite(v) or a.hper <= 2.0:   # nan: P outside the EOS data (setup refuses it)
         return v
+    n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, P)
+    v = (3 * v_w + n * v_h) / (3 + n)
+    print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase} at {P:g} GPa: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
+    return v
 
 
 def add_ghosts(host, n, seed=0, dmin=0.75):
@@ -277,21 +367,20 @@ def setup(a):
     eos = import_module("17_eos_md")
     tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
     os.makedirs(a.outdir, exist_ok=True)
+    vpa = a.vpa or vpa_at(a, a.P)
+    if not np.isfinite(vpa):
+        raise SystemExit(f"{a.phase} at {a.P:g} GPa, {a.T:g} K: the target pressure is outside the DFT EOS data (the volume would be clipped to the edge of the data): give --vpa")
     if a.phase == "H":
         a.nrep = a.nrep or 5
-        vpa = a.vpa or h_vpa(a.from_dft, a.T, a.P)
         at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
     elif a.phase == "insert":   # fcc H2O host (volume from the DFT EOS at this T, P) + n ghost protons
         a.nrep = a.nrep or 3
-        vpa = a.vpa or eos.dft_vpa(a.from_dft, "fcc", a.T, [a.P], 2.0)[0]
         host = eos.build("fcc", vpa, a.nrep, a.seed, 2.0); at0 = add_ghosts(host, a.nghost, a.seed + 7)
     elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
         a.nrep = a.nrep or 2
-        vpa = a.vpa or hull_vpa(a.hull, a.hper, a.T, a.P)
         at0 = eos.build("fcc", vpa, a.nrep, a.seed, a.hper)
     else:
         a.nrep = a.nrep or eos.CELL[a.phase][2]
-        vpa = a.vpa or solid_vpa(a)
         at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
     iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
     ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
@@ -328,8 +417,8 @@ def stage0_given_k(c, kE):
     f_kin = refs.kinetic_free_energy([(c["nO"], mO, False), (c["nH"], mH, True)], a.T); PV = a.P / EV_A3_GPA * V
     print(f"lambda=1 run skipped: Einstein k = {kE:.3f} eV/A^2 given; reference pieces (eV): config {f_ref_cons:.3f}  kinetic {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
     d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=float("nan"), O_struct="not checked (k given)", lindemann=float("nan"),
-             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a), meta=meta())
-    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
     return d
 
 
@@ -340,25 +429,53 @@ def stage0_hydrogen(c):
     f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy(species, a.T); PV = a.P / EV_A3_GPA * V
     print(f"fluid {nOr} O + {nH} H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N_O! N_H!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
     d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=nOr, nH=nH, kE=0.0, P_mlp=float("nan"), O_struct="fluid (no lattice)", lindemann=float("nan"),
-             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, args=vars(a), meta=meta())
-    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
     return d
 
 
 def stage0_insert(c):
-    """F(N+n) - F(N) = int <U_full - U_host> dlambda + kT [ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln(Lambda_H);  reported per added H (the json 'N' is the number of ghosts), no P V term:
-    at fixed V this is mu_H of the crystal at its pressure ((dF/dN)_V = (dG/dN)_P)"""
-    a = c["a"]; n = a.nghost; V = c["V"]; kt = c["kt"]; NH = c["nH_host"]
+    """F(N+n) - F(N) = int <U_full - U_host> dlambda + kT [ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln(Lambda_H) is the chemical potential of H in the host at fixed V, i.e. at the MLP
+    pressure of the cell, not at P_target. Correction to P_target (second order in the pressure offsets; exact for F(V) quadratic with one bulk modulus B):
+        G(N+n, P) - G(N, P) = F(N+n, V) - F(N, V) - V / (2 B) [(P_full - P)^2 - (P_host - P)^2]
+    = to first order mu(P) = mu(P_mid) + v_H (P - P_mid), P_mid = (P_host + P_full) / 2, v_H = V (P_full - P_host) / (n B). P_host and P_full are the MLP pressures of the host alone
+    and of host + n H (free full-MLP NVT, --equil-ps + --ps1 each; kept in the json and reused while V, n, T, dt and the model are unchanged); B is the bulk modulus of the DFT EOS
+    that gave V (--bulk-gpa with --vpa). Its error enters G_err. Reported per added H (the json 'N' is the number of ghosts); no P V term (it cancels at equal V)."""
+    a = c["a"]; n = a.nghost; V = c["V"]; kt = c["kt"]; NH = c["nH_host"]; P = a.P
     f_conf = kt * sum(np.log(NH + i) for i in range(1, n + 1)) - n * kt * np.log(V)
     f_kin = refs.kinetic_free_energy([(n, float(c["at0"].get_masses()[-1]), False)], a.T)
     print(f"insertion of {n} H into fcc H2O ({c['nO_real']} O + {NH} H, V = {V:.1f} A^3): reference pieces (eV): configurational {f_conf:.3f}  3 n kT ln Lambda {f_kin:.3f}", flush=True)
-    d = dict(tag=c["tag"], phase="insert", T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=n, N_atoms_total=c["N"], nO=c["nO_real"], nH=NH + n, kE=0.0, P_mlp=float("nan"), O_struct="fcc host + ghosts", lindemann=float("nan"),
-             f_ref_cons_eV=f_conf, f_kin_eV=f_kin, PV_eV=0.0, no_com_term=True, per="added H", args=vars(a), meta=meta())
-    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+    B = bulk_modulus(a)
+    if not np.isfinite(B):
+        raise SystemExit("insertion: no bulk modulus for the pressure correction (P at the edge of the DFT EOS data, or --vpa without --bulk-gpa)")
+    prev = {}
+    if os.path.exists(stage0_path(c)) and not a.fresh:
+        try:
+            prev = json.load(open(stage0_path(c)))
+        except ValueError:
+            prev = {}
+    A0 = prev.get("args", {})
+    keep = (all(np.isfinite(prev.get(k, np.nan)) for k in ("P_host_GPa", "P_host_err_GPa", "P_full_GPa", "P_full_err_GPa")) and abs(prev.get("V", 0.0) - V) <= 1e-9 * V
+            and prev.get("N") == n and prev.get("T") == a.T and A0.get("dt") == a.dt and A0.get("model") == a.model)
+    if keep:
+        Ph, eh, Pf, ef = (float(prev[k]) for k in ("P_host_GPa", "P_host_err_GPa", "P_full_GPa", "P_full_err_GPa"))
+        print(f"MLP pressures kept from {stage0_path(c)}: host {Ph:.2f} +- {eh:.2f}, host + {n} H {Pf:.2f} +- {ef:.2f} GPa", flush=True)
+    else:
+        Ph, eh = free_md_pressure(c, c["at0"][c["host_idx"]], a.seed + 101, "the host alone")
+        Pf, ef = free_md_pressure(c, c["at0"], a.seed + 102, f"host + {n} H")
+    dG = -V / (2 * B) * ((Pf - P) ** 2 - (Ph - P) ** 2) / EV_A3_GPA
+    dGe = V / B * float(np.hypot((Pf - P) * ef, (Ph - P) * eh)) / EV_A3_GPA
+    print(f"pressure correction to P_target {P:g} GPa (B = {B:.0f} GPa, v_H = {V * (Pf - Ph) / (n * B):.3f} A^3): {dG / n * 1e3:.1f} +- {dGe / n * 1e3:.1f} meV per added H", flush=True)
+    d = dict(tag=c["tag"], phase="insert", T=a.T, P_target=P, vpa=c["vpa"], V=V, N=n, N_atoms_total=c["N"], nO=c["nO_real"], nH=NH + n, kE=0.0, P_mlp=Pf, O_struct="fcc host + ghosts", lindemann=float("nan"),
+             f_ref_cons_eV=f_conf, f_kin_eV=f_kin, PV_eV=0.0, no_com_term=True, per="added H", P_host_GPa=Ph, P_host_err_GPa=eh, P_full_GPa=Pf, P_full_err_GPa=ef, B_GPa=B,
+             dG_P_eV=dG, dG_P_err_eV=dGe, args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
     return d
 
 
 def stage0(c):
+    a = c["a"]
+    check_stage0_compatible(c, 0.0 if a.phase in ("insert", "H", "liquid") else a.k)   # before any MD: never rewrite the json of existing samples with other settings
     if c["a"].phase == "insert":
         return stage0_insert(c)
     if c["a"].phase in ("H", "liquid"):
@@ -392,32 +509,90 @@ def stage0(c):
     if lab != a.phase:
         print(f"WARNING: O sublattice is '{lab}', not {a.phase}: the reference lattice does not describe this system")
     d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=P_mlp, O_struct=lab, lindemann=float(np.sqrt(msd) / d1),
-             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, args=vars(a), meta=meta())
-    json.dump(d, open(os.path.join(a.outdir, f"{c['tag']}_stage0.json"), "w"), indent=1)
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
     return d
 
 
+SLURM_ENDED = {"COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE", "SPECIAL_EXIT", "REVOKED"}
+
+
+def _lock_holder_alive(old):
+    """is the process that wrote lock text `old` ('<host> job <id> pid <pid> <date>') still running? Same host: ask the OS about the pid (definite). Other host: ask Slurm about
+    the job (pending / running / completing = alive; ended or unknown id = dead; squeue unusable = assume alive). No job id from another host: assume alive."""
+    import socket, subprocess
+    f = old.split()
+    host = f[0] if f else ""; jid = f[f.index("job") + 1] if "job" in f[:-1] else "-"; pid = f[f.index("pid") + 1] if "pid" in f[:-1] else ""
+    if host == socket.gethostname() and pid.isdigit():
+        try:
+            os.kill(int(pid), 0); return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    if jid in ("-", ""):
+        return True
+    if jid == os.environ.get("SLURM_JOB_ID"):   # this same job on another node or after a requeue: an earlier incarnation (a node runs once per job)
+        return False
+    try:
+        q = subprocess.run(["squeue", "-h", "-j", jid, "-o", "%T"], capture_output=True, text=True, timeout=20)
+    except Exception:
+        return True
+    if q.returncode != 0:
+        return "Invalid job id" not in q.stderr
+    return any(st not in SLURM_ENDED for st in q.stdout.split())
+
+
 def acquire_lock(path, stale_s):
-    """one writer per lambda node: <tag>_node<k>.lock holds host / Slurm job / pid and is touched after every chunk. A lock younger than stale_s whose Slurm job still exists (or cannot be checked) means another job is working on this node:
-    return False (the caller exits). Older locks, and locks of finished Slurm jobs (killed by the time limit, scancel), are taken over. H3O_NOLOCK=1 switches the check off; deleting the file does the same for one node."""
-    import atexit, signal, socket, subprocess
+    """one writer per lambda node: <tag>_node<k>.lock holds '<host> job <Slurm id> pid <pid> <date>' and is touched every minute by a heartbeat thread while the process lives.
+    An existing lock is respected (return False: the caller exits) while its holder is alive and it was touched less than stale_s ago; a lock of a dead holder (killed job, crashed
+    or requeued process) or one not touched for stale_s (hung holder) is taken over. Takeover removes the old file and creates a new one exclusively, then re-reads it, so of two jobs
+    taking over at once only one proceeds. H3O_NOLOCK=1 switches the check off; deleting the file does the same for one node."""
+    import atexit, signal, socket, threading
     if os.environ.get("H3O_NOLOCK"): return True
-    info = f"{socket.gethostname()} job {os.environ.get('SLURM_JOB_ID', '-')} pid {os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}"
-    try: fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        try: age = time.time() - os.path.getmtime(path); old = open(path).read().strip()
-        except OSError: age, old = 0.0, "?"
-        jid = old.split(" job ")[1].split()[0] if " job " in old else "-"; alive = True
-        if jid not in ("-", ""):
+    me = f"{socket.gethostname()} job {os.environ.get('SLURM_JOB_ID', '-')} pid {os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    read = lambda: open(path).read().strip()
+    for attempt in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY); break
+        except FileExistsError:
+            if attempt:   # another job created it between our removal and our create: it won
+                print(f"LOCKED: {path} was just taken by [{read()}]. Not starting.", flush=True); return False
+            try: age = time.time() - os.path.getmtime(path); old = read()
+            except OSError: continue   # vanished meanwhile: try to create it again
+            alive = _lock_holder_alive(old)
+            if alive and age < stale_s:
+                print(f"LOCKED: {path} is held by [{old}] (touched {age / 60:.1f} min ago): another job is running this lambda node. Not starting. (taken over once its holder is gone or "
+                      f"it is {stale_s / 60:.0f} min old; delete the lock file or set H3O_NOLOCK=1 to override)", flush=True); return False
             try:
-                q = subprocess.run(["squeue", "-h", "-j", jid], capture_output=True, text=True, timeout=20)
-                alive = bool(q.stdout.strip()) or (q.returncode != 0 and "Invalid job id" not in q.stderr)   # unknown job id = finished; any other squeue failure: assume alive
-            except Exception: alive = True
-        if age < stale_s and alive:
-            print(f"LOCKED: {path} is held by [{old}] (touched {age / 60:.0f} min ago): another job is running this lambda node. Not starting. (stale after {stale_s / 60:.0f} min; delete the lock file or set H3O_NOLOCK=1 to override)", flush=True); return False
-        print(f"taking over stale lock [{old}] ({age / 60:.0f} min old, job {'running' if alive else 'finished'})", flush=True); fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY)
-    os.write(fd, info.encode()); os.close(fd)
-    atexit.register(lambda: os.path.exists(path) and os.remove(path)); signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+                if read() != old:   # someone else took it over while we looked
+                    print(f"LOCKED: {path} was just taken by [{read()}]. Not starting.", flush=True); return False
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            print(f"taking over lock [{old}] ({age / 60:.1f} min old, holder {'alive but silent: hung?' if alive else 'gone'})", flush=True)
+    os.write(fd, me.encode()); os.close(fd)
+    time.sleep(1.0)
+    if read() != me:
+        print(f"LOCKED: {path} was taken over by [{read()}] at the same moment. Not starting.", flush=True); return False
+    stop = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(60):
+            try:
+                if read() != me: return   # taken over (we were silent too long): stop touching it
+                os.utime(path)
+            except OSError:
+                return
+
+    def release():
+        stop.set()
+        try:
+            if read() == me: os.remove(path)
+        except OSError:
+            pass
+    threading.Thread(target=heartbeat, daemon=True).start()
+    atexit.register(release); signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
     return True
 
 
@@ -452,17 +627,18 @@ def run_node(c, st, k):
         r.at.set_positions(c["init_pos"])
     if a.hot_ps > 0 and a.phase == "liquid": r.hot = (a.hot_T, c["steps"](a.hot_ps))
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
-    def pfn(at, T):   # MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs
-        b = at.copy(); b.calc = c["calc"]; sg = b.get_stress(voigt=True)
-        return float(-sg[:3].mean() * EV_A3_GPA + len(at) * units.kB * T / at.get_volume() * EV_A3_GPA)
-    r.pfn = pfn
+    r.pfn = mlp_pressure_fn(c["calc"])
     r.at.get_forces(); t0 = time.time()   # warm-up evaluation: XLA compile / model graph build stays out of the speed and ETA numbers
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
+    state_keys = (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"]), ("kE", float(st["kE"])), ("chunk_ps", a.chunk_ps), ("every", a.every), ("model", a.model))
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
-        for key, now in (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"])):   # a state from other settings would silently mix samples (old state files lack these keys: no check)
-            if key in z.files and abs(float(z[key]) - float(now)) > 1e-9 * max(1.0, abs(float(now))):
-                print(f"lambda {k}: saved state has {key} = {float(z[key])} but this run has {key} = {float(now)}: refusing to mix samples. Use FRESH=1 (deletes the old files) or move them away.", flush=True); sys.exit(6)
+        for key, now in state_keys:   # a state from other settings would silently mix samples (old state files lack some keys: those are not checked)
+            if key not in z.files:
+                continue
+            old = z[key].item()
+            if (old != now) if isinstance(now, str) else abs(float(old) - float(now)) > 1e-9 * max(1.0, abs(float(now))):
+                print(f"lambda {k}: saved state has {key} = {old!r} but this run has {key} = {now!r}: refusing to mix samples. Use FRESH=1 (deletes the old files) or move them away.", flush=True); sys.exit(6)
         r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
         r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
         r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
@@ -489,10 +665,8 @@ def run_node(c, st, k):
             print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({done + ch - 1} of {nchunk}). "
                   f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
             sys.exit(5)
-        np.save(f, np.array(r.series))
-        try: os.utime(lock)
-        except OSError: pass
-        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, dt=a.dt, lam=l, T=a.T, natoms=len(c["at0"]), V=c["V"]); os.replace(sf + ".tmp.npz", sf)
+        np.save(f[:-4] + ".tmp.npy", np.array(r.series)); os.replace(f[:-4] + ".tmp.npy", f)   # atomic: readers and a kill never see a truncated series
+        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, **dict(state_keys)); os.replace(sf + ".tmp.npz", sf)
         pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
         if r.thermo:
             import csv
@@ -521,7 +695,8 @@ if __name__ == "__main__":
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
     ap.add_argument("--ps", type=float, default=4.0, help="production per lambda node"); ap.add_argument("--chunk-ps", type=float, default=0.5)
     ap.add_argument("--hot-ps", type=float, default=0.0, help="liquid phase: first heat every lambda to --hot-T for this long so the lattice start melts, then equilibrate at T"); ap.add_argument("--hot-T", type=float, default=12000.0)
-    ap.add_argument("--lock-stale-min", type=float, default=30.0, help="a lambda-node lock file not touched for this long is taken over (see acquire_lock)")
+    ap.add_argument("--lock-stale-min", type=float, default=30.0, help="a lambda-node lock file not touched for this long is taken over (see acquire_lock; a live holder touches it every minute)")
+    ap.add_argument("--bulk-gpa", type=float, default=None, help="bulk modulus (GPa) for the pressure corrections; default: from the DFT EOS (required for insert with --vpa)")
     ap.add_argument("--prep", action="store_true", help="only build the start configuration (hold O, thermalise H, release O): see prep()"); ap.add_argument("--prep-hold-ps", type=float, default=1.0); ap.add_argument("--prep-free-ps", type=float, default=1.0)
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)

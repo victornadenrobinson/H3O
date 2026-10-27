@@ -11,12 +11,14 @@ def stats(series, nb=5):
 
 
 def G_total_eV(st, dF):
-    """whole-cell G (eV) from the TDI integral dF; the -kT ln V translation term applies only when the O centre of mass is held fixed (not for the pure-H fluid)"""
+    """whole-cell G (eV) from the TDI integral dF; the -kT ln V translation term applies only when the O centre of mass is held fixed (not for the fluids and insertion);
+    dG_P_eV: pressure correction to P_target where the stage 0 computed one (insertion: MLP pressure of the cell != P_target)"""
     kt = refs.kT(st["T"]); tr = 0.0 if st.get("no_com_term") else -kt * np.log(st["V"])
-    return st["f_ref_cons_eV"] + dF + tr + st["f_kin_eV"] + st["PV_eV"]
+    return st["f_ref_cons_eV"] + dF + tr + st["f_kin_eV"] + st["PV_eV"] + st.get("dG_P_eV", 0.0)
 
 
 def G_from_nodes(st, lam, w, series_list, N):
     ms = [stats(s) for s in series_list]; m = np.array([x[0] for x in ms]); s = np.array([x[1] for x in ms])
     dF, dFe = analyze.integrate(m, s, w)
-    return G_total_eV(st, dF) / N * 1e3, dFe / N * 1e3, dF / N * 1e3, m, s
+    Ge = float(np.hypot(dFe, st.get("dG_P_err_eV", 0.0)))   # statistical error of the integral and of the pressure correction (independent runs)
+    return G_total_eV(st, dF) / N * 1e3, Ge / N * 1e3, dF / N * 1e3, m, s
