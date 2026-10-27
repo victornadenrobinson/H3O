@@ -6,6 +6,9 @@ Part 2: per (composition, branch, T) the MLP volume V/atom at which the MLP pres
 import argparse, glob, os
 import numpy as np
 import pandas as pd
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tdi.verdict import verdict as _verdict
 
 ap = argparse.ArgumentParser(); ap.add_argument("dir", nargs="?", default="runs/eos_scan"); ap.add_argument("-o", default=None); a = ap.parse_args()
 rows = []
@@ -16,10 +19,9 @@ if not rows: raise SystemExit(f"no eos_*.csv in {a.dir}")
 df = pd.DataFrame(rows)
 for c, v in (("branch", "solid"), ("hper", 2.0), ("P_target", np.nan), ("O_struct", ""), ("delta_L", np.nan), ("D_O_cm2s", np.nan)):
     if c not in df: df[c] = v
-def verdict(r):
-    if r.phase == "H": return "fluid"
-    solid_like = (r.O_struct == r.phase) and (r.delta_L < 0.2) and (r.D_O_cm2s < 1e-5)
-    return ("solid" if solid_like else "MELTED") if r.branch == "solid" else ("NOT MELTED" if solid_like else "liquid")
+def verdict(r):   # tdi/verdict.py (shared rule); upper case = the run failed its branch
+    v = _verdict(r._asdict())
+    return {"melted": "MELTED", "not melted": "NOT MELTED"}.get(v, v)
 df["verdict"] = [verdict(r) for r in df.itertuples()]
 df["comp"] = np.where(df.phase == "H", np.inf, df.hper); df["dP_GPa"] = df.P_GPa - df.P_target
 pd.set_option("display.width", 230); pd.set_option("display.max_rows", 2000)

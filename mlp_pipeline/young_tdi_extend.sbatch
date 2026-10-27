@@ -16,6 +16,7 @@
 #SBATCH --array=0-12%6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+. mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 PY=${PY:-$HOME/grace-venv/bin/python}
 LINE=$(grep -vE '^\s*(#|$)' mlp_pipeline/extend_list.txt | sed -n "$(( ${SLURM_ARRAY_TASK_ID:-0} + 1 ))p")
 [ -n "$LINE" ] || { echo "no line $SLURM_ARRAY_TASK_ID in extend_list.txt"; exit 2; }

@@ -52,16 +52,25 @@ def comp_label(hper):
     return f"h{hper:g}o"
 
 
+def _eos_volumes(vpa, P_GPa, Ps, what):
+    """V/atom at the pressures Ps from DFT points (vpa, P): ln P quadratic in V/atom, inverted on the fitted range. A target outside the pressure range covered by both the data and
+    the fit gives nan (with a WARNING), never a volume clipped to the edge; a fit that is not monotone over the data range is refused."""
+    vpa, P_GPa = np.asarray(vpa, float), np.asarray(P_GPa, float)
+    c = np.polyfit(vpa, np.log(np.clip(P_GPa, 1, None)), 2)
+    grid = np.linspace(vpa.min(), vpa.max(), 400); Pg = np.exp(np.polyval(c, grid))
+    if np.any(np.diff(Pg) >= 0):
+        raise SystemExit(f"{what}: the ln P(V) fit is not monotone over V/atom {vpa.min():.3f}-{vpa.max():.3f} (P turns over): this EOS cannot give a volume")
+    lo, hi = max(Pg.min(), P_GPa.min()), min(Pg.max(), P_GPa.max())
+    out = [p for p in Ps if not lo <= p <= hi]
+    if out:
+        print(f"WARNING: target pressures {out} GPa are outside the DFT EOS range {lo:.0f}-{hi:.0f} GPa for {what}: no volume (nan)")
+    return np.array([float(np.interp(-p, -Pg, grid)) if lo <= p <= hi else float("nan") for p in Ps])   # P decreases with V
+
+
 def _vpa_bin(df, phase, Tb, Ps):
     df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
-    c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2)
-    grid = np.linspace(df.vpa.min(), df.vpa.max(), 400)
-    P = np.exp(np.polyval(c, grid))
     print(f"DFT {phase} {Tb:.0f} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
-    out_of_range = [p for p in Ps if p < df.True_P_GPa.min() or p > df.True_P_GPa.max()]
-    if out_of_range:   # np.interp clips silently: say so
-        print(f"WARNING: target pressures {out_of_range} GPa are outside the DFT data range {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa for {phase}; their volumes are clipped to the edge of the data")
-    return np.array([float(np.interp(-p, -P, grid)) for p in Ps])   # P decreases with V: interpolate on the monotone branch
+    return _eos_volumes(df.vpa, df.True_P_GPa, Ps, f"{phase} {Tb:.0f} K")
 
 
 def dft_vpa(inv, phase, T, Ps, hper=2.0, min_runs=20, max_extrap=2000):
@@ -95,11 +104,8 @@ def h_vpa(inv, T, P):
 
     def at(Tb):
         df = df0[df0.T_bin == Tb]
-        c = np.polyfit(df.vpa, np.log(df.True_P_GPa.clip(lower=1)), 2); grid = np.linspace(df.vpa.min(), df.vpa.max(), 400); Pg = np.exp(np.polyval(c, grid))
         print(f"DFT pure H {Tb} K: {len(df)} runs, P {df.True_P_GPa.min():.0f}-{df.True_P_GPa.max():.0f} GPa, V/atom {df.vpa.min():.3f}-{df.vpa.max():.3f}")
-        if not df.True_P_GPa.min() <= P <= df.True_P_GPa.max():
-            print(f"WARNING: {P} GPa is outside the DFT range: volume clipped to the edge of the data")
-        return float(np.interp(-P, -Pg, grid))
+        return float(_eos_volumes(df.vpa, df.True_P_GPa, [P], f"pure H {Tb} K")[0])
     Tb = int(round(T / 1000.0)) * 1000
     if abs(T - Tb) < 1 and Tb in good:
         return at(Tb)
@@ -141,7 +147,7 @@ def thermostat(atoms, T, dt, tau):
         return Bussi(atoms, timestep=dt * units.fs, temperature_K=T, taut=tau * units.fs)
     except ImportError:
         from ase.md.langevin import Langevin
-        print("Bussi unavailable: Langevin, friction 1/tau")
+        print("WARNING: ase.md.bussi unavailable (ASE < 3.24): Langevin thermostat, friction 1/tau (damps diffusion; see the 'thermostat' column)", flush=True)
         return Langevin(atoms, dt * units.fs, temperature_K=T, friction=1 / (tau * units.fs), fixcm=True)
 
 
@@ -208,7 +214,7 @@ def run_one(a, calc, vpa, tag):
         struct = dict(O_struct=lab, CN1=c1, CN2=c2, delta_L=float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1))
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                branch=a.branch, hper=a.hper, P_target=getattr(a, "p_target", float("nan")), T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
-               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000)
+               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
     print("RESULT", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
     return row
 
@@ -242,6 +248,8 @@ if __name__ == "__main__":
         if a.only is not None and k != a.only:
             continue
         a.p_target = float(a.P[k]) if (not a.vpa and k < len(a.P)) else float("nan")
+        if not np.isfinite(v):
+            print(f"{tag}: {a.p_target:g} GPa skipped: outside the DFT EOS data (no volume)", flush=True); continue
         row = run_one(a, calc, v, tag)
         f = os.path.join(a.outdir, f"{tag}.csv")
         pd.DataFrame([row]).to_csv(f, mode="a", header=not os.path.exists(f), index=False)

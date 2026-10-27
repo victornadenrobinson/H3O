@@ -19,6 +19,7 @@
 #SBATCH --array=0-5
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+. mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 DEFAULT="bcc 300 3000 2;fcc 300 3000 2;bcc 500 3000 2;fcc 500 3000 2;bcc 400 5000 2;fcc 400 5000 2"
 IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"
 I=${SLURM_ARRAY_TASK_ID:-0}; read -r PH P T HP <<< "${TABLE[$I]}"

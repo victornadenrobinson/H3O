@@ -17,7 +17,7 @@
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
-# env knobs: HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
+# env knobs: BULK (bulk modulus GPa, insert with VPA) HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
 # Design: the code is copied to runs/code/<time>_<pid> at launch and every process runs from that snapshot, and the body is one function parsed before it runs,
@@ -26,7 +26,6 @@ main() {
 SNAP=runs/code/$(date +%Y%m%d_%H%M%S)_$$; mkdir -p $SNAP && cp -r mlp_pipeline $SNAP/ && CODE=$SNAP/mlp_pipeline; export H3O_RUNS=$PWD/runs; export H3O_GIT=$(git rev-parse HEAD 2>/dev/null)$(git diff --quiet 2>/dev/null || echo "+local")
 PH=${1:?bcc, fcc, liquid, insert or H}; P=${P:-400}; T=${T:-3000}; HPER=${HPER:-2}; NGHOST=${NGHOST:-1}; MODEL=${MODEL:-grace-ft:runs/grace/ft_m2}; NODES=${NODES:-12}; POWER=${POWER:-4}; PS=${PS:-4}; PS1=${PS1:-1.5}
 CHUNK=${CHUNK:-0.5}; EQUIL=${EQUIL:-1}; DT=${DT:-0.5}; NPAR=${NPAR:-4}; OUT=runs/tdi; [ -n "$TAG" ] && OUT=runs/tdi_test; [ -n "$OUTDIR" ] && OUT=$OUTDIR
-TAGNAME=${PH}_${P}GPa_${T}K; { [ "$HPER" != 2 ] || [ $PH = liquid ]; } && [ $PH != H ] && TAGNAME=${TAGNAME}_h$(printf %g "$HPER")o; [ $PH = H ] && [ -n "$NATOMS" ] && TAGNAME=${TAGNAME}_N${NATOMS}; [ $PH = insert ] && TAGNAME=${TAGNAME}_n${NGHOST}; { [ $PH = bcc ] || [ $PH = fcc ] || [ $PH = liquid ]; } && [ -n "$NREP" ] && TAGNAME=${TAGNAME}_rep${NREP}
 # default Einstein constants measured in earlier 3 ps lambda=1 runs at 400 GPa, 3000 K (bcc 12.182, fcc 22.842); K=0 runs the lambda=1 stage instead (re-measures k, pressure, structure)
 # Einstein constant k (eV/A^2): scaled guess unless K is given (k only sets the efficiency, not the result): measured 12.2 (bcc) / 22.0-22.8 (fcc) at 400 GPa 3000 K, 12.8 (bcc) at 5000 K, 7.9 (bcc) at 200 GPa; k ~ P^0.6.
 # K=0 measures it with a lambda=1 run instead (about 6 min; also prints MLP pressure and O structure).
@@ -35,20 +34,34 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL --phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
+COMMON="$MODEL ${BULK:+--bulk-gpa $BULK }--phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
+TAGNAME=$($PY $CODE/tdi/run_real.py $COMMON --print-tag 2>/dev/null | tail -n1)   # the tag of the files run_real.py writes (one definition: make_tag)
+[ -n "$TAGNAME" ] || { echo "cannot build the run tag ($PY $CODE/tdi/run_real.py ... --print-tag failed)"; exit 1; }
+echo "== tag $TAGNAME in $OUT"
 # restartable: rerunning the same command continues every node from its last finished chunk (state in $OUT/*_node<k>_state.npz); FRESH=1 starts over
-if [ -n "$FRESH" ]; then rm -f $OUT/${TAGNAME}_*; FRESHFLAG=--fresh; fi
+if [ -n "$FRESH" ]; then
+  if [ -n "$SLURM_ARRAY_TASK_ID" ] && [ "$FRESH" != array ]; then echo "FRESH=$FRESH in a Slurm array task: refused (an exported FRESH would wipe every task's run); FRESH=array means it"; exit 1; fi
+  rm -f $OUT/${TAGNAME}_stage0.* $OUT/${TAGNAME}_prep.* $OUT/tdi_${TAGNAME}.json $OUT/${TAGNAME}_node[0-9]*   # this tag only (a bare ${TAGNAME}_* also matches _h<x>o / _rep<n> / _N<n> runs)
+  FRESHFLAG=--fresh
+fi
 echo "== stage 0 (lambda = 1 run) $(date)"
-[ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ]; } && echo "stage 0 already done (measured k kept; FRESH=1 to redo)" || $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"
+if [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then echo "stage 0 already done (measured k kept; FRESH=1 to redo)"
+else
+  $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"; RC=${PIPESTATUS[0]}
+  [ $RC = 0 ] || { echo "stage 0 failed (exit $RC; see $OUT/${TAGNAME}_stage0.log): nodes not started"; exit 1; }   # never run the nodes on an older stage0.json
+fi
 [ -f $OUT/${TAGNAME}_stage0.json ] || { echo "stage 0 failed"; exit 1; }
 [ -n "$ONLY0" ] && exit 0   # ONLY0=1: stop after the lambda=1 run (e.g. to compare DT=0.5 and DT=1.0)
-if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; } && ls $OUT/${TAGNAME}_node*_state.npz >/dev/null 2>&1; then echo "== start configuration skipped: lambda states already exist (a continued run keeps its own start)"
-elif [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=<ps>: start every lambda from a configuration made by holding O, thermalising H, releasing O (PREPFREE ps, default 1)
-  echo "== start configuration: O held $PREPHOLD ps, then released ${PREPFREE:-1} ps $(date)"
-  $PY -u $CODE/tdi/run_real.py $COMMON --prep 2>&1 | tee $OUT/${TAGNAME}_prep.log | grep --line-buffered -vE "$NOISE"
-  [ -f $OUT/${TAGNAME}_prep.extxyz ] || { echo "prep failed"; exit 1; }
-  [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"
+if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=<ps>: start every lambda from a configuration made by holding O, thermalising H, releasing O (PREPFREE ps, default 1)
+  if [ -f $OUT/${TAGNAME}_prep.extxyz ]; then echo "== start configuration: $OUT/${TAGNAME}_prep.extxyz exists, used for every lambda not yet started (FRESH=1 to redo)"
+  elif ls $OUT/${TAGNAME}_node*_state.npz >/dev/null 2>&1; then echo "prep requested but lambda states exist without a prep frame (a run started without PREPHOLD): not mixing start protocols; FRESH=1 or no PREPHOLD"; exit 1
+  else
+    echo "== start configuration: O held $PREPHOLD ps, then released ${PREPFREE:-1} ps $(date)"
+    $PY -u $CODE/tdi/run_real.py $COMMON --prep 2>&1 | tee $OUT/${TAGNAME}_prep.log | grep --line-buffered -vE "$NOISE"; RC=${PIPESTATUS[0]}
+    { [ $RC = 0 ] && [ -f $OUT/${TAGNAME}_prep.extxyz ]; } || { echo "prep failed (exit $RC)"; exit 1; }
+  fi
+  [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"   # also on a resubmit: nodes that never started begin from the same frame as the others
 fi
 echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
