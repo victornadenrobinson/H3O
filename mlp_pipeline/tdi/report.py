@@ -19,6 +19,8 @@ ap = argparse.ArgumentParser(); ap.add_argument("--base", default="docs/data/tdi
 ap.add_argument("--refresh", nargs="*", default=None, metavar="DIR", help="run summarize.py on these runs/ directories first (default dirs: runs/tdi runs/tdi_prep if none given)")
 ap.add_argument("--out", default="docs/figures/tdi_report"); ap.add_argument("--fmt", nargs="*", default=["png", "svg"], help="per-figure formats; the pdf with every page is always written")
 ap.add_argument("--lit", default="docs/data/dg_fcc_bcc.csv"); ap.add_argument("--cheng", default="docs/data/cheng2021_dmu_bcc_fcc.csv"); ap.add_argument("--dft-hull", default="data-h3o-convex-hull.csv")
+ap.add_argument("--no-gt", action="store_true", help="do not also run plot_all.py (G vs simulation time, separate svg next to the report, not in the pdf)")
+ap.add_argument("--gt-dirs", nargs="*", default=[], help="directories for plot_all.py (default: its own default, runs/tdi* without tdi_test)")
 ap.add_argument("--qmax", type=float, default=50.0, help="exclude runs with |Kronrod - Gauss| above this (meV/atom)")
 ap.add_argument("--pmax-rel", type=float, default=0.12, help="exclude runs with |P_hi - P_target| / P_target above this")
 a = ap.parse_args()
@@ -157,10 +159,12 @@ if os.path.exists(a.dft_hull):
 
 # ---------------------------------------------------------------- figures
 figs = {}
-TN = plt.Normalize(3000, 9000)   # temperature -> colour by heat (blue = cold, red = hot) in every figure
-def Tcol(T, Ts=None): return plt.cm.coolwarm(TN(T))
+from matplotlib.colors import LinearSegmentedColormap
+HEAT = LinearSegmentedColormap.from_list("heat", ["#1f3fbf", "#1fa3d6", "#f2c230", "#e8590c", "#b30000"])   # saturated all the way (no pale middle): blue = cold ... red = hot
+TN = plt.Normalize(3000, 9000)   # temperature -> colour by heat in every figure
+def Tcol(T, Ts=None): return HEAT(TN(T))
 def Tbar(fig, axs, label="T (K)"):
-    sm = plt.cm.ScalarMappable(norm=TN, cmap="coolwarm"); sm.set_array([]); fig.colorbar(sm, ax=axs, label=label, fraction=0.025, pad=0.01)
+    sm = plt.cm.ScalarMappable(norm=TN, cmap=HEAT); sm.set_array([]); fig.colorbar(sm, ax=axs, label=label, fraction=0.025, pad=0.01)
 def hollow(ax, x, y, e, cav, c, m, label=None):
     for k, (xx, yy, ee, cv) in enumerate(zip(x, y, e, cav)):
         ax.errorbar(xx, yy, ee, fmt=m, color=c, mfc="none" if cv else c, ms=5, capsize=2, label=label if k == 0 else None)
@@ -276,3 +280,7 @@ with PdfPages(a.out + ".pdf") as pdf:
         fig.tight_layout(rect=(0, 0.03, 1, 0.95)); pdf.savefig(fig)
         for fm in a.fmt: fig.savefig(f"{a.out}_{name}.{fm}", dpi=150)
 print("wrote", a.out + ".pdf", "and", ", ".join(f"{a.out}_{n}.{fm}" for n in figs for fm in a.fmt))
+
+if not a.no_gt and os.path.isdir("runs"):   # G vs simulation time of every run (separate file, not part of the pdf)
+    gt = os.path.join(os.path.dirname(a.out) or ".", "tdi_G_vs_time.svg"); r = subprocess.run([sys.executable, os.path.join(HERE, "plot_all.py"), *a.gt_dirs, "-o", gt], capture_output=True, text=True)
+    print(f"wrote {gt}" if r.returncode == 0 else f"plot_all.py failed (exit {r.returncode}): {r.stderr.strip()[-400:]}")
