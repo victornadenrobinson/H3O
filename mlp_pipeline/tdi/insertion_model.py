@@ -73,18 +73,22 @@ ok = R[np.isfinite(R.dg0_err) & (R.dg0_err > 0)]
 if len(ok) >= 3 and ok.P.nunique() >= 2 and ok["T"].nunique() >= 2:
     X = np.vstack([np.ones(len(ok)), ok["T"] - a.T0, ok.P - a.P0]).T; w = 1 / ok.dg0_err.values ** 2
     C = np.linalg.inv(X.T @ (X * w[:, None])); b = C @ X.T @ (w * ok.dg0.values); be = np.sqrt(np.diag(C))
-    res = ok.dg0.values - X @ b; chi2 = float(np.sum(w * res ** 2)); dof = max(1, len(ok) - 3); scale = np.sqrt(max(1.0, chi2 / dof))
+    res = ok.dg0.values - X @ b; chi2 = float(np.sum(w * res ** 2)); dof = max(1, len(ok) - 3); scale = np.sqrt(max(1.0, chi2 / dof)); Cs = C * scale ** 2
     ds, dv = -b[1], b[2] * EV_A3_GPA / 1e3   # meV/K; meV/GPa -> A^3 (1 GPa A^3 = 6.24 meV)
     print(f"\nfit over {len(ok)} state points (P0 {a.P0:g} GPa, T0 {a.T0:g} K): dg0 = {b[0]:.0f} +- {be[0] * scale:.0f} meV;  ds = {ds:+.3f} +- {be[1] * scale:.3f} meV/K "
           f"({ds / KB:+.2f} k_B);  dv = {dv:+.3f} +- {be[2] * scale * EV_A3_GPA / 1e3:.3f} A^3  (chi2/dof {chi2 / dof:.1f}; errors scaled by {scale:.1f})")
     print(f"   dh = dg0 + T0 ds = {b[0] + a.T0 * ds:.0f} meV (enthalpy of transfer at P0, T0): {'enthalpy' if abs(b[0] + a.T0 * ds) > abs(a.T0 * ds) else 'entropy'}-dominated")
     dd = R.dv_direct.dropna()
     print(f"   independent dv from volumes (v_H from the stage-0 pressure runs - v of pure H): " + (f"{dd.mean():+.3f} A^3 (n {len(dd)})" if len(dd) else "not available yet (needs stage-0 pressure corrections: young_tdi_insert_p0.sbatch)"))
-    if abs(b[1]) > 2 * be[1] * scale:
-        Ps = np.linspace(R.P.min() - 100, R.P.max() + 100, 5)
-        print("   dg0 = 0 (dilute insertion becomes unfavourable) at T = " + ", ".join(f"{a.T0 + (-(b[0] + b[2] * (p - a.P0))) / b[1]:.0f} K ({p:.0f} GPa)" for p in Ps) + "  (linear extrapolation)")
-    else:
-        print("   no significant T dependence: no dg0 = 0 temperature can be extrapolated from these points")
+    MC = np.random.default_rng(0).multivariate_normal(b, Cs, 20000)   # parameter samples for the uncertainty of the boundary
+    print("   dg0 = 0 (dilute insertion stops being favourable), linear extrapolation of the fit; 16-84% range from the fit covariance:")
+    for p in (100, 200, 300, 400, 500, 600, 700):
+        Ts = a.T0 - (MC[:, 0] + MC[:, 2] * (p - a.P0)) / MC[:, 1]; okk = MC[:, 1] > 0; q = np.percentile(Ts[okk], [16, 84]) if okk.any() else (np.nan, np.nan)
+        print(f"      {p:4d} GPa: above T* = {a.T0 - (b[0] + b[2] * (p - a.P0)) / b[1]:6.0f} K  ({q[0]:.0f}-{q[1]:.0f} K; {100 * (~okk).mean():.0f}% of samples: no crossing)")
+    for t in (3000, 4000, 5000, 6000, 7000, 8000):
+        Ps = a.P0 - (MC[:, 0] + MC[:, 1] * (t - a.T0)) / MC[:, 2]; q = np.percentile(Ps, [16, 84])
+        print(f"      {t:5d} K: below P* = {a.P0 - (b[0] + b[1] * (t - a.T0)) / b[2]:5.0f} GPa  ({q[0]:.0f}-{q[1]:.0f} GPa)")
+    print(f"   sampled region: {R.P.min():.0f}-{R.P.max():.0f} GPa, {R['T'].min():.0f}-{R['T'].max():.0f} K; everything outside is extrapolation of a linear model")
     if R.slope.notna().any():
         xs = (-R.dg0 / (2 * R.slope)) / R.nO
         print("   solubility limit x_sol ~ -dg0 / (2 slope) / n_O (H per O, regular-solution extrapolation): " + ", ".join(f"{x:.3f} ({p:.0f}/{t:.0f})" for x, p, t in zip(xs, R.P, R["T"]) if np.isfinite(x) and x > 0))
@@ -92,17 +96,43 @@ else:
     print("\nnot enough state points for the (P, T) fit: need >= 3 points with >= 2 pressures and >= 2 temperatures")
     b = None
 if a.o:
+    import glob
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(6.5, 4.8)); lim = max(200, np.nanmax(np.abs(R.dg0)))
-    sc = ax.scatter(R.P, R["T"], c=R.dg0, cmap="RdBu_r", vmin=-lim, vmax=lim, s=90, edgecolors="#1f1f1e", linewidths=0.8, zorder=3)
-    for r in R.itertuples():
-        ax.annotate(f"{r.dg0:.0f}", (r.P, r.T), textcoords="offset points", xytext=(6, 6), fontsize=8, color="#1f1f1e")
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from tdi.verdict import verdict
+    INK, MUTED = "#1f1f1e", "#6b6b66"
+    fig, ax = plt.subplots(figsize=(8.5, 5.6)); Pr, Tr = (0, 700), (3000, 14000)
+    lim = 800
     if b is not None:
-        PP, TT = np.meshgrid(np.linspace(R.P.min() - 100, R.P.max() + 100, 60), np.linspace(R["T"].min() - 1500, R["T"].max() + 1500, 60))
-        Z = b[0] + b[1] * (TT - a.T0) + b[2] * (PP - a.P0); cs = ax.contour(PP, TT, Z, levels=[-400, -200, 0, 200], colors="#6b6b66", linewidths=1)
-        ax.clabel(cs, fmt="%d meV", fontsize=7)
-    fig.colorbar(sc, label="dg0 = mu_H(dilute) - G_H (meV); blue = insertion favourable")
-    ax.set_xlabel("P (GPa)"); ax.set_ylabel("T (K)"); ax.set_title(f"dilute H insertion into {a.host} H2O (linear model contours; solid host only)", loc="left", fontsize=9)
+        PP, TT = np.meshgrid(np.linspace(*Pr, 141), np.linspace(*Tr, 111)); Z = b[0] + b[1] * (TT - a.T0) + b[2] * (PP - a.P0)
+        cf = ax.contourf(PP, TT, Z, levels=np.linspace(-lim, lim, 17), cmap="RdBu_r", extend="both", alpha=0.55)
+        cs = ax.contour(PP, TT, Z, levels=[-600, -400, -200, 200, 400], colors=MUTED, linewidths=0.8); ax.clabel(cs, fmt="%d", fontsize=7)
+        ax.contour(PP, TT, Z, levels=[0], colors=INK, linewidths=2.2)
+        Pg = np.linspace(*Pr, 141); Tz = a.T0 - (MC[:, 0][:, None] + MC[:, 2][:, None] * (Pg[None, :] - a.P0)) / MC[:, 1][:, None]
+        Tz = np.where(MC[:, 1][:, None] > 0, Tz, np.inf); lo, hi = np.percentile(Tz, [16, 84], axis=0)
+        ax.fill_between(Pg, lo, np.minimum(hi, Tr[1] * 2), color=INK, alpha=0.12, lw=0, label="dg0 = 0 line: 16-84% range")
+        ax.plot([], [], color=INK, lw=2.2, label="dg0 = 0: dilute insertion stops (model)")
+        fig.colorbar(cf, ax=ax, label="model dg0 = mu_H(dilute) - G_H (meV per H); blue = favourable")
+    ax.add_patch(plt.Rectangle((R.P.min() - 15, R["T"].min() - 150), R.P.max() - R.P.min() + 30, R["T"].max() - R["T"].min() + 300, fill=False, ls="--", ec=INK, lw=1, label="sampled region (outside: extrapolation)"))
+    ax.scatter(R.P, R["T"], c=R.dg0, cmap="RdBu_r", vmin=-lim, vmax=lim, s=80, edgecolors=INK, linewidths=1.2, zorder=4, label="insertion runs (n -> 0)")
+    for r in R.itertuples():
+        ax.annotate(f"{r.dg0:.0f}", (r.P, r.T), textcoords="offset points", xytext=(6, 5), fontsize=7.5, color=INK, zorder=5)
+    nv = []   # free-NVT stability runs of the H2O crystal (17_eos_md.py): where a solid host exists at all
+    for d in ("runs/melt_tdi", "runs/melt", "runs/melt_comp", "runs/eos_scan"):
+        for f in glob.glob(os.path.join(d, "*.csv")):
+            try: t_ = pd.read_csv(f)
+            except Exception: continue
+            for _, r in t_.iterrows():
+                if r.get("phase") != a.host or r.get("branch", "solid") != "solid" or abs(float(r.get("hper", 2.0) or 2.0) - 2.0) > 1e-6 or "P_GPa" not in r: continue
+                nv.append((float(r["P_GPa"]), float(r.get("T_set", np.nan)), verdict(r.to_dict())))
+    for v, mk, col in (("solid", "s", "#1baf7a"), ("marginal", "D", "#eda100"), ("melted", "x", "#eb6834")):
+        pts = [(p_, t_) for p_, t_, v_ in nv if v_ == v]
+        if pts:
+            kw = dict(color=col) if mk == "x" else dict(facecolors="none", edgecolors=col)
+            ax.scatter(*zip(*pts), marker=mk, s=28, linewidths=1.2, zorder=3, label=f"free NVT {a.host} H2O: {v}", **kw)
+    ax.set_xlim(*Pr); ax.set_ylim(*Tr); ax.set_xlabel("P (GPa)"); ax.set_ylabel("T (K)")
+    ax.set_title(f"Dilute H insertion into {a.host} H2O: linear model dg0 - ds (T - T0) + dv (P - P0) fitted to the runs; valid only where the host is solid", loc="left", fontsize=8.5)
+    ax.legend(fontsize=7, frameon=False, loc="upper left")
     os.makedirs(os.path.dirname(a.o) or ".", exist_ok=True)
     for ext in ("pdf", "png"):
         fig.savefig(f"{a.o}.{ext}", dpi=150, bbox_inches="tight")
