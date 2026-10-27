@@ -148,9 +148,9 @@ for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = pick(hh, m.dt_fs)
-        solid.append(dict(phase=f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H2O, dilute)", P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=2.0, n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
+        solid.append(dict(phase=("insert into pure H (METHOD CHECK: should be ~0)" if "_Hhost" in m.tag else f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H2O, dilute)"), P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=2.0, n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
                           kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ")
-                          + ("" if np.isfinite(m.P_corr_meV) else "NO PRESSURE CORRECTION (stage 0 older than the fix: rerun stage 0 of this run) ") + nvt_flag("bcc" if "_bcc" in m.tag else "fcc", 2.0, m.P_target_GPa, m.T_K)))
+                          + ("" if np.isfinite(m.P_corr_meV) else "NO PRESSURE CORRECTION (stage 0 older than the fix: rerun stage 0 of this run) ") + ("" if "_Hhost" in m.tag else nvt_flag("bcc" if "_bcc" in m.tag else "fcc", 2.0, m.P_target_GPa, m.T_K))))
 if solid:
     print("\nMixing free energy per added H, crystal H2O + n H(fluid) -> H(2+n/nO)O crystal (average over the n added H; positive = this composition is unstable against H2O crystal + pure H, NOT 'H insoluble': H dissolves up to the concentration where the differential mu_H - G_H crosses 0, whose dilute end are the insertion rows); insertion rows: mu_H(fcc H2O) - G_H(pure) per added H, meV; P2_corr_per_H = the dG_P2 corrections combined like G (not applied):")
     print(pd.DataFrame(solid).round(2).to_string(index=False))
