@@ -6,12 +6,14 @@
 #  1. node_stats.py: per lambda value, mean / error / median / max, share of the sum carried by the top 1% of samples (heavy tail), drift between halves, contribution
 #     to G, closest H-H / H-O contacts: is the small-lambda end converged, and where does the integral come from?
 #  1b. mu_breakdown.py: mu_H - G_H split into reference pieces, the TDI integral by lambda range (with its drift) and the pressure correction; figure runs/checks/..._mu.pdf.
+#  1c. ghost_rdf.py: g(r) of the inserted proton to host O and H for every lambda, overlap fraction, comparison with the host protons at the largest lambda.
 #  2. collect.py: G versus simulation time of the insertion runs.
 #  3. short_range.py: energy cost of an extra proton at 0.1-1.2 A from host O and H atoms and at uniform random points (the lambda -> 0 integrand), on frames of
-#     an insertion run and of the H2.25O crystal: is the MLP repulsive at short range? ('NOT REPULSIVE AT SHORT RANGE' = the free energies are not trustworthy)
+#     an insertion run and of the H2.25O crystal: is the MLP repulsive at short range? ('NOT REPULSIVE AT SHORT RANGE' = the free energies are not trustworthy);
+#     plus, for insertion runs, a Widom test-particle estimate of mu_ex and the insertion 'acceptance' (WIDOM points per frame) to compare with the TDI integral.
 # Every tag is looked up in runs/tdi_long and runs/tdi (both are reported when both exist).
 main() {
-PY=${PY:-$HOME/grace-venv/bin/python}; FRAMES=${FRAMES:-5}; DIRS=${DIRS:-20}; UNIFORM=${UNIFORM:-200}
+PY=${PY:-$HOME/grace-venv/bin/python}; FRAMES=${FRAMES:-5}; DIRS=${DIRS:-20}; UNIFORM=${UNIFORM:-200}; WIDOM=${WIDOM:-200}
 TAGS=${TAGS:-"insert_500GPa_6000K_n1 insert_500GPa_5500K_n1 insert_500GPa_5500K_n4 insert_400GPa_5000K_n2 fcc_500GPa_6000K_h2.25o fcc_500GPa_6000K H_500GPa_5500K_N250"}
 PROBE=${PROBE:-"insert_500GPa_6000K_n1 fcc_500GPa_6000K_h2.25o"}   # step 3 (GPU) only for these
 mkdir -p runs/checks; LOG=runs/checks/insert_checks_$(date +%Y%m%d_%H%M).txt
@@ -23,13 +25,15 @@ for t in $TAGS; do for d in runs/tdi_long runs/tdi; do [ -f $d/${t}_stage0.json 
 echo; echo "== 1b. breakdown of mu_H - G_H (reference pieces, TDI integral by lambda range, drift by lambda range, second quadrature) -> ${LOG%.txt}_mu.pdf/.png"
 RUNS=$(for t in $TAGS; do case $t in insert_*) for d in runs/tdi_long runs/tdi; do [ -f $d/${t}_stage0.json ] && echo $d/$t; done;; esac; done)
 [ -n "$RUNS" ] && $PY mlp_pipeline/tdi/mu_breakdown.py $RUNS -o ${LOG%.txt}_mu
+echo; echo "== 1c. where the inserted proton sits, per lambda (g(r) to host O / H, overlap fraction, check against the host protons) -> ${LOG%.txt}_rdf_<tag>.pdf/.png"
+for r in $RUNS; do echo "-- $r"; $PY mlp_pipeline/tdi/ghost_rdf.py $r -o ${LOG%.txt}_rdf_$(basename $(dirname $r))_$(basename $r); done
 echo; echo "== 2. G versus time (insertion runs)"
 for t in $TAGS; do case $t in insert_*) for d in runs/tdi_long runs/tdi; do [ -f $d/${t}_stage0.json ] && { echo "-- $d/$t"; python3 mlp_pipeline/tdi/collect.py $d $t --every-ps 0.5 2>&1 | grep -v "^ *lambda"; }; done;; esac; done
 echo; echo "== 3. short-range probe of the MLP (GPU)"
 for t in $PROBE; do
   d=$(for x in runs/tdi_long runs/tdi; do [ -f $x/${t}_stage0.json ] && echo $x && break; done)
   [ -n "$d" ] || { echo "-- $t: not found"; continue; }
-  echo "-- $d/$t"; $PY -u mlp_pipeline/tdi/short_range.py $d $t --frames $FRAMES --dirs $DIRS --uniform $UNIFORM 2>&1 | grep -vE "tensorflow|XLA|cuda|absl|E0000|W0000|I0000|ptxas|^$"
+  echo "-- $d/$t"; $PY -u mlp_pipeline/tdi/short_range.py $d $t --frames $FRAMES --dirs $DIRS --uniform $UNIFORM --widom $WIDOM 2>&1 | grep -vE "tensorflow|XLA|cuda|absl|E0000|W0000|I0000|ptxas|^$"
 done
 echo; echo "== done $(date)"
 } 2>&1 | tee $LOG

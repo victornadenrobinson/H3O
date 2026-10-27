@@ -14,7 +14,9 @@ from tdi import analyze
 
 ap = argparse.ArgumentParser(); ap.add_argument("dir"); ap.add_argument("tag"); ap.add_argument("--frames", type=int, default=5); ap.add_argument("--dirs", type=int, default=20)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--r", type=float, nargs="*", default=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2])
-ap.add_argument("--uniform", type=int, default=200, help="also: dU at this many uniformly random points per frame (the lambda -> 0 integrand of the insertion route)"); a = ap.parse_args()
+ap.add_argument("--uniform", type=int, default=200, help="also: dU at this many uniformly random points per frame (the lambda -> 0 integrand of the insertion route)")
+ap.add_argument("--widom", type=int, default=0, help="insertion runs: Widom test-particle estimate with this many random points per frame on frames of the SMALLEST-lambda node (the unperturbed host): "
+                "mu_ex = -kT ln <exp(-dU/kT)>, to compare with the TDI integral (mu_breakdown 'TDI'); a finite sample biases it HIGH (rare cavities missed), so Widom well BELOW TDI is the red flag"); a = ap.parse_args()
 st = json.load(open(os.path.join(a.dir, f"{a.tag}_stage0.json"))); A = st["args"]
 lam = analyze.rule_nodes(A)[0]; k = int(np.argmax(lam)); f = os.path.join(a.dir, f"{a.tag}_node{k}_traj.extxyz")
 ng = int(st["N"]) if st["phase"] == "insert" else 0
@@ -46,3 +48,17 @@ for el, R in rows.items():
     print(f"  probes with dU(r <= 0.6 A) below the median dU at 1.0 A ({ref:.3f} eV): {holes} of {len(R)}" + ("   <- NOT REPULSIVE AT SHORT RANGE" if holes else ""))
 u = np.array(uni)
 print(f"\nuniform random points ({len(u)}): dU median {np.median(u):.3f}, mean {u.mean():.3f}, min {u.min():.3f}, max {u.max():.3f} eV; fraction below 0: {np.mean(u < 0):.2f}")
+if a.widom and st["phase"] == "insert":
+    kt = 8.617333262e-5 * st["T"]; k0 = int(np.argmin(lam)); f0 = os.path.join(a.dir, f"{a.tag}_node{k0}_traj.extxyz")
+    fr0 = read(f0, index=":")[-a.frames:]; du = []
+    for fr in fr0:
+        host = fr[:len(fr) - ng]; host.calc = calc; e0 = host.get_potential_energy()
+        for _ in range(a.widom):
+            b = host + Atoms("H", positions=[rng.random(3) @ host.cell.array]); b.calc = calc; du.append(b.get_potential_energy() - e0)
+    du = np.array(du); x = -du / kt; mx = x.max(); w = np.exp(x - mx)
+    mu = -kt * (np.log(w.mean()) + mx); blocks = [-kt * (np.log(np.exp(b - mx).mean()) + mx) for b in np.array_split(x, 5)]
+    top = np.sort(w)[::-1]; share = top[:max(1, len(w) // 100)].sum() / w.sum()
+    print(f"\nWidom on {len(fr0)} frames of node {k0} (lambda {lam[k0]:.1e}) x {a.widom} points = {len(du)} insertions:")
+    print(f"  mu_ex = {mu:.3f} eV (5 blocks: {' '.join(f'{v:.3f}' for v in blocks)});  compare: TDI integral of this run (mu_breakdown 'TDI', per added H)")
+    print(f"  'acceptance': fraction of points with dU < 0: {np.mean(du < 0):.4f}, < kT: {np.mean(du < kt):.4f}, < 5 kT: {np.mean(du < 5 * kt):.4f};  top 1% of points carry {share:.2f} of <exp(-dU/kT)>"
+          + ("   <- dominated by a few points: Widom not converged here (expected in dense matter)" if share > 0.5 else ""))
