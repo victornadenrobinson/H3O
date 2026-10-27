@@ -6,7 +6,7 @@ for _v in TAG K VPA BULK NREP NATOMS HPER NGHOST INIT PREPHOLD PREPFREE ONLY0 MI
   case " $ARRAY_KEEP " in *" $_v "*) [ -n "${!_v}" ] && echo "NOTE: $_v=${!_v} taken from the submitting environment"; continue;; esac   # ARRAY_KEEP: knobs this script documents as overrides
   if [ -n "${!_v}" ]; then echo "NOTE: $_v=${!_v} from the submitting environment is ignored by this array script (set it in its table)"; unset $_v; fi
 done
-for _v in MODEL DT PS EQUIL HOT HOTT NODES NPAR RULE NGAUSS ONLYNODES PLIST TLIST; do
+for _v in MODEL SEED DT PS EQUIL HOT HOTT NODES NPAR RULE NGAUSS ONLYNODES PLIST TLIST; do
   [ -n "${!_v}" ] && echo "NOTE: $_v=${!_v} taken from the submitting environment"
 done
 unset _v

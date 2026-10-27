@@ -40,7 +40,15 @@ Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT
 - The report/figure generator (tdi_report.pdf) is not in the repo: commit it so its labels and fits can be reviewed.
 
 ## 5. Next tests, cheapest first
-Tests 1-2 (plus per-lambda tail/drift statistics of the crystal and pure-H runs) in one go, interactive GPU job: `bash mlp_pipeline/young_insert_checks.sh` -> runs/checks/insert_checks_<date>.txt.
+Tests 1-2 and the mu breakdown (tdi/mu_breakdown.py: reference pieces, TDI integral by lambda range with drift, second quadrature, figure) (plus per-lambda tail/drift statistics of the crystal and pure-H runs) in one go, interactive GPU job: `bash mlp_pipeline/young_insert_checks.sh` -> runs/checks/insert_checks_<date>.txt.
+
+MD diagnostics (sbatch; young_tdi_insert.sbatch, 4 h limit; every line keeps the original insertion settings PS 2, EQUIL 0.5, DT 0.5, CHUNK 0.5):
+- Quadrature of the insertion integral (P3): Gauss-Kronrod extension of one run, 11 new lambda values, the old 10 kept:
+  `RULE=gk NGAUSS=10 NODES=21 NPAR=11 ONLYNODES="10 11 12 13 14 15 16 17 18 19 20" JOBS="500 5500 1" sbatch --array=0 mlp_pipeline/young_tdi_insert.sbatch`  -> summarize quad_diff of insert_500GPa_5500K_n1
+- Heavy tail at small lambda (P2): the 4 smallest lambda values again, independent seed, 4x longer, separate directory; compare node_stats of the two:
+  `SEED=11 OUTDIR=runs/tdi_seed ONLYNODES="0 1 2 3" NPAR=4 PS=8 JOBS="500 5500 1" sbatch --array=0 mlp_pipeline/young_tdi_insert.sbatch`
+- Same quantity by both routes (P1): H2.25O by insertion vs +141 / +76 meV direct:  `PS=4 JOBS="500 5500 27;500 6000 27" sbatch --array=0-1 --time=08:00:00 mlp_pipeline/young_tdi_insert.sbatch`
+- Solubility limit (P1): `PS=4 JOBS="500 5500 8;500 5500 16;500 6000 8;500 6000 16" sbatch --array=0-3 --time=08:00:00 mlp_pipeline/young_tdi_insert.sbatch`
 1. `short_range.py` on insert_500GPa_6000K_n1 (P2).
 2. `collect.py runs/tdi insert_500GPa_6000K_n1`: per-lambda integrand; compare with the toy profile (P2).
 3. Restore D1, relaunch insertions (D2), rerun summarize.
