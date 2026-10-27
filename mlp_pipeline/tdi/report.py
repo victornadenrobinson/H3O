@@ -100,13 +100,15 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
             note = " ".join(str(x) for x in q.note.fillna("")) if len(q) else ""
         solid.append(dict(kind=m.phase, P=m.P_target_GPa, T=m.T_K, h=m.H_per_O, n=int(n), dG=(m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n,
                           err=((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n,
-                          caveat=("MELTED" in note) or not (m.dt_fs == w.dt_fs == hh.dt_fs and m.nodes == w.nodes == hh.nodes)))
+                          caveat=("MELTED" in note) or not (m.dt_fs == w.dt_fs == hh.dt_fs and m.nodes == w.nodes == hh.nodes), tags=f"{m.dir}/{m.tag} | {w.dir}/{w.tag} | {hh.dir}/{hh.tag}"))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)
-        solid.append(dict(kind="insert", P=m.P_target_GPa, T=m.T_K, h=2.0, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs))
-solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "n", "dG", "err", "caveat"])
+        solid.append(dict(kind="insert", P=m.P_target_GPa, T=m.T_K, h=2.0, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
+solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "n", "dG", "err", "caveat", "tags"])
+if len(solid) and (solid.dG.abs() > 1500).any():
+    print("mixing/insertion rows with |dG| > 1500 meV per H (off scale in the figure; check their input runs):"); print(solid[solid.dG.abs() > 1500][["kind", "P", "T", "n", "dG", "tags"]].round(0).to_string(index=False))
 
 cross = []   # G_liquid - G_fcc at equal P, T, composition (per atom): negative = liquid more stable (melted)
 for (P, T, h), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O"]):
@@ -141,12 +143,15 @@ if os.path.exists(a.dft_hull):
     def col(c): return np.array([f(r[c]) if len(r) > c else np.nan for r in rows])
     dft = {("unlabelled (400 GPa assumed)", 9000): (col(2), col(3)), ("unlabelled (400 GPa assumed)", 7000): (col(4), col(5)), ("unlabelled (400 GPa assumed)", 5000): (col(6), col(7)),
            ("350 GPa", 9000): (col(10), col(11)), ("350 GPa", 7000): (col(12), col(13)), ("350 GPa", 5000): (col(14), col(15))}
-    dft_x = np.array(xs)   # the sheet's second x column is mislabelled; both blocks use x = 0, 0.2, 0.5, 0.75, 1
+    dft_x = np.array(xs); _n = np.where(dft_x < 1, dft_x / (1 - np.minimum(dft_x, 0.999999)), np.inf); dft_xa = np.where(np.isfinite(_n), _n / (3 + _n), 1.0)   # sheet x = n/(1+n) -> atom fraction n/(3+n)
+    # the sheet's second x column is mislabelled; both blocks use x = 0, 0.2, 0.5, 0.75, 1
 
 # ---------------------------------------------------------------- figures
 figs = {}
-col_T = plt.cm.plasma(np.linspace(0.05, 0.85, 8))
-def Tcol(T, Ts): return col_T[list(Ts).index(T) % 8]
+TN = plt.Normalize(3000, 9000)   # temperature -> colour by heat (blue = cold, red = hot) in every figure
+def Tcol(T, Ts=None): return plt.cm.coolwarm(TN(T))
+def Tbar(fig, axs, label="T (K)"):
+    sm = plt.cm.ScalarMappable(norm=TN, cmap="coolwarm"); sm.set_array([]); fig.colorbar(sm, ax=axs, label=label, fraction=0.025, pad=0.01)
 def hollow(ax, x, y, e, cav, c, m, label=None):
     for k, (xx, yy, ee, cv) in enumerate(zip(x, y, e, cav)):
         ax.errorbar(xx, yy, ee, fmt=m, color=c, mfc="none" if cv else c, ms=5, capsize=2, label=label if k == 0 else None)
@@ -157,48 +162,50 @@ if len(hull):
     for ax, P in zip(axs[0], Ps):
         h = hull[hull.P == P]; Ts = sorted(h["T"].unique())
         for T in Ts:
-            g = h[h["T"] == T].sort_values("x"); c = Tcol(T, Ts); x = np.r_[0, g.x, 1]; y = np.r_[0, g.dG, 0]
-            hollow(ax, g.x, g.dG, g.err, g.caveat, c, "o", f"{T:.0f} K"); ax.plot(*lower_hull(x, y), "-", color=c, lw=.9, alpha=.8)
+            g = h[h["T"] == T].sort_values("x"); c = Tcol(T); xa = g.x / (1 - g.x) / (3 + g.x / (1 - g.x)); x = np.r_[0, xa, 1]; y = np.r_[0, g.dG, 0]   # n = x/(1-x); atom fraction of the added H = n/(3+n)
+            hollow(ax, xa, g.err, g.caveat, c, "o", f"{T:.0f} K"); ax.plot(*lower_hull(x, y), "-", color=c, lw=.9, alpha=.8)
         lab = "unlabelled (400 GPa assumed)" if P == 400 else "350 GPa" if P == 350 else None
         if lab:
             for (l2, T), (y, e) in dft.items():
-                if l2 == lab and T in Ts: ax.errorbar(dft_x + 0.012, y, e, fmt="s", color=Tcol(T, Ts), mfc="none", ms=7, alpha=.5, capsize=1, label=f"DFT sheet {T} K")
-        ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("x_H = n/(1+n)  (H$_{2+n}$O)"); ax.grid(alpha=.25); ax.legend(fontsize=6)
-    axs[0][0].set_ylabel("liquid mixing free energy (meV/atom)"); fig.suptitle("Liquid hull: G(H2O + n H -> H2+nO) per atom. Lines: lower convex hull incl. x=0,1. Hollow = caveat (dt/lambda grid). Squares: DFT hull sheet (header says eV/atom, values read as meV/atom)", fontsize=8)
+                if l2 == lab and T in Ts: ax.errorbar(dft_xa + 0.01, y, e, fmt="s", color=Tcol(T), mfc="none", ms=7, alpha=.6, capsize=1, label=f"DFT sheet {T} K")
+        ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("added-H atom fraction n/(3+n)  (mixture H$_2$O + n H)"); ax.grid(alpha=.25); ax.legend(fontsize=6)
+    axs[0][0].set_ylabel("liquid mixing free energy (meV/atom)"); Tbar(fig, list(axs[0])); fig.suptitle("Liquid hull: G(H2O + n H -> H2+nO) per atom vs n/(3+n) (n = H per O - 2). Lines: lower convex hull incl. 0,1. Hollow = caveat (dt/lambda grid). Squares: DFT hull sheet (header says eV/atom, values read as meV/atom)", fontsize=8)
     figs["hull"] = fig
 
 # 2 fcc - bcc vs literature
 Tset = [3000, 5000]; fig, axs = plt.subplots(1, 2, figsize=(10, 4.2), sharey=True)
 for ax, T in zip(axs, Tset):
     if len(lit):
-        for s, g in lit[(lit["T_K"] - T).abs() < 250].groupby("source"):
-            g = g.sort_values("P_GPa"); ax.errorbar(g.P_GPa, g.dG, g.err_meV_atom.fillna(0), fmt="s--", color="tab:green", mfc="none", ms=5, capsize=2, label=s)
+        for s, g in lit[((lit["T_K"] - T).abs() < 250) & lit.source.str.startswith("Wilson")].groupby("source"):   # Cheng comes from the full table below; old 'this work' rows of the csv are replaced by the current TDI results
+            g = g.sort_values("P_GPa"); ax.errorbar(g.P_GPa, g.dG, g.err_meV_atom.fillna(0), fmt="s--", color="tab:green", mfc="none", ms=6, capsize=2, label="Wilson 2013 (DFT-PBE TI)")
     if len(cheng):
         g = cheng[cheng["T_K"] == T].sort_values("P_GPa")
         if len(g):
             ax.plot(g.P_GPa, g.pbe, "-", color="tab:blue", label="Cheng 2021 (PBE-corrected)"); ax.fill_between(g.P_GPa, g.pbe - g.err, g.pbe + g.err, color="tab:blue", alpha=.15); ax.plot(g.P_GPa, g.mlp, ":", color="tab:blue", label="Cheng 2021 (their MLP)")
-    for h, c, m in ((2.0, "k", "o"), (2.25, "tab:red", "^")):
+    for h, c, m in ((2.0, "k", "o"), (2.25, "tab:red", "D")):
         g = pairs[(pairs["T"] == T) & (pairs.h == h)].sort_values("P")
         if len(g):
             for cell, mm, sub in (("big", m, g[g.cell == "big"]), ("small", "v", g[g.cell == "small"])):
                 if len(sub): hollow(ax, sub.P, sub.dG, sub.err, sub.caveat | (cell == "small"), c, mm, f"this work H{h:g}O fcc-bcc ({cell} cell)")
-    ax.axhline(0, color="k", lw=.6); ax.set_xscale("log"); ax.set_title(f"T = {T} K"); ax.set_xlabel("P (GPa)"); ax.grid(alpha=.25, which="both"); ax.legend(fontsize=6)
+    ax.axhline(0, color="k", lw=.6); ax.set_xscale("log"); ax.set_xticks([100, 200, 300, 500, 1000, 2000, 4000]); ax.set_xticklabels(["100", "200", "300", "500", "1000", "2000", "4000"]); ax.minorticks_off(); ax.set_xlim(85, 4500); ax.set_title(f"T = {T} K"); ax.set_xlabel("P (GPa)"); ax.grid(alpha=.25); ax.legend(fontsize=6)
 axs[0].set_ylabel("G_fcc - G_bcc (meV/atom)"); fig.suptitle("fcc - bcc superionic H2O vs literature (negative = fcc stable). Hollow = small cell or different dt/lambda grid. Our values are MLP (ft_m2), classical nuclei", fontsize=8)
 figs["fcc_bcc"] = fig
 
 # 3 solid mixing per added H
 sm = solid[solid.kind.isin(["fcc", "bcc"])]
 if len(sm):
-    Ps = sorted(sm.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.6 * len(Ps), 4.2), sharey=True, squeeze=False)
+    Ps = sorted(sm.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.8 * len(Ps), 4.4), sharey=True, squeeze=False); YL = (-1000, 800); nout = 0
     for ax, P in zip(axs[0], Ps):
-        for kind, c, m in (("fcc", "tab:blue", "o"), ("bcc", "tab:orange", "^"), ("insert", "tab:green", "s")):
-            g = solid[(solid.P == P) & (solid.kind == kind)].sort_values("T")
-            for n, gg in g.groupby("n"):
-                hollow(ax, gg["T"] + (15 * n if kind == "insert" else 0), gg.dG, gg.err, gg.caveat, c, m, f"{kind} n={n}" if kind == "insert" else f"{kind} H2.xO ({n} added)")
-        Tl = np.linspace(solid[solid.P == P]["T"].min(), solid[solid.P == P]["T"].max(), 20) if len(solid[solid.P == P]) else []
-        if len(Tl): ax.fill_between(Tl, -kT(Tl), kT(Tl), color="gray", alpha=.12, label="+-kT")
-        ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("T (K)"); ax.grid(alpha=.25); ax.legend(fontsize=5, ncol=2)
-    axs[0][0].set_ylabel("dG per added H (meV)"); fig.suptitle("Crystal H2O + n H(fluid) -> H2+n/nO crystal, per added H (positive = H not soluble). Insertion: fixed-V mu_H(host) - G_H; hollow = melted in free NVT / different dt or lambda grid", fontsize=8)
+        d = solid[solid.P == P]; jit = 0.012 * max(float(d["T"].max() - d["T"].min()), 500.0)
+        for kind, m in (("fcc", "o"), ("bcc", "^"), ("insert", "s")):
+            for n, gg in d[d.kind == kind].sort_values("T").groupby("n"):
+                gg = gg[(gg.dG > YL[0]) & (gg.dG < YL[1])] if len(gg) else gg; nout += int(((d.kind == kind) & (d.n == n)).sum() - len(gg))
+                for _, r in gg.iterrows():
+                    ax.errorbar(r["T"] + (jit * {1: -1, 2: 0, 4: 1}.get(n, 0) if kind == "insert" else 0), r.dG, r.err, fmt=m, color=Tcol(r["T"]), mfc="none" if r.caveat else Tcol(r["T"]), mec="k" if not r.caveat else Tcol(r["T"]), ms=6, capsize=2)
+        for kind, m, t in (("fcc", "o", "fcc H2.xO crystal"), ("bcc", "^", "bcc H2.xO crystal"), ("insert", "s", "insertion (n = 1, 2, 4: left, centre, right)")): ax.plot([], [], m, color="gray", label=t)
+        Tl = np.linspace(d["T"].min() - 100, d["T"].max() + 100, 20); ax.fill_between(Tl, -kT(Tl), kT(Tl), color="gray", alpha=.12, label="+-kT")
+        ax.set_ylim(*YL); ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("T (K)"); ax.grid(alpha=.25); ax.legend(fontsize=6, loc="lower right")
+    axs[0][0].set_ylabel("dG per added H (meV)"); Tbar(fig, list(axs[0])); fig.suptitle("Crystal H2O + n H(fluid) -> H2+n/nO crystal, per added H (positive = H not soluble). Hollow = melted in free NVT / different dt or lambda grid" + (f"; {nout} off-scale rows not drawn (printed in the log)" if nout else ""), fontsize=8)
     figs["mix_solid"] = fig
 
 # 4 insertion: n dependence
@@ -206,12 +213,12 @@ ins = solid[solid.kind == "insert"]
 if len(ins):
     fig, ax = plt.subplots(figsize=(6, 4.2)); keys = sorted(set(zip(ins.P, ins["T"]))); out = []
     for k, (P, T) in enumerate(keys):
-        g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n"); c = plt.cm.tab20(k % 20)
-        ax.errorbar(g.n, g.dG, g.err, fmt="o-", color=c, ms=4, capsize=2, lw=.8, label=f"{P:.0f} GPa {T:.0f} K")
+        g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n"); c = Tcol(T)
+        ax.errorbar(g.n, g.dG, g.err, fmt={300: "o", 400: "s", 500: "^", 600: "D"}.get(int(P), "x") + "-", color=c, ms=5, capsize=2, lw=.8, label=f"{P:.0f} GPa {T:.0f} K")
         if len(g) >= 2:
             w = 1 / np.maximum(g.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(g)), g.n.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * g.dG.values))
             out.append(f"{P:.0f} GPa {T:.0f} K: n->0 {b[0]:7.0f} +- {cov[0, 0] ** .5:4.0f} meV, slope {b[1]:5.0f} meV/H")
-    ax.axhline(0, color="k", lw=.6); ax.set_xlabel("number of inserted H n (fixed V)"); ax.set_ylabel("mu_H(insertion) - G_H(pure) (meV)"); ax.grid(alpha=.25); ax.legend(fontsize=5, ncol=2)
+    ax.axhline(0, color="k", lw=.6); ax.set_xlabel("number of inserted H n (fixed V)"); ax.set_ylabel("mu_H(insertion) - G_H(pure) (meV)"); ax.grid(alpha=.25); ax.legend(fontsize=5, ncol=2); Tbar(fig, ax)
     ax.set_title("Insertion vs n: the slope is the fixed-V pressure rise of the cell; weighted line fits give n->0", fontsize=8); figs["insert_n"] = fig
     print("insertion n->0 extrapolation (weighted linear fit, error from the fit only):"); print("\n".join(out))
 
@@ -246,6 +253,7 @@ ax.set_xlabel("P (GPa)  (composition offset 4 GPa per extra H per O)"); ax.set_y
 fig, axs = plt.subplots(1, 3, figsize=(13, 4.2)); ok = raw[raw.excluded == ""]
 axs[0].scatter(ok.ps_per_node, ok.drift_meV, s=12, c=ok.G_err_meV_atom, cmap="viridis"); axs[0].axhline(0, color="k", lw=.5); axs[0].set_xlabel("ps per lambda"); axs[0].set_ylabel("drift = G(all) - G(first half) (meV/atom)"); axs[0].set_title("convergence (colour: G error)", fontsize=8)
 q = raw.quad_diff_meV.dropna()
+if (q.abs() > 20).any(): print("quadrature estimate |Kronrod - Gauss| > 20 meV/atom (run likely not converged in lambda):"); print(raw[raw.quad_diff_meV.abs() > 20][["dir", "tag", "quad_diff_meV"]].round(1).to_string(index=False))
 if len(q): axs[1].hist(q, bins=20); axs[1].set_xlabel("Kronrod - Gauss (meV/atom)"); axs[1].set_title("quadrature error estimate", fontsize=8)
 axs[2].scatter(raw.P_target_GPa, 100 * raw.P_dev, s=12, c=np.where(raw.excluded != "", "red", "tab:blue")); axs[2].axhline(0, color="k", lw=.5); axs[2].set_xlabel("P target (GPa)"); axs[2].set_ylabel("P_hi - P_target (%)"); axs[2].set_title("MLP pressure at the highest lambda (red = excluded)", fontsize=8)
 for x in axs: x.grid(alpha=.25)
