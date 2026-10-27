@@ -278,8 +278,13 @@ def hull_vpa(csv_path, hper, T, P):
     Other temperatures between 5000 and 9000 K: linear interpolation in T between the two neighbouring columns (approximate)."""
     d = pd.read_csv(csv_path)
     comp = {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(float(hper))
-    if comp is None:
-        raise SystemExit(f"no hull EOS column for {hper} H per O: give --vpa")
+    if comp is None:   # composition without a column (H2.5O, H4O): V/atom interpolated linearly in H per O between the neighbouring columns (approximate)
+        known = [2.0, 2.25, 3.0, 5.0, 7.0]; lo = max((k for k in known if k < hper), default=None); hi = min((k for k in known if k > hper), default=None)
+        if lo is None or hi is None:
+            raise SystemExit(f"no hull EOS column for {hper} H per O and no neighbouring columns: give --vpa")
+        vl, vh = hull_vpa(csv_path, lo, T, P), hull_vpa(csv_path, hi, T, P)
+        print(f"NOTE: no hull EOS column for H{hper:g}O: V/atom interpolated linearly in H per O between H{lo:g}O ({vl:.4f}) and H{hi:g}O ({vh:.4f})", flush=True)
+        return vl + (vh - vl) * (hper - lo) / (hi - lo)
 
     def at(Tc):
         p, v = d[f"P {int(Tc)}K {comp}"], d[f"V {int(Tc)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
