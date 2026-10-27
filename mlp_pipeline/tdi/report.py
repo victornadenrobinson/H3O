@@ -352,7 +352,7 @@ if grp:
         f = g[(~g.caveat) & (g.a <= 0.3)]
         if len(f) >= 2 and f.a.nunique() >= 2:
             w = 1 / np.maximum(f.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(f)), f.a.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * f.dG.values))
-            xx = np.linspace(0, max(0.3, f.a.max()), 20); ax.plot(xx, b[0] + b[1] * xx, "k-", lw=.9, label="linear fit (regular-solution-like)"); ax.plot(xx, b[0] + kT(T) * xx / 4, "k:", lw=.9, label="ideal, identical H (slope kT/4 per H per O)")
+            xx = np.linspace(0, max(0.3, f.a.max()), 20); ax.plot(xx, b[0] + b[1] * xx, "k-", lw=.9, label="linear fit (regular-solution-like)"); ax.plot(xx, b[0] + kT(T) * xx / 4, "k:", lw=.9, label="ideal fluid-like H (M sites/O -> inf): per-added-H average, slope kT/4 (differential kT/2)")
             mu0.append((P, T, b[0], cov[0, 0] ** .5, b[1], cov[1, 1] ** .5))
         ax.axhline(0, color="k", lw=.5); ax.set_title(f"{P:.0f} GPa, {T:.0f} K", fontsize=8, color=Tcol(T)); ax.grid(alpha=.25); ax.set_xlabel("added H per O", fontsize=7); ax.set_ylabel("mu_H - G_H(pure) (meV)", fontsize=7); ax.legend(fontsize=4.5)
     for ax in axs.ravel()[len(grp):]: ax.axis("off")
