@@ -667,7 +667,7 @@ def run_node(c, st, k):
             if Tavg > 2.0 * a.T:
                 raise Unstable(f"mean T_kin {Tavg:.0f} K in the last chunk (target {a.T:.0f} K)")
         except Unstable as ex:
-            print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({done + ch - 1} of {nchunk}). "
+            print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({ch - 1} of {nchunk}). "
                   f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
             sys.exit(5)
         np.save(f[:-4] + ".tmp.npy", np.array(r.series)); os.replace(f[:-4] + ".tmp.npy", f)   # atomic: readers and a kill never see a truncated series
