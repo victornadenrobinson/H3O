@@ -363,9 +363,14 @@ def build_h(vpa, nrep):
     return Atoms("H" * n, scaled_positions=sp, cell=[a_conv * nrep] * 3, pbc=True)
 
 
+def make_tag(a):
+    """file-name stem of a run (before setup() fills in the default nrep): the launcher asks for it with --print-tag, so the shell and the files always agree"""
+    return a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
+
+
 def setup(a):
     eos = import_module("17_eos_md")
-    tag = a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
+    tag = make_tag(a)
     os.makedirs(a.outdir, exist_ok=True)
     vpa = a.vpa or vpa_at(a, a.P)
     if not np.isfinite(vpa):
@@ -704,7 +709,10 @@ if __name__ == "__main__":
     ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
     ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
     ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--print-tag", action="store_true", help="print the run's tag (file-name stem) and exit")
     a = ap.parse_args()
+    if a.print_tag:
+        print(make_tag(a)); sys.exit(0)
     sys.path.insert(0, HERE)
     c = setup(a)
     if a.stage0:

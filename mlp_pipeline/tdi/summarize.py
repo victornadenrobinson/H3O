@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 from tdi.gcalc import G_from_nodes
 from tdi.verdict import verdict
+EV_A3_GPA = 160.21766
 
 ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None)
 ap.add_argument("--discard", type=float, default=0.0, help="discard this fraction of the start of every lambda series before integrating (e.g. 0.5 = use the second half only): a direct test of equilibration / convergence of every table below"); a = ap.parse_args()
@@ -55,14 +56,15 @@ for d in dirs:
                 pass
         rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
                          nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else "") + (f" (Gauss {A['ngauss']} only: Kronrod extension pending)" if partial_gk else ""), quad_diff_meV=qd, rule=A.get("rule") or "gl",
-                         G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
+                         G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], P_corr_meV=st.get("dG_P_eV", np.nan) / st["N"] * 1e3,
+                         dG_P2_meV_atom=(np.nan if st["phase"] == "insert" else -st["V"] / st["N"] * (P_hi - st["P_target"]) ** 2 / (2 * st.get("B_GPa", np.nan)) / EV_A3_GPA * 1e3), git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
     raise SystemExit("no tag with samples found in " + ", ".join(dirs) + ("\nskipped: " + "; ".join(skipped) if skipped else ""))
 df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs", "dir"]).reset_index(drop=True)
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
-print(f"All runs{' (first ' + str(a.discard) + ' of every series discarded)' if a.discard else ''} (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target):")
-print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa"]].round(2).to_string(index=False))
+print(f"All runs{' (first ' + str(a.discard) + ' of every series discarded)' if a.discard else ''} (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target; dG_P2 = -V (P_hi - P_target)^2 / (2 B N): second-order correction G(P_target) - (F + P_target V) when the MLP pressure misses the target, NOT applied; nan = no bulk modulus in the stage0 json (older runs); insertion rows: P_corr = pressure correction to P_target included in G):")
+print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa", "dG_P2_meV_atom", "P_corr_meV"]].round(2).to_string(index=False))
 if stale:
     print("\nWARNING, more node files than the json declares: " + "; ".join(stale))
 if skipped:
@@ -119,16 +121,18 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         w, hh = pick(w, m.dt_fs, m.nodes), pick(hh, m.dt_fs, m.nodes); n = m.nH - 2 * m.nO
         dG = (m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n
         err = ((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n
-        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node, nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_H=int(hh.N),
+        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err,
+                          P2_corr_per_H_meV=(m.N * m.dG_P2_meV_atom - w.N * w.dG_P2_meV_atom - n * hh.dG_P2_meV_atom) / n, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node, nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_H=int(hh.N),
                           note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid " if not (m.nodes == w.nodes == hh.nodes) else "") + "; ".join(x for x in (nvt_flag(m.phase, m.H_per_O, m.P_target_GPa, m.T_K), nvt_flag(m.phase, 2.0, m.P_target_GPa, m.T_K)) if x)))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = pick(hh, m.dt_fs)
         solid.append(dict(phase="insert (fcc H2O, dilute)", P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=2.0, n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
-                          kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ") + nvt_flag("fcc", 2.0, m.P_target_GPa, m.T_K)))
+                          kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ")
+                          + ("" if np.isfinite(m.P_corr_meV) else "NO PRESSURE CORRECTION (stage 0 older than the fix: rerun stage 0 of this run) ") + nvt_flag("fcc", 2.0, m.P_target_GPa, m.T_K)))
 if solid:
-    print("\nMixing free energy per added H, crystal H2O + n H(fluid) -> H(2+n/nO)O crystal (positive = H not soluble); insertion rows: mu_H(fcc H2O) - G_H(pure), meV:")
+    print("\nMixing free energy per added H, crystal H2O + n H(fluid) -> H(2+n/nO)O crystal (positive = H not soluble); insertion rows: mu_H(fcc H2O) - G_H(pure), meV; P2_corr_per_H = the dG_P2 corrections combined like G (not applied):")
     print(pd.DataFrame(solid).round(2).to_string(index=False))
 hull = []
 for (P, T), g in df.groupby(["P_target_GPa", "T_K"]):
@@ -138,11 +142,11 @@ for (P, T), g in df.groupby(["P_target_GPa", "T_K"]):
             w, hh = pick(wg, m.dt_fs, m.nodes), pick(hg, m.dt_fs, m.nodes)
             n = m.H_per_O - 2.0; fw, fh = 3 / (3 + n), n / (3 + n)   # atom fractions of the H2O part and of the added H in the mixture
             note = ("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid " if not (m.nodes == w.nodes == hh.nodes) else "") + ("not done" if not all(str(x.status).startswith("done") for x in (m, w, hh)) else "")
-            hull.append(dict(P_GPa=P, T_K=T, H_per_O=m.H_per_O, x_H=n / (1 + n), dG_mix_meV_atom=m.G_meV_atom - fw * w.G_meV_atom - fh * hh.G_meV_atom,
+            hull.append(dict(P_GPa=P, T_K=T, H_per_O=m.H_per_O, x_H=n / (1 + n), x_H_atom=fh, dG_mix_meV_atom=m.G_meV_atom - fw * w.G_meV_atom - fh * hh.G_meV_atom,
                              err=(m.G_err_meV_atom ** 2 + (fw * w.G_err_meV_atom) ** 2 + (fh * hh.G_err_meV_atom) ** 2) ** .5, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node,
                              nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_mix=int(m.N), N_H2O=int(w.N), N_H=int(hh.N), note=note.strip()))
 if hull:
-    print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom:")
+    print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom. A hull of these per-atom values must be drawn against x_H_atom = n/(3+n) (fraction of atoms that are added H): against x_H its tie lines are not straight:")
     print(pd.DataFrame(hull).round(2).to_string(index=False))
 if a.o:
     df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(solid).to_csv(a.o.replace(".csv", "_mix.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))

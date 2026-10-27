@@ -18,11 +18,12 @@
 #SBATCH --array=0-35%6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+. mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 PLIST=(${PLIST:-300 400 500}); TLIST=(${TLIST:-5000 5500 6000 6500}); PHASES=(liquid fcc bcc)
 I=${SLURM_ARRAY_TASK_ID:-0}; PH=${PHASES[$((I % 3))]}; T=${TLIST[$(( (I / 3) % ${#TLIST[@]} ))]}; P=${PLIST[$(( I / (3 * ${#TLIST[@]}) ))]}
 [ -n "$P" ] || { echo "no table entry for array task $I"; exit 2; }
 echo "== task $I: $PH at $P GPa, $T K on $(hostname) $(date) git $(git rev-parse --short HEAD)"
 EQ=$([ $PH = liquid ] && echo 1.0 || echo 0.5)
-[ $PH = liquid ] && export NREP=${NREP:-3}
-HOTV=$([ $PH = liquid ] && echo ${HOT-0.5}); P=$P T=$T HOT=$HOTV NODES=8 NPAR=8 DT=0.5 EQUIL=$EQ PS=${PS:-2} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PH
+[ $PH = liquid ] && export NREP=${LIQNREP:-3}   # liquid cell only (108 O); LIQNREP overrides
+HOTV=$([ $PH = liquid ] && echo ${HOT-0.5}); P=$P T=$T HOT=$HOTV NODES=${NODES:-8} NPAR=${NPAR:-8} DT=0.5 EQUIL=$EQ PS=${PS:-2} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PH
 echo "== task $I finished $(date)"

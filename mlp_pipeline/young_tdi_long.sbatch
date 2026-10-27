@@ -16,6 +16,7 @@
 #SBATCH --array=0-6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+. mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 TABLE=("fcc 500 6000 2 - 9 9" "fcc 500 6000 2.25 - 9 9" "H 500 6000 2 250 8 8" "bcc 400 5000 2 - 9 9" "liquid 400 7000 2 - 10 10" "liquid 400 7000 2.25 - 10 10" "insert 500 6000 2 - 10 10")
 read -r PH P T HP NAT ND NP <<< "${TABLE[${SLURM_ARRAY_TASK_ID:-0}]}"
 [ -n "$PH" ] || { echo "no table entry for array task $SLURM_ARRAY_TASK_ID"; exit 2; }

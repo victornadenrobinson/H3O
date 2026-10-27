@@ -8,14 +8,25 @@ def load(base):
     j = json.load(open(base + "_stage0.json")); return j["args"], j
 
 def cmd(base, ps):
-    a, j = load(base); ph = a["phase"]; ps = max(float(ps), float(a["ps"])); nodes = int(a["nodes"])
+    """the launcher line that continues the run <base> (= <dir>/<tag>) with the same settings, so that its tag, stage0.json and node states are reused (run_real.py refuses
+    to rewrite the json of existing samples with different settings, so a mismatch here fails loudly instead of mixing samples)"""
+    a, j = load(base); ph = a["phase"]; tag = os.path.basename(base); ps = max(float(ps), float(a["ps"])); nodes = int(a["nodes"])
     npar = nodes if nodes <= 9 else -(-nodes // -(-nodes // 9)); npar = min(npar, 8) if ph == "H" else npar
-    env = dict(P=a["P"], T=a["T"], HPER=a.get("hper", 2.0), NODES=nodes, NPAR=npar, DT=a["dt"], EQUIL=a["equil_ps"], PS=ps, PS1=a["ps1"], CHUNK=a["chunk_ps"], POWER=a.get("power", 4.0),
+    env = dict(MODEL=a["model"], P=a["P"], T=a["T"], HPER=a.get("hper", 2.0), NODES=nodes, NPAR=npar, DT=a["dt"], EQUIL=a["equil_ps"], PS=ps, PS1=a["ps1"], CHUNK=a["chunk_ps"], POWER=a.get("power", 4.0),
                OUTDIR=os.path.dirname(base) or "runs/tdi")
-    for k, key in (("NGHOST", "nghost"), ("NATOMS", "natoms"), ("NREP", "nrep"), ("K", "k"), ("MINRUNS", "min_runs"), ("NGAUSS", "ngauss")):
+    for k, key in (("NGHOST", "nghost"), ("NATOMS", "natoms"), ("MINRUNS", "min_runs"), ("NGAUSS", "ngauss"), ("VPA", "vpa"), ("BULK", "bulk_gpa")):
         if a.get(key) not in (None, 0): env[k] = a[key]
+    if "_rep" in tag:   # setup() stores the default nrep in args; only an explicit NREP is part of the tag
+        env["NREP"] = a["nrep"]
+    if a.get("k") not in (None, 0):
+        env["K"] = a["k"]
+    elif ph in ("bcc", "fcc"):   # k was measured by a lambda=1 stage: K=0 keeps that stage0.json (the launcher would otherwise use its default k)
+        env["K"] = 0
     if a.get("rule") == "gk": env["RULE"] = "gk"
-    return " ".join(f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in env.items()) + f" bash mlp_pipeline/young_tdi_par.sh {ph}"
+    if float(a.get("hot_ps") or 0) > 0: env["HOT"], env["HOTT"] = a["hot_ps"], a.get("hot_T", 12000.0)
+    if os.path.exists(base + "_prep.extxyz"): env["PREPHOLD"], env["PREPFREE"] = a.get("prep_hold_ps", 1.0), a.get("prep_free_ps", 1.0)
+    elif a.get("init_from"): env["INIT"] = a["init_from"]
+    return " ".join(f"{k}={v:.12g}" if isinstance(v, float) else f"{k}={v}" for k, v in env.items()) + f" bash mlp_pipeline/young_tdi_par.sh {ph}"
 
 if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "cmd": print(cmd(sys.argv[2], sys.argv[3]))
