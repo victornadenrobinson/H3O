@@ -62,7 +62,10 @@ for (P, T), g in ins.groupby(["P_target_GPa", "T_K"]):
     # independent partial volume of H in the crystal (needs the stage-0 pressure runs) and volume per atom of pure H
     vH = [st["V"] * (st["P_full_GPa"] - st["P_host_GPa"]) / (st["N"] * st["B_GPa"]) for st in (stage0(r) for r in g.itertuples()) if st.get("P_full_GPa") and st.get("B_GPa")]
     vpure = sth["V"] / sth["N"] * (1 + (h.P_hi_GPa - P) / sth["B_GPa"]) if sth.get("B_GPa") and np.isfinite(h.P_hi_GPa) else (sth["V"] / sth["N"] if sth else np.nan)
-    rows.append(dict(P=P, T=T, n=",".join(str(int(x)) for x in n), dg0=dg0, dg0_err=dg0e, slope=s, slope_err=se, nO=int(g.nO.iloc[0]),
+    st0 = stage0(next(g.itertuples())); s_id = np.nan   # ideal (dilution) entropy of transfer: k ln(rho_H pure / rho_H in the crystal); identical protons, no labelling entropy
+    if st0 and sth:
+        s_id = float(np.log((sth["N"] / sth["V"]) / ((st0["nH"] - st0["N"]) / st0["V"])))
+    rows.append(dict(P=P, T=T, n=",".join(str(int(x)) for x in n), dg0=dg0, dg0_err=dg0e, slope=s, slope_err=se, nO=int(g.nO.iloc[0]), s_ideal_kB=s_id,
                      v_H=np.mean(vH) if vH else np.nan, v_pureH=vpure, dv_direct=(np.mean(vH) - vpure) if vH else np.nan, kT=KB * T, note=flag))
 R = pd.DataFrame(rows)
 if R.empty:
@@ -77,7 +80,12 @@ if len(ok) >= 3 and ok.P.nunique() >= 2 and ok["T"].nunique() >= 2:
     ds, dv = -b[1], b[2] * EV_A3_GPA / 1e3   # meV/K; meV/GPa -> A^3 (1 GPa A^3 = 6.24 meV)
     print(f"\nfit over {len(ok)} state points (P0 {a.P0:g} GPa, T0 {a.T0:g} K): dg0 = {b[0]:.0f} +- {be[0] * scale:.0f} meV;  ds = {ds:+.3f} +- {be[1] * scale:.3f} meV/K "
           f"({ds / KB:+.2f} k_B);  dv = {dv:+.3f} +- {be[2] * scale * EV_A3_GPA / 1e3:.3f} A^3  (chi2/dof {chi2 / dof:.1f}; errors scaled by {scale:.1f})")
-    print(f"   dh = dg0 + T0 ds = {b[0] + a.T0 * ds:.0f} meV (enthalpy of transfer at P0, T0): {'enthalpy' if abs(b[0] + a.T0 * ds) > abs(a.T0 * ds) else 'entropy'}-dominated")
+    dh = b[0] + a.T0 * ds; pdv = a.P0 * dv / EV_A3_GPA * 1e3
+    print(f"   dh = dg0 + T0 ds = {dh:.0f} meV (enthalpy of transfer at P0, T0) = du {dh - pdv:.0f} + P0 dv {pdv:.0f} meV: {'enthalpy' if abs(dh) > abs(a.T0 * ds) else 'entropy'}-dominated")
+    sid = R.s_ideal_kB.dropna()
+    if len(sid):
+        print(f"   entropy of transfer {ds / KB:+.2f} k_B = ideal (dilution of H from pure-H density to the crystal's proton density) {sid.mean():+.2f} k_B"
+              f" + excess (binding / constraint of the proton in the crystal) {ds / KB - sid.mean():+.2f} k_B")
     dd = R.dv_direct.dropna()
     print(f"   independent dv from volumes (v_H from the stage-0 pressure runs - v of pure H): " + (f"{dd.mean():+.3f} A^3 (n {len(dd)})" if len(dd) else "not available yet (needs stage-0 pressure corrections: young_tdi_insert_p0.sbatch)"))
     MC = np.random.default_rng(0).multivariate_normal(b, Cs, 20000)   # parameter samples for the uncertainty of the boundary
