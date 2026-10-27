@@ -164,7 +164,7 @@ HEAT = LinearSegmentedColormap.from_list("heat", ["#1f3fbf", "#1fa3d6", "#f2c230
 TN = plt.Normalize(3000, 9000)   # temperature -> colour by heat in every figure
 def Tcol(T, Ts=None): return HEAT(TN(T))
 def Tbar(fig, axs, label="T (K)"):
-    sm = plt.cm.ScalarMappable(norm=TN, cmap=HEAT); sm.set_array([]); fig.colorbar(sm, ax=axs, label=label, fraction=0.025, pad=0.01)
+    sm = plt.cm.ScalarMappable(norm=TN, cmap=HEAT); sm.set_array([]); cax = fig.add_axes([0.935, 0.18, 0.012, 0.62]); fig.colorbar(sm, cax=cax, label=label); fig._cb = True   # own axes right of the panels (tight_layout below leaves room)
 def hollow(ax, x, y, e, cav, c, m, label=None):
     for k, (xx, yy, ee, cv) in enumerate(zip(x, y, e, cav)):
         ax.errorbar(xx, yy, ee, fmt=m, color=c, mfc="none" if cv else c, ms=5, capsize=2, label=label if k == 0 else None)
@@ -277,7 +277,7 @@ fig.text(0.01, 0.0, "Excluded: " + ("; ".join(f"{r.dir}/{r.tag} ({r.excluded})" 
 os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
 with PdfPages(a.out + ".pdf") as pdf:
     for name, fig in figs.items():
-        fig.tight_layout(rect=(0, 0.03, 1, 0.95)); pdf.savefig(fig)
+        fig.tight_layout(rect=(0, 0.03, 0.92 if getattr(fig, "_cb", False) else 1, 0.95)); pdf.savefig(fig)
         for fm in a.fmt: fig.savefig(f"{a.out}_{name}.{fm}", dpi=150)
 print("wrote", a.out + ".pdf", "and", ", ".join(f"{a.out}_{n}.{fm}" for n in figs for fm in a.fmt))
 
