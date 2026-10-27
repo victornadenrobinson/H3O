@@ -22,6 +22,10 @@ ap.add_argument("--phase", default=None, help="keep frames whose phase_tag conta
 ap.add_argument("--xmax", type=float, default=3.0, help="largest H per O in the linear fit of f(x) (default 3: H2O..H3O)")
 ap.add_argument("--by", default=None, choices=["T", "source_csv"], help="repeat the analysis per T or per input file")
 ap.add_argument("-o", default=None, help="output prefix: writes <o>_by_comp.csv")
+ap.add_argument("--regress", nargs=2, type=float, metavar=("P0", "T0"), default=None,
+                help="also fit per frame f = a + b (x - 2) + c (P - P0)/100 + d (T - T0)/1000 over 2 <= x <= --xmax (and delta_H = a' + c' dP + d' dT for pure H), "
+                     "errors clustered by AIMD run (source): separates the composition slope b from P / T differences between the composition groups; "
+                     "error of mu_H - G_H at (P0, T0) = b - delta_H(P0, T0)")
 a = ap.parse_args()
 
 
@@ -50,6 +54,8 @@ df["NO"] = np.where(pure, 0.0, df.n / (1 + df.x.where(~pure, 0)))   # from the l
 if "N_O" in df:
     df["NO"] = df.N_O.astype(float).fillna(df.NO)
 df["NH"] = df.n - df.NO
+if "N_O" in df:   # true H per O from the atom counts where known (labels are rounded, e.g. h5o = H5.024O)
+    k = df.N_O.notna() & (df.N_O > 0); df.loc[k, "x"] = (df.NH[k] / df.NO[k]).round(4)
 if not np.allclose(df.NO[~pure], df.NO[~pure].round(), atol=0.01):
     print("WARNING: n / (1 + x) is not an integer for some frames: composition label and atom count disagree")
 for col, lo, hi in (("P_dft", a.pmin, a.pmax), ("T", a.tmin, a.tmax)):
@@ -108,7 +114,39 @@ def analyse(d, title):
     return t
 
 
+def cluster_fit(y, X, groups):
+    """OLS with run-clustered covariance (CR1); falls back to frame-level (HC1) when fewer than 4 runs"""
+    b, *_ = np.linalg.lstsq(X, y, rcond=None); u = y - X @ b; XtXi = np.linalg.pinv(X.T @ X); n, k = X.shape
+    g = pd.Series(groups).astype(str).values; G = len(set(g))
+    if G >= 4:
+        M = sum(np.outer(X[g == q].T @ u[g == q], X[g == q].T @ u[g == q]) for q in set(g)); c = G / (G - 1) * (n - 1) / max(n - k, 1)
+    else:
+        M = (X * u[:, None] ** 2).T @ X; c = n / max(n - k, 1)
+    return b, np.sqrt(np.diag(c * XtXi @ M @ XtXi)), G
+
+
+def regress(d, P0, T0):
+    src = d.source if "source" in d and d.source.notna().all() else d.comp.astype(str) + "_" + d["T"].astype(str)
+    s = d[np.isfinite(d.x) & (d.x >= 2 - 1e-6) & (d.x <= a.xmax + 1e-6)]; h = d[np.isinf(d.x)]
+    print(f"\n=== regression at P0 {P0:g} GPa, T0 {T0:g} K (frames: {len(s)} with 2 <= x <= {a.xmax:g} in {s.x.nunique()} compositions, {len(h)} pure H)")
+    if s.x.nunique() < 2 or len(s) < 6:
+        print("  not enough compositions"); return
+    X = np.c_[np.ones(len(s)), s.x - 2, (s.P_dft - P0) / 100, (s["T"] - T0) / 1000]
+    b, e, G = cluster_fit(s.f.values, X, src[s.index].values)
+    print(f"  f (meV per O) = {b[0]:.1f} +- {e[0]:.1f}  + ({b[1]:.1f} +- {e[1]:.1f}) (x - 2)  + ({b[2]:.1f} +- {e[2]:.1f}) dP/100  + ({b[3]:.1f} +- {e[3]:.1f}) dT/1000   [{G} runs]")
+    if len(h) >= 2:
+        cols = [np.ones(len(h))] + [c for c in ((h.P_dft - P0) / 100, (h["T"] - T0) / 1000) if np.ptp(c) > 0.2]
+        bh, eh, Gh = cluster_fit(h.dH.values, np.c_[tuple(cols)], src[h.index].values)
+        dH, dHe = bh[0], eh[0]
+        print(f"  pure H delta_H(P0, T0) = {dH:.1f} +- {dHe:.1f} meV/atom  [{len(h)} frames, {Gh} runs" + ("" if len(cols) == 3 else ", P or T spread too small: fewer covariates") + "]")
+    else:
+        dH, dHe = np.nan, np.nan; print("  no pure-H frames")
+    print(f"==> composition slope b = {b[1]:.0f} +- {e[1]:.0f} meV per added H; error of mu_H - G_H (model - DFT) at (P0, T0) = {b[1] - dH:.0f} +- {np.hypot(e[1], dHe):.0f} meV per H")
+
+
 res = [analyse(df, "all frames")]
+if a.regress:
+    regress(df, *a.regress)
 if a.by:
     for k, g in df.groupby(a.by):
         if g.x.nunique() >= 2:
