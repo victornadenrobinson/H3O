@@ -214,7 +214,8 @@ def cmd_compare(a):
         return r.iloc[0] if len(r) else None
     def dF_perH(tag):   # TDI integral alone, meV per added H: G minus the reference pieces of the stage0 json
         r = row(tag); st = json.load(open(os.path.join(tdi, f"{tag}_stage0.json")))
-        return r.G_meV_atom - (st["f_ref_cons_eV"] + st["f_kin_eV"] + st.get("dG_P_eV", 0.0)) / st["N"] * 1e3, r.G_err_meV_atom
+        pe = st.get("dG_P_err_eV", 0.0) / st["N"] * 1e3   # G_err = hypot(integral error, pressure-correction error): keep the integral's own error
+        return r.G_meV_atom - (st["f_ref_cons_eV"] + st["f_kin_eV"] + st.get("dG_P_eV", 0.0)) / st["N"] * 1e3, float(np.sqrt(max(r.G_err_meV_atom ** 2 - pe ** 2, 0.0)))
     def test(name, got, gerr, ref, rerr, tol=10.0, expect=0.0):
         d = got - ref - expect; e = float(np.hypot(gerr, rerr)); ok = abs(d) <= max(3 * e, tol)
         rows.append(dict(test=name, pipeline=got, ref=ref, expected_diff=expect, diff_minus_expected=d, err=e, verdict="PASS" if ok else "FAIL"))
