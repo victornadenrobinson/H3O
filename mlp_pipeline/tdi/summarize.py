@@ -98,6 +98,16 @@ for (P, T, h, cell), g in df[df.nO > 0].groupby(["P_target_GPa", "T_K", "H_per_O
                           dt_fcc=f.dt_fs, dt_bcc=b.dt_fs, drift_fcc=f.drift_meV, drift_bcc=b.drift_meV, note=note.strip()))
 if pairs:
     print("\nG_fcc - G_bcc (meV/atom), equal cell-size class:"); print(pd.DataFrame(pairs).round(2).to_string(index=False))
+# close-packed stackings in the SAME orthohexagonal cell (tdi/young_tdi_hcp.sbatch): fccl (ABCABC) minus hcp (ABABAB), identical atoms and cell
+pairs_h = []
+for (P, T, h), g in df[df.phase.isin(["fccl", "hcp"])].groupby(["P_target_GPa", "T_K", "H_per_O"]):
+    f, b = g[g.phase == "fccl"], g[g.phase == "hcp"]
+    if len(f) and len(b):
+        f = pick(f, b.dt_fs.min()); b = pick(b, f.dt_fs, f.nodes)
+        pairs_h.append(dict(P_GPa=P, T_K=T, H_per_O=h, nO=int(f.nO), dG_fccl_minus_hcp_meV_atom=f.G_meV_atom - b.G_meV_atom, err=(f.G_err_meV_atom ** 2 + b.G_err_meV_atom ** 2) ** .5, ps_fccl=f.ps_per_node, ps_hcp=b.ps_per_node,
+                            drift_fccl=f.drift_meV, drift_hcp=b.drift_meV, note=("DIFFERENT dt " if f.dt_fs != b.dt_fs else "") + ("DIFFERENT lambda grid" if f.nodes != b.nodes else "")))
+if pairs_h:
+    print("\nG_fcc(ABC, layered cell) - G_hcp (meV/atom), same atoms and cell:"); print(pd.DataFrame(pairs_h).round(2).to_string(index=False))
 
 # free-NVT stability checks (17_eos_md.py rows): did the crystal at this composition, P and T keep its O lattice? same verdict rule as plot_pt.py (solid / marginal / melted)
 def _nvt_table():
@@ -159,4 +169,4 @@ if hull:
     print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom. A hull of these per-atom values must be drawn against x_H_atom = n/(3+n) (fraction of atoms that are added H): against x_H its tie lines are not straight:")
     print(pd.DataFrame(hull).round(2).to_string(index=False))
 if a.o:
-    df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(solid).to_csv(a.o.replace(".csv", "_mix.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))
+    df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(pairs_h).to_csv(a.o.replace(".csv", "_dGhcp.csv"), index=False); pd.DataFrame(solid).to_csv(a.o.replace(".csv", "_mix.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))

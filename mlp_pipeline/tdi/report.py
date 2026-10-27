@@ -204,6 +204,21 @@ for ax, T in zip(axs, Tset):
 axs[0].set_ylabel("G_fcc - G_bcc (meV/atom)"); fig.suptitle("fcc - bcc superionic H2O vs literature (negative = fcc stable). Hollow = small cell or different dt/lambda grid. Our values are MLP (ft_m2), classical nuclei", fontsize=8)
 figs["fcc_bcc"] = fig
 
+# 2b fcc (ABC) - hcp (ABAB) in the same orthohexagonal cell, from the stage tables
+ph = []
+for (P, T, h), g in df[df.phase.isin(["fccl", "hcp"])].groupby(["P_target_GPa", "T_K", "H_per_O"]):
+    f, b = g[g.phase == "fccl"], g[g.phase == "hcp"]
+    if len(f) and len(b):
+        f = best(f, b.dt_fs.min()); b = best(b, f.dt_fs, f.nodes)
+        ph.append(dict(P=P, T=T, h=h, dG=f.G_meV_atom - b.G_meV_atom, err=(f.G_err_meV_atom ** 2 + b.G_err_meV_atom ** 2) ** .5, caveat=(f.dt_fs != b.dt_fs) or (f.nodes != b.nodes)))
+ph = pd.DataFrame(ph, columns=["P", "T", "h", "dG", "err", "caveat"])
+if len(ph):
+    ph.to_csv(f"{a.out}_table_fcc_hcp.csv", index=False); fig, ax = plt.subplots(figsize=(6.2, 4.2))
+    for T, g in ph.groupby("T"):
+        g = g.sort_values("P"); hollow(ax, g.P, g.dG, g.err, g.caveat, Tcol(T), "o", f"{T:.0f} K"); ax.plot(g.P, g.dG, "-", color=Tcol(T), lw=.7)
+    ax.axhline(0, color="k", lw=.6); ax.set_xlabel("P (GPa)"); ax.set_ylabel("G_fcc(ABC) - G_hcp (meV/atom)"); ax.grid(alpha=.25); ax.legend(fontsize=6)
+    ax.set_title("fcc (ABCABC) vs hcp (ABABAB) H2O in the same 96-O cell; negative = fcc stable. The MLP was not trained on hcp: a control, not a prediction", fontsize=7); figs["fcc_hcp"] = fig
+
 # 3 solid mixing per added H
 sm = solid[solid.kind.isin(["fcc", "bcc"])]
 if len(sm):

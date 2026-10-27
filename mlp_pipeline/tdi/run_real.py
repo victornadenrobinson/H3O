@@ -314,14 +314,14 @@ def solid_vpa(a, P):
     and the free energy error is second order in it."""
     eos = import_module("17_eos_md")
     try:
-        v = eos.dft_vpa(a.from_dft, a.phase, a.T, [P], a.hper, min_runs=a.min_runs)[0]
+        v = eos.dft_vpa(a.from_dft, "fcc" if a.phase in eos.LAYERED else a.phase, a.T, [P], a.hper, min_runs=a.min_runs)[0]   # hcp / fccl (layered cell): the DFT fcc EOS
     except SystemExit:   # no DFT EOS of this composition near this T
         if a.hper <= 2.0:
             raise
         v = float("nan")
     if np.isfinite(v) or a.hper <= 2.0:   # nan: P outside the EOS data (setup refuses it)
         return v
-    n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, a.phase, a.T, [P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, P)
+    n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, "fcc" if a.phase in eos.LAYERED else a.phase, a.T, [P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, P)
     v = (3 * v_w + n * v_h) / (3 + n)
     print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase} at {P:g} GPa: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
     return v
@@ -694,7 +694,7 @@ def run_node(c, st, k):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "H", "liquid", "insert"], required=True)
+    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "hcp", "fccl", "H", "liquid", "insert"], required=True)
     ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
     ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
     ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)

@@ -46,7 +46,7 @@ if [ -n "$FRESH" ]; then
   FRESHFLAG=--fresh
 fi
 echo "== stage 0 (lambda = 1 run) $(date)"
-if [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then echo "stage 0 already done (measured k kept; FRESH=1 to redo)"
+if [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ] || [ $PH = hcp ] || [ $PH = fccl ]; }; then echo "stage 0 already done (measured k kept; FRESH=1 to redo)"
 else
   $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"; RC=${PIPESTATUS[0]}
   [ $RC = 0 ] || { echo "stage 0 failed (exit $RC; see $OUT/${TAGNAME}_stage0.log): nodes not started"; exit 1; }   # never run the nodes on an older stage0.json
