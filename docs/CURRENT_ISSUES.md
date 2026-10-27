@@ -44,7 +44,7 @@ Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT
 - 5-block errors: +-35% relative uncertainty; +-1 SEM covers ~63% (4 dof). Errors of short (<= 2 ps) runs are optimistic; use the drift column.
 - Finite size: ln N! Stirling terms (~ -6 meV per added H at 6000 K for 108 O / 250 H); 96-atom liquid cells; only one H finite-size pair (400 GPa 6500 K, N 250 vs 500: equal within 5 meV/atom).
 - Toy LJ blows up at the smallest lambda (bare r^-12): toy-only, but any potential with a stiff core needs dt checks at lambda < 1e-6.
-- The report/figure generator (tdi_report.pdf) is not in the repo: commit it so its labels and fits can be reviewed.
+- The report generator is `mlp_pipeline/tdi/report.py` (branch claude/eloquent-ramanujan-2tjx2p, merged here): figures + tables from summarize.py CSVs; check its labels and fits against this list.
 
 ## 5. Next tests, cheapest first
 Tests 1-2 and the mu breakdown (tdi/mu_breakdown.py: reference pieces, TDI integral by lambda range with drift, second quadrature, figure) (plus per-lambda tail/drift statistics of the crystal and pure-H runs) in one go, interactive GPU job: `bash mlp_pipeline/young_insert_checks.sh` -> runs/checks/insert_checks_<date>.txt.
