@@ -221,18 +221,20 @@ if len(sm):
     axs[0][0].set_ylabel("dG per added H (meV)"); Tbar(fig, list(axs[0])); fig.suptitle("Crystal H2O + n H(fluid) -> H2+n/nO crystal, per added H (positive = H not soluble). Hollow = melted in free NVT / different dt or lambda grid" + (f"; {nout} off-scale rows not drawn (printed in the log)" if nout else ""), fontsize=8)
     figs["mix_solid"] = fig
 
-# 4 insertion: n dependence
+# 4 insertion: n dependence, one panel per pressure, colour = T
 ins = solid[solid.kind == "insert"]
 if len(ins):
-    fig, ax = plt.subplots(figsize=(6, 4.2)); keys = sorted(set(zip(ins.P, ins["T"]))); out = []
-    for k, (P, T) in enumerate(keys):
-        g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n"); c = Tcol(T)
-        ax.errorbar(g.n, g.dG, g.err, fmt={300: "o", 400: "s", 500: "^", 600: "D"}.get(int(P), "x") + "-", color=c, ms=5, capsize=2, lw=.8, label=f"{P:.0f} GPa {T:.0f} K")
-        if len(g) >= 2:
-            w = 1 / np.maximum(g.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(g)), g.n.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * g.dG.values))
-            out.append(f"{P:.0f} GPa {T:.0f} K: n->0 {b[0]:7.0f} +- {cov[0, 0] ** .5:4.0f} meV, slope {b[1]:5.0f} meV/H")
-    ax.axhline(0, color="k", lw=.6); ax.set_xlabel("number of inserted H n (fixed V)"); ax.set_ylabel("mu_H(insertion) - G_H(pure) (meV)"); ax.grid(alpha=.25); ax.legend(fontsize=5, ncol=2); Tbar(fig, ax)
-    ax.set_title("Insertion vs n: the slope is the fixed-V pressure rise of the cell; weighted line fits give n->0", fontsize=8); figs["insert_n"] = fig
+    Ps = sorted(ins.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.6 * len(Ps), 4.4), sharey=True, squeeze=False); out = []
+    for ax, P in zip(axs[0], Ps):
+        for T in sorted(ins[ins.P == P]["T"].unique()):
+            g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n"); c = Tcol(T)
+            ax.errorbar(g.n, g.dG, g.err, fmt="o-", color=c, ms=5, capsize=2, lw=1.0, label=f"{T:.0f} K")
+            if len(g) >= 2:
+                w = 1 / np.maximum(g.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(g)), g.n.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * g.dG.values))
+                ax.plot([0, g.n.max()], [b[0], b[0] + b[1] * g.n.max()], "--", color=c, lw=.7); out.append(f"{P:.0f} GPa {T:.0f} K: n->0 {b[0]:7.0f} +- {cov[0, 0] ** .5:4.0f} meV, slope {b[1]:5.0f} meV/H")
+        ax.axhline(0, color="k", lw=.6); ax.set_xlabel("inserted H n (fixed V, 108 O host)"); ax.set_title(f"{P:.0f} GPa", fontsize=9); ax.grid(alpha=.25); ax.legend(fontsize=6); ax.set_xlim(0, None)
+    axs[0][0].set_ylabel("mu_H(insertion) - G_H(pure) (meV per H)"); Tbar(fig, list(axs[0]))
+    fig.suptitle("Insertion vs n per pressure: dashed = weighted linear fit to n->0; the slope contains the fixed-V pressure rise of the cell (before the stage-0 correction)", fontsize=8); figs["insert_n"] = fig
     print("insertion n->0 extrapolation (weighted linear fit, error from the fit only):"); print("\n".join(out))
 
 # 5 liquid-solid crossing
@@ -273,7 +275,7 @@ if len(nv):
     anyd = True
     for v, m, c, lab in (("melted", "x", "tab:red", "free NVT: melted"), ("marginal", "^", "tab:orange", "free NVT: marginal"), ("solid", "s", "tab:green", "free NVT: solid (6 ps; superheating possible)")):
         g = nv[nv.v == v]
-        if len(g): ax.scatter(g.P, g["T"], marker=m, s=30, facecolors="none" if m == "s" else c, edgecolors=c, label=lab, linewidths=1.2)
+        if len(g): ax.scatter(g.P, g["T"], marker=m, s=30, **({"facecolors": "none", "edgecolors": c} if m == "s" else {"color": c}), label=lab, linewidths=1.2)
 if len(cross):
     anyd = True
     for h, m, off in ((2.0, "o", 0), (2.25, "D", 6)):
