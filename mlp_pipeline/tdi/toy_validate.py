@@ -4,7 +4,10 @@ usage (repo root, a python with ASE; CPU):
   python mlp_pipeline/tdi/toy_validate.py widom --T 5000 [--out runs/toy]               independent mu_H: own MD + Widom insertion + deletion, Bennett acceptance ratio
   bash   mlp_pipeline/tdi/toy_validate.sh 5000                                          the pipeline runs (run_real.py toyice ...) at the eos volumes
   python mlp_pipeline/tdi/toy_validate.py compare [--out runs/toy]                      the tests below, pass / fail
+  python mlp_pipeline/tdi/toy_validate.py bookkeeping --T 5000 [--out runs/toy]         T0: exact, no MD statistics (seconds)
 Tests (all at the same P, per T):
+  T0 reference bookkeeping, exact: crystal route [H2.25O - H2O in the same box] = insertion of 8 H = kT ln(72!/64!) - 8 kT ln V + 24 kT ln Lambda; pure H and
+     insertion into pure H against the ideal-gas formulas (run_real.py --stage0 jsons, no MD statistics)
   T1 insertion TDI integral (n = 1, H2O host) = Widom/BAR excess chemical potential on the same host volume
   T2 the same for insertion into pure H
   T3 METHOD CHECK: pipeline insertion into pure H minus pipeline G_H (fluid route) = finite-size term only (~ -kT ln(2 pi N)/(2N), a few meV)
@@ -138,12 +141,61 @@ def cmd_widom(a):
     f = os.path.join(a.out, f"widom_{a.T:.0f}K.json"); json.dump(dict(T=a.T, P=e["P"], dg_meV=dg, **res), open(f, "w"), indent=1); print("wrote", f)
 
 
+def cmd_bookkeeping(a):
+    """T0: the reference (non-MD) pieces of the crystal route and of the insertion route, written by run_real.py --stage0 itself, against each other and
+    against the exact ideal-gas formulas. H2O and H2.25O crystals in the SAME box (O Einstein term and -kT ln V identical, so they must cancel), insertion of
+    n = 8 and n = 1 into that H2O box, pure H (N) and insertion of 1 H into it. Exact to rounding: no statistics involved (the MD of the insertion stage 0
+    only measures pressures for dG_P, which is reported separately and excluded here)."""
+    import subprocess
+    from ase import units
+    from tdi import refs, gcalc
+    out = os.path.join(a.out, "bookkeeping"); os.makedirs(out, exist_ok=True)
+    T, P, vw, nO = a.T, a.P, 2.15, 32; Vw = vw * 3 * nO
+    base = [sys.executable, os.path.join(HERE, "run_real.py"), "toyice", "--T", str(T), "--P", str(P), "--outdir", out, "--stage0", "--device", "cpu", "--nrep", "2",
+            "--equil-ps", "0.05", "--ps1", "0.6", "--bulk-gpa", "1500", "--fresh"]
+    runs = {"w": ["--phase", "fcc", "--vpa", f"{vw!r}", "--k", "20"],
+            "m": ["--phase", "fcc", "--hper", "2.25", "--vpa", repr(Vw / (3 * nO + 8)), "--k", "20"],
+            "i8": ["--phase", "insert", "--nghost", "8", "--vpa", f"{vw!r}"],
+            "i1": ["--phase", "insert", "--nghost", "1", "--vpa", f"{vw!r}"],
+            "h": ["--phase", "H", "--natoms", "128", "--vpa", "2.18"],
+            "ih": ["--phase", "insert", "--host-phase", "H", "--natoms", "128", "--nghost", "1", "--vpa", "2.18"]}
+    st = {}
+    for k, extra in runs.items():
+        tag = subprocess.run(base + extra + ["--print-tag"], capture_output=True, text=True).stdout.strip().splitlines()[-1]
+        r = subprocess.run(base + extra, capture_output=True, text=True)
+        if r.returncode:
+            print(r.stdout[-2000:], r.stderr[-2000:]); raise SystemExit(f"run_real.py stage 0 failed for {k}")
+        st[k] = json.load(open(os.path.join(out, f"{tag}_stage0.json")))
+        print(f"  {k:3s} {tag:42s} N {st[k]['N']:4d} nO {st[k]['nO']:3d} nH {st[k]['nH']:4d} V {st[k]['V']:.6f}", flush=True)
+    ref = lambda s: gcalc.G_total_eV(dict(s, dG_P_eV=0.0), 0.0)   # whole-cell G with dF = 0 and no pressure correction: the reference pieces only
+    from ase.data import atomic_masses
+    kT = units.kB * T; lnL = np.log(refs.thermal_wavelength(float(atomic_masses[1]), T)); rows = []   # the H mass ASE puts on the atoms (1.008)
+    def chk(name, got, exact):
+        rows.append((name, got, exact, got - exact)); print(f"  {name:62s} code {got:16.9f}  exact {exact:16.9f}  diff {got - exact:+.2e} eV")
+    from math import lgamma
+    assert abs(st["w"]["V"] - st["m"]["V"]) < 1e-6 * Vw, "crystal boxes differ in volume"
+    V = st["w"]["V"]
+    exact8 = kT * (lgamma(73) - lgamma(65)) - 8 * kT * np.log(V) + 24 * kT * lnL
+    print(f"T0 at {T:g} K, V = {V:.4f} A^3 (H2O and H2.25O crystals in the same box), all in eV:")
+    chk("crystal route  G_ref(H2.25O) - G_ref(H2O)   [72 vs 64 H]", ref(st["m"]) - ref(st["w"]), exact8)
+    chk("insertion route n = 8 (reference pieces)", ref(st["i8"]) * 1.0, exact8)
+    chk("insertion route n = 1", ref(st["i1"]), kT * np.log(65) - kT * np.log(V) + 3 * kT * lnL)
+    Vh = st["h"]["V"]; N = 128
+    chk("pure H fluid G_ref (N = 128, whole cell)", ref(st["h"]), kT * lgamma(N + 1) - N * kT * np.log(Vh) + 3 * N * kT * lnL + P / EV_A3_GPA * Vh)
+    chk("insertion into pure H, n = 1", ref(st["ih"]), kT * np.log(N + 1) - kT * np.log(Vh) + 3 * kT * lnL)
+    fs = kT * (np.log(N + 1) - lgamma(N + 1) / N - 1)   # exact mu(N -> N+1) - G/N of an ideal gas with P V = N kT (Stirling: kT[ln((N+1)/N) - ln(2 pi N)/(2N)])
+    gH = ref(st["h"]) / N - P / EV_A3_GPA * Vh / N + kT   # ideal-gas G per atom at the ideal-gas pressure N kT / V
+    chk("ideal gas: insertion into H - G/N (P V = N kT), exact", ref(st["ih"]) - gH, fs)
+    bad = [r for r in rows if abs(r[3]) > 1e-6]
+    print("T0 bookkeeping:", "PASS (all within 1e-6 eV)" if not bad else f"FAIL: {[r[0] for r in bad]}")
+
+
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("cmd", choices=["eos", "widom", "compare"]); ap.add_argument("--T", type=float, default=5000); ap.add_argument("--P", type=float, default=450)
+    ap = argparse.ArgumentParser(); ap.add_argument("cmd", choices=["eos", "widom", "compare", "bookkeeping"]); ap.add_argument("--T", type=float, default=5000); ap.add_argument("--P", type=float, default=450)
     ap.add_argument("--out", default="runs/toy"); ap.add_argument("--ps", type=float, default=4.0); ap.add_argument("--seed", type=int, default=3); ap.add_argument("--ntrial", type=int, default=2000)
     ap.add_argument("--systems", default=None, help="eos: comma list of h2o,h2.25o,H (default all; results are merged into the existing json)")
     a = ap.parse_args()
-    {"eos": cmd_eos, "widom": cmd_widom, "compare": lambda a: cmd_compare(a)}[a.cmd](a)
+    {"eos": cmd_eos, "widom": cmd_widom, "compare": lambda a: cmd_compare(a), "bookkeeping": cmd_bookkeeping}[a.cmd](a)
 
 
 def dGP(V, B, Ph, Pf, P, n):
