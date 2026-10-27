@@ -22,6 +22,7 @@ def cmd(base, ps):
         env["K"] = a["k"]
     elif ph in ("bcc", "fcc"):   # k was measured by a lambda=1 stage: K=0 keeps that stage0.json (the launcher would otherwise use its default k)
         env["K"] = 0
+    if a.get("host_phase") == "bcc": env["HOSTPHASE"] = "bcc"
     if a.get("rule") == "gk": env["RULE"] = "gk"
     if float(a.get("hot_ps") or 0) > 0: env["HOT"], env["HOTT"] = a["hot_ps"], a.get("hot_T", 12000.0)
     if os.path.exists(base + "_prep.extxyz"): env["PREPHOLD"], env["PREPFREE"] = a.get("prep_hold_ps", 1.0), a.get("prep_free_ps", 1.0)

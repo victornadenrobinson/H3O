@@ -109,7 +109,7 @@ for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)
-        solid.append(dict(kind="insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
+        solid.append(dict(kind="insert_bcc" if "_bcc" in m.tag else "insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
 solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "a", "n", "dG", "err", "caveat", "tags"])
 if len(solid) and (solid.dG.abs() > 1500).any():
     print("mixing/insertion rows with |dG| > 1500 meV per H (off scale in the figure; check their input runs):"); print(solid[solid.dG.abs() > 1500][["kind", "P", "T", "n", "dG", "tags"]].round(0).to_string(index=False))
@@ -210,12 +210,12 @@ if len(sm):
     Ps = sorted(sm.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.8 * len(Ps), 4.4), sharey=True, squeeze=False); YL = (-1000, 800); nout = 0
     for ax, P in zip(axs[0], Ps):
         d = solid[solid.P == P]; jit = 0.012 * max(float(d["T"].max() - d["T"].min()), 500.0)
-        for kind, m in (("fcc", "o"), ("bcc", "^"), ("insert", "s")):
+        for kind, m in (("fcc", "o"), ("bcc", "^"), ("insert", "s"), ("insert_bcc", "D")):
             for n, gg in d[d.kind == kind].sort_values("T").groupby("n"):
                 gg = gg[(gg.dG > YL[0]) & (gg.dG < YL[1])] if len(gg) else gg; nout += int(((d.kind == kind) & (d.n == n)).sum() - len(gg))
                 for _, r in gg.iterrows():
-                    ax.errorbar(r["T"] + (jit * {1: -1, 2: 0, 4: 1}.get(n, 0) if kind == "insert" else 0), r.dG, r.err, fmt=m, color=Tcol(r["T"]), mfc="none" if r.caveat else Tcol(r["T"]), mec="k" if not r.caveat else Tcol(r["T"]), ms=6, capsize=2)
-        for kind, m, t in (("fcc", "o", "fcc H2.xO crystal"), ("bcc", "^", "bcc H2.xO crystal"), ("insert", "s", "insertion (n = 1, 2, 4: left, centre, right)")): ax.plot([], [], m, color="gray", label=t)
+                    ax.errorbar(r["T"] + (jit * {1: -1, 2: 0, 4: 1}.get(n, 0) if kind.startswith("insert") else 0), r.dG, r.err, fmt=m, color=Tcol(r["T"]), mfc="none" if r.caveat else Tcol(r["T"]), mec="k" if not r.caveat else Tcol(r["T"]), ms=6, capsize=2)
+        for kind, m, t in (("fcc", "o", "fcc H2.xO crystal"), ("bcc", "^", "bcc H2.xO crystal"), ("insert", "s", "insertion into fcc (n = 1, 2, 4: left, centre, right)"), ("insert_bcc", "D", "insertion into bcc")): ax.plot([], [], m, color="gray", label=t)
         Tl = np.linspace(d["T"].min() - 100, d["T"].max() + 100, 20); ax.fill_between(Tl, -kT(Tl), kT(Tl), color="gray", alpha=.12, label="+-kT")
         ax.set_ylim(*YL); ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("T (K)"); ax.grid(alpha=.25); ax.legend(fontsize=6, loc="lower right")
     axs[0][0].set_ylabel("dG per added H (meV)"); Tbar(fig, list(axs[0])); fig.suptitle("Crystal H2O + n H(fluid) -> H2+n/nO crystal, per added H (positive = H not soluble). Hollow = melted in free NVT / different dt or lambda grid" + (f"; {nout} off-scale rows not drawn (printed in the log)" if nout else ""), fontsize=8)
@@ -236,6 +236,21 @@ if len(ins):
     axs[0][0].set_ylabel("mu_H(insertion) - G_H(pure) (meV per H)"); Tbar(fig, list(axs[0]))
     fig.suptitle("Insertion vs n per pressure: dashed = weighted linear fit to n->0; the slope contains the fixed-V pressure rise of the cell (before the stage-0 correction)", fontsize=8); figs["insert_n"] = fig
     print("insertion n->0 extrapolation (weighted linear fit, error from the fit only):"); print("\n".join(out))
+
+# 4b insertion into fcc vs bcc host at the same (P, T): mu_H - G_H(pure) vs n; table of the difference per n
+insb = solid[solid.kind == "insert_bcc"]
+if len(insb):
+    keys = sorted(set(zip(insb.P, insb["T"]))); nc = min(3, len(keys)); nr = -(-len(keys) // nc); fig, axs = plt.subplots(nr, nc, figsize=(4.4 * nc, 3.6 * nr), squeeze=False); rowsb = []
+    for ax, (P, T) in zip(axs.ravel(), keys):
+        for kind, m, c in (("insert", "s", "tab:blue"), ("insert_bcc", "D", "tab:orange")):
+            g = solid[(solid.kind == kind) & (solid.P == P) & (solid["T"] == T)].sort_values("n")
+            if len(g): ax.errorbar(g.n, g.dG, g.err, fmt=m + "-", color=c, ms=5, capsize=2, lw=.9, label="fcc host" if kind == "insert" else "bcc host")
+        gf, gb = solid[(solid.kind == "insert") & (solid.P == P) & (solid["T"] == T)].set_index("n"), solid[(solid.kind == "insert_bcc") & (solid.P == P) & (solid["T"] == T)].set_index("n")
+        for n in sorted(set(gf.index) & set(gb.index)): rowsb.append(dict(P=P, T=T, n=n, mu_fcc_minus_bcc=gf.dG[n] - gb.dG[n], err=float(np.hypot(gf.err[n], gb.err[n]))))
+        ax.axhline(0, color="k", lw=.5); ax.set_title(f"{P:.0f} GPa, {T:.0f} K", fontsize=8, color=Tcol(T)); ax.set_xlabel("inserted H n"); ax.set_ylabel("mu_H - G_H(pure) (meV)", fontsize=7); ax.grid(alpha=.25); ax.legend(fontsize=6)
+    for ax in axs.ravel()[len(keys):]: ax.axis("off")
+    fig.suptitle("Insertion into fcc vs bcc H2O host (fixed V, before the pressure correction)", fontsize=8); figs["insert_hosts"] = fig
+    if rowsb: print("\n== mu_H(fcc host) - mu_H(bcc host) per n (meV; negative = H prefers fcc):"); print(pd.DataFrame(rowsb).round(1).to_string(index=False))
 
 # 5 liquid-solid crossing
 if len(cross):

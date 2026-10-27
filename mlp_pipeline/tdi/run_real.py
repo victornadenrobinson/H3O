@@ -301,8 +301,8 @@ def vpa_at(a, P):
     """V/atom (A^3) of this run's system at pressure P from the DFT data: the volume source of setup(), also used for the bulk modulus. nan if P is outside the EOS data."""
     if a.phase == "H":
         return h_vpa(a.from_dft, a.T, P)
-    if a.phase == "insert":   # fcc H2O host
-        return import_module("17_eos_md").dft_vpa(a.from_dft, "fcc", a.T, [P], 2.0, min_runs=a.min_runs)[0]
+    if a.phase == "insert":   # H2O host crystal: fcc (default) or bcc (--host-phase)
+        return import_module("17_eos_md").dft_vpa(a.from_dft, getattr(a, "host_phase", "fcc"), a.T, [P], 2.0, min_runs=a.min_runs)[0]
     if a.phase == "liquid":
         return hull_vpa(a.hull, a.hper, a.T, P)
     return solid_vpa(a, P)
@@ -365,7 +365,7 @@ def build_h(vpa, nrep):
 
 def make_tag(a):
     """file-name stem of a run (before setup() fills in the default nrep): the launcher asks for it with --print-tag, so the shell and the files always agree"""
-    return a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
+    return a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" + ("_bcc" if getattr(a, "host_phase", "fcc") == "bcc" else "") if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
 
 
 def setup(a):
@@ -379,8 +379,8 @@ def setup(a):
         a.nrep = a.nrep or 5
         at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
     elif a.phase == "insert":   # fcc H2O host (volume from the DFT EOS at this T, P) + n ghost protons
-        a.nrep = a.nrep or 3
-        host = eos.build("fcc", vpa, a.nrep, a.seed, 2.0); at0 = add_ghosts(host, a.nghost, a.seed + 7)
+        hp = getattr(a, "host_phase", "fcc"); a.nrep = a.nrep or (4 if hp == "bcc" else 3)   # bcc: 128 O, fcc: 108 O
+        host = eos.build(hp, vpa, a.nrep, a.seed, 2.0); at0 = add_ghosts(host, a.nghost, a.seed + 7)
     elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
         a.nrep = a.nrep or 2
         at0 = eos.build("fcc", vpa, a.nrep, a.seed, a.hper)
@@ -706,7 +706,7 @@ if __name__ == "__main__":
     ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
-    ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
+    ap.add_argument("--host-phase", choices=["fcc", "bcc"], default="fcc", help="insert: crystal that hosts the added H (fcc 108 O or bcc 128 O); the tag gets _bcc for bcc"); ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
     ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
     ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
     ap.add_argument("--print-tag", action="store_true", help="print the run's tag (file-name stem) and exit")
