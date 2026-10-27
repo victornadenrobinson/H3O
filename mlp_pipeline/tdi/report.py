@@ -102,15 +102,15 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         if len(mixnote):
             q = mixnote[(mixnote.phase == m.phase) & (mixnote.P_GPa == m.P_target_GPa) & (mixnote.T_K == m.T_K) & (mixnote.n_added == n)]
             note = " ".join(str(x) for x in q.note.fillna("")) if len(q) else ""
-        solid.append(dict(kind=m.phase, P=m.P_target_GPa, T=m.T_K, h=m.H_per_O, n=int(n), dG=(m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n,
+        solid.append(dict(kind=m.phase, P=m.P_target_GPa, T=m.T_K, h=m.H_per_O, a=m.H_per_O - 2.0, n=int(n), dG=(m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n,
                           err=((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n,
                           caveat=("MELTED" in note) or not (m.dt_fs == w.dt_fs == hh.dt_fs and m.nodes == w.nodes == hh.nodes), tags=f"{m.dir}/{m.tag} | {w.dir}/{w.tag} | {hh.dir}/{hh.tag}"))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)
-        solid.append(dict(kind="insert", P=m.P_target_GPa, T=m.T_K, h=2.0, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
-solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "n", "dG", "err", "caveat", "tags"])
+        solid.append(dict(kind="insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
+solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "a", "n", "dG", "err", "caveat", "tags"])
 if len(solid) and (solid.dG.abs() > 1500).any():
     print("mixing/insertion rows with |dG| > 1500 meV per H (off scale in the figure; check their input runs):"); print(solid[solid.dG.abs() > 1500][["kind", "P", "T", "n", "dG", "tags"]].round(0).to_string(index=False))
 
@@ -304,6 +304,38 @@ if rowsfs:
     axs[0].set_title("Finite size (extensive part cancelled per atom; runs differ in ps per lambda, see right)", fontsize=7)
     axs[1].set_xlabel("N (atoms)"); axs[1].set_ylabel("statistical error of G (meV/atom)"); axs[1].set_title("Error vs size; marker area grows with ps per lambda", fontsize=7); axs[1].grid(alpha=.25); axs[1].set_xscale("log")
     figs["finite_size"] = fig
+
+# 6d chemical potential of H: mu_H - G_H(pure) (meV per added H) vs composition a = added H per O, with the ideal-solution slope and a linear (regular-solution-like) fit; vs P and T
+liqH = hull.assign(n=hull.x / (1 - hull.x)); liqH["a"] = liqH.n; liqH["perH"] = liqH.dG * (3 + liqH.n) / liqH.n; liqH["perH_err"] = liqH.err * (3 + liqH.n) / liqH.n
+mu0 = []   # (P, T, mu0, err, slope, slope_err) from weighted linear fits of insertion + crystal rows with caveat False and a <= 0.3
+grp = [(k, g) for k, g in solid[solid.kind.isin(["insert", "fcc", "bcc"])].groupby(["P", "T"]) if len(g) >= 2]
+if grp:
+    nc = min(4, len(grp)); nr = -(-len(grp) // nc); fig, axs = plt.subplots(nr, nc, figsize=(4.0 * nc, 3.4 * nr), squeeze=False, sharey=False)
+    for ax, ((P, T), g) in zip(axs.ravel(), sorted(grp)):
+        for kind, m, c in (("insert", "s", "tab:green"), ("fcc", "o", "tab:blue"), ("bcc", "^", "tab:orange")):
+            q = g[g.kind == kind]
+            if len(q): hollow(ax, q.a, q.dG, q.err, q.caveat, c, m, {"insert": "insertion (fixed V)", "fcc": "fcc crystal (direct)", "bcc": "bcc crystal (direct)"}[kind])
+        l = liqH[(liqH.P == P) & (liqH["T"] == T) & (liqH.a <= 1.2)]
+        if len(l): ax.errorbar(l.a, l.perH, l.perH_err, fmt="d", color="tab:red", ms=4, capsize=2, label="liquid (per added H)")
+        f = g[(~g.caveat) & (g.a <= 0.3)]
+        if len(f) >= 2 and f.a.nunique() >= 2:
+            w = 1 / np.maximum(f.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(f)), f.a.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * f.dG.values))
+            xx = np.linspace(0, max(0.3, f.a.max()), 20); ax.plot(xx, b[0] + b[1] * xx, "k-", lw=.9, label="linear fit (regular-solution-like)"); ax.plot(xx, b[0] + kT(T) * xx / 4, "k:", lw=.9, label="ideal, identical H (slope kT/4 per H per O)")
+            mu0.append((P, T, b[0], cov[0, 0] ** .5, b[1], cov[1, 1] ** .5))
+        ax.axhline(0, color="k", lw=.5); ax.set_title(f"{P:.0f} GPa, {T:.0f} K", fontsize=8, color=Tcol(T)); ax.grid(alpha=.25); ax.set_xlabel("added H per O", fontsize=7); ax.set_ylabel("mu_H - G_H(pure) (meV)", fontsize=7); ax.legend(fontsize=4.5)
+    for ax in axs.ravel()[len(grp):]: ax.axis("off")
+    fig.suptitle("Chemical potential of H relative to pure H vs composition. Fixed-V insertion values still contain the pressure rise of the cell (apply the stage-0 pressure correction first)", fontsize=7); figs["mu_x"] = fig
+mu0 = pd.DataFrame(mu0, columns=["P", "T", "mu0", "mu0_err", "slope", "slope_err"])
+if len(mu0):
+    mu0.to_csv(f"{a.out}_table_mu0.csv", index=False); print("\n== mu_H(n->0) - G_H(pure) and slope per added H-per-O (meV), weighted linear fit:"); print(mu0.round(1).to_string(index=False))
+    fig, axs = plt.subplots(1, 3, figsize=(14, 4.2))
+    for _, r in mu0.iterrows():
+        axs[0].errorbar(r.P, r.mu0, r.mu0_err, fmt="o", color=Tcol(r["T"]), capsize=2); axs[1].errorbar(r["T"], r.mu0, r.mu0_err, fmt="o", color=Tcol(r["T"]), capsize=2)
+        axs[2].errorbar(1000 / r["T"], r.mu0 / kT(r["T"]), r.mu0_err / kT(r["T"]), fmt="o", color=plt.cm.viridis((r.P - 250) / 400), capsize=2)
+    for ax in axs: ax.axhline(0, color="k", lw=.5); ax.grid(alpha=.25)
+    axs[0].set_xlabel("P (GPa)"); axs[0].set_ylabel("mu_H(n->0) - G_H(pure) (meV)"); axs[0].set_title("vs pressure (colour: T)", fontsize=8)
+    axs[1].set_xlabel("T (K)"); axs[1].set_title("vs temperature (colour: T)", fontsize=8); axs[2].set_xlabel("1000 / T (1/kK)"); axs[2].set_ylabel("mu0 / kT"); axs[2].set_title("van 't Hoff style: slope = enthalpy/k (colour: P, dark 250 ... yellow 650 GPa)", fontsize=8)
+    figs["mu_PT"] = fig
 
 # 7 coverage
 fig, ax = plt.subplots(figsize=(7, 4.6)); mk = {"fcc": "s", "bcc": "^", "liquid": "o", "H": "D", "insert": "P"}
