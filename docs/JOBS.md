@@ -70,6 +70,7 @@ Status words: DONE (results seen), RUNNING, PENDING, UNKNOWN (never reported bac
 | 10-27 | 115888, 115889 | meltcomp 27-task (300-500 GPa) and 18-task (100/200 GPa) 9-composition tables | PENDING |
 | 10-27 | 115894-115897 | four small tdiins arrays (1, 1, 2, 4 tasks): not identified (bcc-host test and table?) | PENDING |
 | 10-27 | 115899 | tdihcp 11 tasks (submitted with submit.sh, first entry of runs/JOBS_LOG.tsv) | PENDING |
+| 10-27 12:25-12:53 | (interactive 115892) | bcc-host insertion stage-0 TEST (ONLY0, 500 GPa 5000 K, n=2, host 128 O) | DONE: works. P_host 500.05 +- 0.64, P_full 503.75 +- 1.21 GPa, B 1420 GPa, v_H 1.07 A^3 (+-0.4 from the pressure noise), correction -12.7 +- 8.2 meV per added H; 28 min for stage 0 |
 | 10-27 | 115892, 115952 | interactive bash jobs (the two allowed) | RUNNING |
 | 10-27 12:20 | - | last 3 days finished (sacct): about 265 GPU-h: meltcomp 54 tasks 67, eosscan 33 tasks 36 (RESULTS NOT ANALYSED YET: 22_eos_summary.py), tdiprep 14 tasks 26, tdiins 29 tasks 29, tdiliq 37 ok / 47 FAILED, tdilong 14, bash/interactive 41 | |
 | 10-27 12:40 | - | tdiliq 47 FAILED explained: 24 = H2.5O and H4O have no column in the hull EOS sheet (every P,T); 16 = 4000 K (hull EOS covers 5000-9000 K); rest unclear. Also 300 GPa h3o/h5o and pure H 300 GPa ran with a CLIPPED volume (P_hi 319-346 instead of 300): second-order G bias about 2-8 meV/atom. Fix pushed: hull_vpa interpolates the missing compositions linearly in H per O (5000-6000 K only); 4000 K and 300 GPa need MLP volumes from eosmap | |
