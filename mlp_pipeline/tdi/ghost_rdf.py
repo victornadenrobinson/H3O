@@ -14,11 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 
 ap = argparse.ArgumentParser(); ap.add_argument("run", help="<dir>/<tag> of an insertion run"); ap.add_argument("-o", default=None); ap.add_argument("--rmax", type=float, default=3.0)
-ap.add_argument("--dr", type=float, default=0.05); ap.add_argument("--max-frames", type=int, default=400); a = ap.parse_args()
+ap.add_argument("--dr", type=float, default=0.05); ap.add_argument("--max-frames", type=int, default=200); a = ap.parse_args()
 st = json.load(open(a.run + "_stage0.json")); A = st["args"]; lam = analyze.rule_nodes(A)[0]; ng = int(st["N"]) if st["phase"] == "insert" else 0
 if not ng:
     raise SystemExit("not an insertion run")
 edges = np.arange(0.0, a.rmax + 1e-9, a.dr); rc = 0.5 * (edges[1:] + edges[:-1]); shell = 4 / 3 * np.pi * (edges[1:] ** 3 - edges[:-1] ** 3)
+
+
+def dist(A, B, cell):
+    """minimum-image distances |A_i - B_j| (len(A) x len(B)); vectorised for orthorhombic cells (all TDI cells here), ASE otherwise"""
+    c = np.asarray(cell)
+    if np.allclose(c, np.diag(np.diag(c))):
+        L = np.diag(c); d = B[None, :, :] - A[:, None, :]; d -= L * np.round(d / L)
+        return np.sqrt((d ** 2).sum(-1))
+    return get_distances(A, B, cell=cell, pbc=True)[1]
 
 
 def rdf(d, n_ref, n_frames, V):
@@ -40,19 +49,19 @@ for k in np.argsort(lam):
         p = fr.positions
         for g in gh:
             if len(iO):
-                d = get_distances(p[g][None], p[iO], cell=fr.cell, pbc=True)[1][0]; dO.append(d); nnO.append(d.min())
-            d = get_distances(p[g][None], p[iH], cell=fr.cell, pbc=True)[1][0]; dH.append(d); nnH.append(d.min())
+                d = dist(p[g][None], p[iO], fr.cell)[0]; dO.append(d); nnO.append(d.min())
+            d = dist(p[g][None], p[iH], fr.cell)[0]; dH.append(d); nnH.append(d.min())
         sel = iH[:: max(1, len(iH) // 16)]   # reference: 16 host protons per frame
         if len(iO):
-            ref_HO.append(get_distances(p[sel], p[iO], cell=fr.cell, pbc=True)[1].ravel())
-        D = get_distances(p[sel], p[iH], cell=fr.cell, pbc=True)[1]; D[D < 1e-8] = np.inf; ref_HH.append(D.ravel())
+            ref_HO.append(dist(p[sel], p[iO], fr.cell).ravel())
+        D = dist(p[sel], p[iH], fr.cell); D[D < 1e-8] = np.inf; ref_HH.append(D.ravel())
     nf = len(frames) * ng; nO, nH = len(iO), len(iH)
     r = dict(k=int(k), lam=float(lam[k]), frames=len(frames), V=V,
              gO=rdf(np.concatenate(dO), nO, nf, V) if nO else None, gH=rdf(np.concatenate(dH), nH, nf, V),
              gO_ref=rdf(np.concatenate(ref_HO), nO, len(frames) * len(sel), V) if nO else None, gH_ref=rdf(np.concatenate(ref_HH), nH - 1, len(frames) * len(sel), V),
              nnO=np.array(nnO), nnH=np.array(nnH))
     near = np.minimum(r["nnO"], r["nnH"]) if nO else r["nnH"]; r["overlap"] = float(np.mean(near < 0.7))
-    res.append(r)
+    res.append(r); print(f"  lambda {lam[k]:.2e}: {len(frames)} frames read", flush=True)
 if not res:
     raise SystemExit("no node trajectories found")
 # first minimum of the host H-O g(r) after its first peak: coordination shell of a bonded proton
