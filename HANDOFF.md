@@ -2,6 +2,8 @@
 
 Branch `claude/eloquent-ramanujan-2tjx2p`, open PR victornadenrobinson/H3O#2 (do not open another; push to the branch). Read this file, then `PROJECT.md` (plan, conventions, zero-shot table), `docs/TDI_PLAN.md` (free-energy plan), `docs/LITERATURE_NOTES.md` (paper facts), `mlp_pipeline/README.md`, `envs/README.md`.
 
+**Jobs on Young (what each Slurm script is, what was submitted): `docs/JOBS.md`; on Young `bash mlp_pipeline/jobs_status.sh` shows what is running; submit with `bash mlp_pipeline/submit.sh "note" ... script.sbatch` so it is logged.**
+
 Output formats, file list, log-line meanings, run commands and coding rules for new scripts: `docs/TDI_OUTPUT.md`.
 
 ## LATEST STATE (end of session 1, 2026-10-26 afternoon)  -- read this block first
