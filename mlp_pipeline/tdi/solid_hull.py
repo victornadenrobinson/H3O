@@ -10,13 +10,18 @@ Insertion. Each run gives the average over its n added H, avg(n) = [G(N + n) - G
 avg(n) = dg0 + s n (same fit as insertion_model.py) -> n avg(n) = n dg0 + s n^2 -> dG(x) with n = 3 nO x / (1 - x); band = 16-84% of the fit covariance.
 The differential mu_H - G_H = dg0 + 2 s n, so a_sol = -dg0 / (2 s nO) (same as insertion_model's x_sol). The line is regular-solution-like: an extrapolation beyond n = 4.
 Crystal points: H(2+a)O crystal vs H2O crystal (same phase, cell, P, T) + n pure H, as in summarize.py; hollow = caveat (different dt / lambda grid, or the crystal melted
-in free NVT). Insertion points: hollow if the run has no stage-0 pressure correction (first-order bias, typically -26 to -80 meV per added H after correction)."""
+in free NVT). Insertion points: hollow if the run has no stage-0 pressure correction (first-order bias, typically -26 to -80 meV per added H after correction).
+Partitioning (second figure <o>_partition.png, when summary.csv has liquid H(2+a)O rows at the same P, T): the liquid on the same axes, dG_l(x) = G_liq - (1 - x) G(H2O
+crystal) - x G_H per atom, and the lower convex hull of the solid curve (trusted up to 1.5x the largest computed solid composition, x <= 0.1) and the liquid points:
+a hull edge from the solid curve to a liquid point gives the coexisting compositions and K_D = a_solid / a_liquid (pure H at x = 1 is the liquid end point: an edge
+to it is the pure-H solubility limit above). The liquid compositions are discrete (H2.25O, H3O, H5O, ...): x_liquid is the nearest computed one. Note D7 (500 GPa
+liquid H2O G too low): check that the liquid H2O point lies above the solid at x = 0 (flagged otherwise)."""
 import argparse, glob, os, sys
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-C_INS, C_FCC, C_BCC, INK, MUTED = "#2a78d6", "#eb6834", "#1baf7a", "#222222", "#8a8a85"
+C_INS, C_FCC, C_BCC, C_LIQ, INK, MUTED = "#2a78d6", "#eb6834", "#1baf7a", "#e87ba4", "#222222", "#8a8a85"
 
 
 def pick(g, dt, nodes=None):
@@ -72,9 +77,48 @@ def states_from_summary(path, host):
         cav = (not (m.dt_fs == w.dt_fs == h.dt_fs and m.nodes == w.nodes == h.nodes)) or mel
         st = S.setdefault((m.P_target_GPa, m.T_K), dict(P=m.P_target_GPa, T=m.T_K, nO=int(m.nO), ins=[], cryst=[]))
         st["cryst"].append(dict(phase=m.phase, n=n, nO=int(m.nO), avg=dG, err=err, caveat=cav, why=("MELTED in free NVT" if mel else "") + ("" if m.dt_fs == w.dt_fs == h.dt_fs and m.nodes == w.nodes == h.nodes else " dt/grid differ")))
+    L = df[(df.phase == "liquid") & (df.H_per_O >= 2.0)]
     for st in S.values():
         add_fits(st, host)
+        # liquid H(2+a)O on the same axes: dG_l(x) = G_liq/atom - (1 - x) G(H2O crystal)/atom - x G_H, x = a / (3 + a)
+        w = df[(df.phase == host) & (df.P_target_GPa == st["P"]) & (df.T_K == st["T"]) & (df.H_per_O == 2.0) & (df.nO == st["nO"])]
+        hh = H[(H.P_target_GPa == st["P"]) & (H.T_K == st["T"])]; lq = L[(L.P_target_GPa == st["P"]) & (L.T_K == st["T"])]
+        st["liq"] = []
+        if len(w) and len(hh) and len(lq):
+            for hp, g in lq.groupby("H_per_O"):
+                m = g.sort_values("ps_per_node").iloc[-1]; ww, h = pick(w, m.dt_fs, m.nodes), pick(hh, m.dt_fs, m.nodes)
+                aa = hp - 2.0; x = aa / (3 + aa)
+                st["liq"].append(dict(x=x, a=aa, g=m.G_meV_atom - (1 - x) * ww.G_meV_atom - x * h.G_meV_atom,
+                                      err=float(np.sqrt(m.G_err_meV_atom ** 2 + ((1 - x) * ww.G_err_meV_atom) ** 2 + (x * h.G_err_meV_atom) ** 2)),
+                                      caveat=not (m.dt_fs == ww.dt_fs == h.dt_fs), tag=m.tag))
     return list(S.values())
+
+
+def lower_hull(pts):
+    """lower convex hull (monotone chain) of (x, g, label) points sorted by x"""
+    pts = sorted(pts, key=lambda q: (q[0], q[1])); h = []
+    for q in pts:
+        while len(h) >= 2 and (h[-1][0] - h[-2][0]) * (q[1] - h[-2][1]) - (h[-1][1] - h[-2][1]) * (q[0] - h[-2][0]) <= 0:
+            h.pop()
+        h.append(q)
+    return h
+
+
+def partition(st, key):
+    """common tangent between the solid curve (fit `key`, trusted up to 1.5x the largest computed solid composition, max x = 0.1) and the liquid points
+    (plus pure H at x = 1): coexisting x_solid, x_liquid from the lower hull; K_D = a_solid / a_liquid (added H per O)"""
+    if key not in st.get("fits", {}) or not st.get("liq"):
+        return None
+    b, _ = st["fits"][key]; xd = [point_xy(q)[0] for q in st["ins"] + [c for c in st["cryst"] if not c["caveat"]]]
+    xv = min(0.1, 1.5 * max(xd)) if xd else 0.02
+    xs = np.linspace(0, xv, 400); pts = [(x, g, "s") for x, g in zip(xs, curve(b, st["nO"], xs))]
+    pts += [(q["x"], q["g"], "l") for q in st["liq"]] + [(1.0, 0.0, "l")]
+    h = lower_hull(pts); out = dict(x_valid=xv, liquid_below_solid_at_H2O=any(q["x"] == 0 and q["g"] < 0 for q in st["liq"]), hull=h, pairs=[])
+    for p0, p1 in zip(h[:-1], h[1:]):
+        if p0[2] == "s" and p1[2] == "l":
+            a_s, a_l = 3 * p0[0] / (1 - p0[0]), (3 * p1[0] / (1 - p1[0]) if p1[0] < 1 else np.inf)
+            out["pairs"].append(dict(x_s=p0[0], x_l=p1[0], a_s=a_s, a_l=a_l, K_D=a_s / a_l if np.isfinite(a_l) and a_l > 0 else 0.0, at_edge=p0[0] >= xv - 1e-9))
+    return out
 
 
 def wfit(n, y, e):
@@ -196,10 +240,45 @@ def plot(states, outp, xmax=0.1, host="fcc", note=""):
     fig.tight_layout(rect=(0, (0.09 if nc >= 3 else 0.2) / nr ** 0.5, 1, 0.95))
     os.makedirs(os.path.dirname(os.path.abspath(outp)), exist_ok=True)
     fig.savefig(outp + ".png", dpi=150); fig.savefig(outp + ".pdf")
+    plot_partition(states, outp, host, rows)
     R = pd.DataFrame(rows); R.to_csv(outp + ".csv", index=False)
     pd.set_option("display.width", 250)
     print(R.round(3).to_string(index=False)); print("wrote", outp + ".png / .pdf / .csv")
     return R
+
+
+def plot_partition(states, outp, host, rows):
+    """full-range panels (x = 0..1) with the liquid H(2+a)O points and the solid-liquid common tangent; adds K_D columns to rows"""
+    have = [st for st in states if st.get("liq")]
+    if not have:
+        print("no liquid H(2+a)O runs at the insertion / crystal state points: no partitioning (needs liquid rows in summary.csv)"); return
+    import matplotlib.pyplot as plt
+    nc = min(4, len(have)); nr = -(-len(have) // nc); fig, axs = plt.subplots(nr, nc, figsize=(3.9 * nc, 3.3 * nr + 0.5), squeeze=False)
+    for ax, st in zip(axs.ravel(), have):
+        key = "all" if "all" in st.get("fits", {}) else "ins"; pr = partition(st, key); row = next(r for r in rows if r["P"] == st["P"] and r["T"] == st["T"])
+        ax.axhline(0, color=MUTED, lw=0.8)
+        for q in st["liq"]:
+            ax.errorbar([q["x"]], [q["g"]], [q["err"]], fmt="d", ms=6, color=C_LIQ, mfc="white" if q["caveat"] else C_LIQ, capsize=2, lw=1, zorder=3)
+        ax.plot([1], [0], "d", ms=6, color=C_LIQ)
+        if pr:
+            xs = np.linspace(0, pr["x_valid"], 200); ax.plot(xs, curve(st["fits"][key][0], st["nO"], xs), **STYLE[key])
+            hx = [p[0] for p in pr["hull"]]; hg = [p[1] for p in pr["hull"]]; ax.plot(hx, hg, color=INK, lw=0.8, ls="--", zorder=2)
+            txt = []
+            for q in pr["pairs"]:
+                txt.append(f"solid a {q['a_s']:.3f} + liquid a {q['a_l']:.2f}: K_D {q['K_D']:.3f}" + (" (solid at fit edge)" if q["at_edge"] else ""))
+            if pr["liquid_below_solid_at_H2O"]:
+                txt.append("liquid H2O below solid H2O: solid not stable here (check D7 / melting)")
+            row.update(K_D=pr["pairs"][0]["K_D"] if pr["pairs"] else np.nan, a_s_coexist=pr["pairs"][0]["a_s"] if pr["pairs"] else np.nan,
+                       a_l_coexist=pr["pairs"][0]["a_l"] if pr["pairs"] else np.nan, liquid_below_solid=pr["liquid_below_solid_at_H2O"])
+            ax.text(0.02, 0.04, "\n".join(txt) or "no solid-liquid tangent", transform=ax.transAxes, fontsize=6.3, color=INK, va="bottom")
+        ys = [q["g"] for q in st["liq"]] + [0.0]; lo, hi = min(ys), max(ys); pad = 0.15 * max(hi - lo, 10)
+        ax.set_ylim(lo - pad, hi + pad); ax.set_xlim(0, 1); ax.grid(alpha=0.2, lw=0.5)
+        ax.set_title(f"{st['P']:.0f} GPa, {st['T']:.0f} K", fontsize=9, loc="left", color=INK); ax.set_xlabel("x = n / (3 nO + n)", fontsize=7); ax.set_ylabel("formation dG (meV/atom)", fontsize=7); ax.tick_params(labelsize=7)
+    for ax in axs.ravel()[len(have):]:
+        ax.axis("off")
+    fig.suptitle(f"Solid ({host}, curve) vs liquid H(2+a)O (diamonds; hollow = dt differs), both relative to {host} H2O + pure H\n"
+                 "dashed = lower hull: an edge from the solid curve to a liquid point = coexistence, K_D = a_solid / a_liquid", fontsize=8.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.94)); fig.savefig(outp + "_partition.png", dpi=150); fig.savefig(outp + "_partition.pdf"); print("wrote", outp + "_partition.png")
 
 
 if __name__ == "__main__":
