@@ -28,8 +28,18 @@ for d in dirs:
             except Exception:
                 return np.array([])
         ser = [load(k) for k in range(A["nodes"])]
-        if os.path.exists(os.path.join(d, f"{tag}_node{A['nodes']}.npy")):   # node files beyond what the json declares: the json was probably overwritten by a later launch with other settings
-            stale.append(f"{os.path.basename(d)}/{tag}: node{A['nodes']}.npy exists but stage0.json declares {A['nodes']} lambda values (stale json?)")
+        why = []   # does stage0.json still describe these node files? (a later launch with other settings may have rewritten it: then G would integrate the samples on the wrong grid)
+        if os.path.exists(os.path.join(d, f"{tag}_node{A['nodes']}.npy")):
+            why.append(f"node{A['nodes']}.npy exists but the json declares {A['nodes']} lambda values")
+        for k in range(A["nodes"]):   # every node state records its lambda value
+            try:
+                z = np.load(os.path.join(d, f"{tag}_node{k}_state.npz"))
+                if "lam" in z.files and abs(float(z["lam"]) - lam[k]) > 1e-9 * max(1.0, lam[k]):
+                    why.append(f"node{k} was run at lambda {float(z['lam']):.4e}, the json grid has {lam[k]:.4e}"); break
+            except (OSError, ValueError, KeyError):
+                pass
+        if why:
+            stale.append(f"{os.path.basename(d)}/{tag}: " + "; ".join(why)); continue
         copied = []
         for k in range(A["nodes"]):   # a failed lambda value with a negligible weight (weight < 1e-4, e.g. lambda 0 after a GPU memory error) takes the series of the next lambda value
             if len(ser[k]) == 0 and w[k] < 1e-4:
@@ -66,7 +76,7 @@ pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
 print(f"All runs{' (first ' + str(a.discard) + ' of every series discarded)' if a.discard else ''} (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target; dG_P2 = -V (P_hi - P_target)^2 / (2 B N): second-order correction G(P_target) - (F + P_target V) when the MLP pressure misses the target, NOT applied; nan = no bulk modulus in the stage0 json (older runs); insertion rows: P_corr = pressure correction to P_target included in G):")
 print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa", "dG_P2_meV_atom", "P_corr_meV"]].round(2).to_string(index=False))
 if stale:
-    print("\nWARNING, more node files than the json declares: " + "; ".join(stale))
+    print("\nNOT USED, stage0.json does not match the node files (rewritten by a later launch with other settings; restore it with the original settings, see HANDOFF session 4): " + "; ".join(stale))
 if skipped:
     print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
 def pick(g, dt, nodes=None):
