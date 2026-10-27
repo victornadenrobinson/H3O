@@ -17,7 +17,7 @@ import pandas as pd
 ap = argparse.ArgumentParser(); ap.add_argument("summary", help="CSV written by summarize.py -o"); ap.add_argument("-o", default=None); ap.add_argument("--host", default="fcc", choices=["fcc", "bcc"])
 ap.add_argument("--approx-corr", action="store_true"); ap.add_argument("--bulk", type=float, default=None, help="bulk modulus (GPa) for --approx-corr when the json has none")
 ap.add_argument("--P0", type=float, default=450.0); ap.add_argument("--T0", type=float, default=6000.0)
-ap.add_argument("--melt-csv", default=None, help="optional melting line to draw: CSV with columns P_GPa, T_K (e.g. digitised literature, H2O)"); ap.add_argument("--melt-label", default="H2O melting line (literature)")
+ap.add_argument("--melt-csv", default=None, help="optional melting line to draw: CSV with columns P_GPa, T_K, # comments allowed (e.g. docs/data/cheng2021_tm_fcc.csv: Cheng et al. 2021 PBE tables, classical, ends at 223 GPa)"); ap.add_argument("--melt-label", default="H2O melting line (literature)")
 a = ap.parse_args()
 EV_A3_GPA, KB = 160.21766, 8.617333262e-2   # GPa A^3 per eV; meV per K
 df = pd.read_csv(a.summary); runs_root = os.path.dirname(os.path.dirname(os.path.abspath(a.summary)))   # runs/checks/x.csv -> runs/
@@ -150,7 +150,9 @@ if a.o:
             lo_, hi_ = max(ts), min(tm)
             ax.plot([p_, p_], [lo_, hi_], color="#eb6834", lw=3, alpha=0.8, solid_capstyle="butt", zorder=3, label=None if lab_done else "own melting bracket (last solid - first melted, free NVT)"); lab_done = True
     if a.melt_csv:
-        m_ = pd.read_csv(a.melt_csv).sort_values("P_GPa")
+        m_ = pd.read_csv(a.melt_csv, comment="#").sort_values("P_GPa")
+        if m_.P_GPa.max() < Pr[1]:
+            print(f"melting line {a.melt_csv} ends at {m_.P_GPa.max():.0f} GPa, the map goes to {Pr[1]:.0f} GPa: drawn as tabulated, not extrapolated")
         ax.plot(m_.P_GPa, m_.T_K, color="#e87ba4", lw=2.2, ls="-", zorder=3, label=a.melt_label)
     ax.set_xlim(*Pr); ax.set_ylim(*Tr); ax.set_xlabel("P (GPa)"); ax.set_ylabel("T (K)")
     ax.set_title(f"Dilute H insertion into {a.host} H2O: linear model dg0 - ds (T - T0) + dv (P - P0) fitted to the runs; valid only where the host is solid", loc="left", fontsize=8.5)
