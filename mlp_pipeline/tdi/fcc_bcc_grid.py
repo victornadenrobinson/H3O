@@ -15,6 +15,18 @@ def grid(tmax=TMAX, t0=2000, dT=500):
         for T in range(t0, tmax[P] + 1, dT): yield P, T
 
 def vpa(phase, T, P, inv="inventory_binned.csv", min_runs=20):
+    """(V/atom, source) from the DFT EOS; if neither phase has one at (P, T): V(P, T_ref) * V(P', T) / V(P', T_ref) with T_ref the nearest temperature that has one at P and P' = P + 50 or P - 50 GPa
+    (the temperature trend of a neighbouring pressure; source 'scaled-from-<P'>GPa'). None if that fails too."""
+    r = _vpa_dft(phase, T, P, inv, min_runs)
+    if r: return r
+    for dP in (50, -50, 100):
+        for Tr in sorted((2000, 2500, 3000, 3500, 4000, 4500, 5000), key=lambda t: abs(t - T)):
+            v0, v1, v2 = _vpa_dft(phase, Tr, P, inv, min_runs), _vpa_dft(phase, T, P + dP, inv, min_runs), _vpa_dft(phase, Tr, P + dP, inv, min_runs)
+            if v0 and v1 and v2: return v0[0] * v1[0] / v2[0], f"scaled-from-{P + dP}GPa"
+    return None
+
+
+def _vpa_dft(phase, T, P, inv, min_runs):
     here = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(here))
     from importlib import import_module
     import contextlib, io, math
