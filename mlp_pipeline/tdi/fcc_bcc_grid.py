@@ -18,6 +18,11 @@ def vpa(phase, T, P, inv="inventory_binned.csv", min_runs=20):
     here = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.dirname(here))
     from importlib import import_module
     import contextlib, io, math
+    import warnings; warnings.filterwarnings("ignore")   # pandas FutureWarning / numpy RankWarning from 17_eos_md, once per lookup otherwise
+    inv_mod = import_module("01_bin_inventory")
+    if not getattr(inv_mod, "_grid_cached", False):   # dft_vpa reloads the inventory csv on every call: load it once per process
+        orig, cache = inv_mod.load_inventory, {}
+        inv_mod.load_inventory = lambda f, *a, **k: cache.setdefault(f, orig(f, *a, **k)); inv_mod._grid_cached = True
     eos = import_module("17_eos_md")
     for ph in (phase, "bcc" if phase == "fcc" else "fcc"):
         try:
