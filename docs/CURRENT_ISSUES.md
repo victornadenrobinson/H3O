@@ -30,6 +30,9 @@ Code on branch `claude/eloquent-hopper-kfjdei` (PR #2 branch + review fixes). No
 
 **P5. Classical nuclei.** Every number is classical (ideal-gas H with the thermal wavelength, classical MD). Nuclear quantum effects of H at 5000-6000 K and 500 GPa are not small for mixing free energies; state this in any comparison with DFT-PIMD literature.
 
+**P6. DFT check of the model where mu_H is sensitive** (tools ready, not run): `tdi/dft_check.py prep-probe` (extra H at 0.5-1.2 A from host H / O in real host frames: is GRACE's flat H-H region physical?) and `prep-fep` (free-energy perturbation MLP -> DFT for mu_H - G_H: host + H, paired host, host ensemble, pure H frames); VASP settings copied from a training run directory (--template), single-point tags only; run with `young_dft_check.sbatch` on CPU nodes; `dft_check.py analyze` prints the DFT-vs-MLP curves and the correction to mu_H - G_H.
+Ghost g(r) result (500 GPa 6000 K n1, tdi_long): at lambda 0.949 the inserted proton's g(r) matches the host protons' (L1 0.10 / 0.08), nearest O 1.01 A, CN_O 3.9, no overlap; the H2.009O host stays fcc (delta_L 0.129, D_O ~0) over 9.5 ps.
+
 ## 3. Verified correct (do not re-check without a reason)
 Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT ln V), ideal-gas H with ln N!, 3N kT ln Lambda, P V units, insertion reference kT ln((N_H+n)!/N_H!) - n kT ln V + 3 n kT ln Lambda (same counting as the crystal route), Gauss-Legendre in lambda = x^4 and the Gauss-Kronrod rule, insertion integral vs Widom on a toy LJ fluid (-9 +- 13 vs -1 +- 9 meV), pressure correction vs exact Legendre transform (0.2% at 20 GPa offsets), shell array decoding of every sbatch table.
 
