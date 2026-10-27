@@ -143,7 +143,7 @@ if os.path.exists(a.dft_hull):
     def col(c): return np.array([f(r[c]) if len(r) > c else np.nan for r in rows])
     dft = {("unlabelled (400 GPa assumed)", 9000): (col(2), col(3)), ("unlabelled (400 GPa assumed)", 7000): (col(4), col(5)), ("unlabelled (400 GPa assumed)", 5000): (col(6), col(7)),
            ("350 GPa", 9000): (col(10), col(11)), ("350 GPa", 7000): (col(12), col(13)), ("350 GPa", 5000): (col(14), col(15))}
-    dft_x = np.array(xs); _n = np.where(dft_x < 1, dft_x / (1 - np.minimum(dft_x, 0.999999)), np.inf); dft_xa = np.where(np.isfinite(_n), _n / (3 + _n), 1.0)   # sheet x = n/(1+n) -> atom fraction n/(3+n)
+    dft_x = np.array(xs); _n = np.array([v / (1 - v) if v < 1 else np.inf for v in dft_x]); dft_xa = np.array([n / (3 + n) if np.isfinite(n) else 1.0 for n in _n])   # sheet x = n/(1+n) -> atom fraction n/(3+n)
     # the sheet's second x column is mislabelled; both blocks use x = 0, 0.2, 0.5, 0.75, 1
 
 # ---------------------------------------------------------------- figures
@@ -163,7 +163,7 @@ if len(hull):
         h = hull[hull.P == P]; Ts = sorted(h["T"].unique())
         for T in Ts:
             g = h[h["T"] == T].sort_values("x"); c = Tcol(T); xa = g.x / (1 - g.x) / (3 + g.x / (1 - g.x)); x = np.r_[0, xa, 1]; y = np.r_[0, g.dG, 0]   # n = x/(1-x); atom fraction of the added H = n/(3+n)
-            hollow(ax, xa, g.err, g.caveat, c, "o", f"{T:.0f} K"); ax.plot(*lower_hull(x, y), "-", color=c, lw=.9, alpha=.8)
+            hollow(ax, xa, g.dG, g.err, g.caveat, c, "o", f"{T:.0f} K"); ax.plot(*lower_hull(x, y), "-", color=c, lw=.9, alpha=.8)
         lab = "unlabelled (400 GPa assumed)" if P == 400 else "350 GPa" if P == 350 else None
         if lab:
             for (l2, T), (y, e) in dft.items():
