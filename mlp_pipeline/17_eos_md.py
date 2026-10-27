@@ -21,18 +21,32 @@ from common import out as outp, inp
 
 EV_A3_GPA = 160.21766
 CELL = {"bcc": (2, [(0, 0, 0), (.5, .5, .5)], 4), "fcc": (4, [(0, 0, 0), (.5, .5, 0), (.5, 0, .5), (0, .5, .5)], 3)}  # O per cell, basis, default repeats
+# close-packed O lattices in ONE orthohexagonal cell (a x sqrt3 a x 2 sqrt6 a, 12 O = 6 layers), so that hcp (ABABAB) and fcc (ABCABC, 'fccl') have the same atoms, cell and k-points-free finite-size error:
+# nrep = nx (default 4), ny = nrep // 2 -> 96 O for nrep 4. a = nearest-neighbour distance, fixed by the volume per atom (equal for both stackings; the DFT fcc EOS is used for both).
+LAYERED = {"hcp": "ABABAB", "fccl": "ABCABC"}; CELL.update({k: (12, None, 4) for k in LAYERED})
+LAYER_SITES = {"A": [(0, 0), (.5, .5)], "B": [(.5, 1 / 6), (0, 2 / 3)], "C": [(0, 1 / 3), (.5, 5 / 6)]}
+
+
+def build_layered_O(phase, vpa, nrep, hper):
+    """O sublattice of 'hcp' / 'fccl' in the orthohexagonal supercell nx x ny x 1 (nx = nrep, ny = nrep // 2); returns (Atoms, nearest-neighbour distance a)"""
+    nx, ny = nrep, max(1, nrep // 2); nO = 12 * nx * ny; V = (1 + hper) * nO * vpa
+    a = (V / (nx * ny * 6 * 2 ** .5)) ** (1 / 3)
+    sp = [((i + sx) / nx, (j + sy) / ny, k / 6) for k, L in enumerate(LAYERED[phase]) for (sx, sy) in LAYER_SITES[L] for i in range(nx) for j in range(ny)]
+    return Atoms("O" * nO, scaled_positions=sp, cell=[nx * a, ny * 3 ** .5 * a, 2 * 6 ** .5 * a], pbc=True), a
 
 
 def build(phase, vpa, nrep, seed=0, hper=2.0):
     if phase == "H":
         return build_h(vpa, nrep)
-    nO_cell, basis, _ = CELL[phase]
-    N = int(round((1 + hper) * nO_cell * nrep ** 3))   # all atoms (hper H per O)
-    a = (N * vpa / nrep ** 3) ** (1 / 3)
-    O = Atoms("O" * (nO_cell * nrep ** 3), scaled_positions=[((np.array(b) + (i, j, k)) / nrep) for i in range(nrep) for j in range(nrep) for k in range(nrep) for b in basis],
-              cell=[a * nrep] * 3, pbc=True)
-    nn = np.sort(neighbor_list("d", O, 0.9 * a))[:1] if False else None
-    d = neighbor_list("d", O, a)                       # shortest O-O distance = nearest neighbour
+    if phase in LAYERED:
+        O, a = build_layered_O(phase, vpa, nrep, hper); cut = 1.5 * a   # a = nearest-neighbour distance
+    else:
+        nO_cell, basis, _ = CELL[phase]
+        N = int(round((1 + hper) * nO_cell * nrep ** 3))   # all atoms (hper H per O)
+        a = (N * vpa / nrep ** 3) ** (1 / 3)
+        O = Atoms("O" * (nO_cell * nrep ** 3), scaled_positions=[((np.array(b) + (i, j, k)) / nrep) for i in range(nrep) for j in range(nrep) for k in range(nrep) for b in basis],
+                  cell=[a * nrep] * 3, pbc=True); cut = a
+    d = neighbor_list("d", O, cut)                     # shortest O-O distance = nearest neighbour
     dmin = d.min()
     i, j, D = neighbor_list("ijD", O, 1.1 * dmin)
     keep = i < j                                       # one entry per bond (periodic images of the same pair are distinct bonds)

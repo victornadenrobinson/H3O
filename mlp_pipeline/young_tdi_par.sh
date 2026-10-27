@@ -34,7 +34,7 @@ mkdir -p $OUT
 export TF_FORCE_GPU_ALLOW_GROWTH=true; [ -n "$UQ" ] && export GRACE_UQ=1   # UQ=1: per-atom extrapolation grade (cost not measured); use tdi/uq_check.py on saved snapshots instead
 PY=${PY:-$HOME/grace-venv/bin/python}
 SRC="--from-dft inventory_binned.csv ${NREP:+--nrep $NREP}"; [ -n "$VPA" ] && SRC="--vpa $VPA --nrep ${NREP:-2}"   # VPA/NREP: harness test without the inventory
-COMMON="$MODEL ${BULK:+--bulk-gpa $BULK }--phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${SEED:+ --seed $SEED}${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
+COMMON="$MODEL ${BULK:+--bulk-gpa $BULK }--phase $PH --P $P --T $T --hper $HPER --nghost $NGHOST ${HOSTPHASE:+--host-phase $HOSTPHASE} ${NATOMS:+--natoms $NATOMS} ${MINRUNS:+--min-runs $MINRUNS} ${INIT:+--init-from $INIT} ${RULE:+--rule $RULE} ${NGAUSS:+--ngauss $NGAUSS} $SRC --ps $PS --ps1 $PS1 --nodes $NODES --power $POWER --dt $DT --chunk-ps $CHUNK --equil-ps $EQUIL --outdir $OUT${SEED:+ --seed $SEED}${K:+ --k $K}${HOT:+ --hot-ps $HOT --hot-T ${HOTT:-12000}} --prep-hold-ps ${PREPHOLD:-1} --prep-free-ps ${PREPFREE:-1}"
 NOISE="tensorflow|XLA|cuda|absl|computation_placer|_handle_getgr|E0000|W0000|I0000|ptxas|^$"
 TAGNAME=$($PY $CODE/tdi/run_real.py $COMMON --print-tag 2>/dev/null | tail -n1)   # the tag of the files run_real.py writes (one definition: make_tag)
 [ -n "$TAGNAME" ] || { echo "cannot build the run tag ($PY $CODE/tdi/run_real.py ... --print-tag failed)"; exit 1; }
@@ -46,7 +46,7 @@ if [ -n "$FRESH" ]; then
   FRESHFLAG=--fresh
 fi
 echo "== stage 0 (lambda = 1 run) $(date)"
-if [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then echo "stage 0 already done (measured k kept; FRESH=1 to redo)"
+if [ -z "$K" ] && [ -f $OUT/${TAGNAME}_stage0.json ] && { [ $PH = bcc ] || [ $PH = fcc ] || [ $PH = hcp ] || [ $PH = fccl ]; }; then echo "stage 0 already done (measured k kept; FRESH=1 to redo)"
 else
   $PY -u $CODE/tdi/run_real.py $COMMON --stage0 2>&1 | tee $OUT/${TAGNAME}_stage0.log | grep --line-buffered -vE "$NOISE"; RC=${PIPESTATUS[0]}
   [ $RC = 0 ] || { echo "stage 0 failed (exit $RC; see $OUT/${TAGNAME}_stage0.log): nodes not started"; exit 1; }   # never run the nodes on an older stage0.json
