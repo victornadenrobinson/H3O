@@ -39,7 +39,16 @@ for (P, T), g in ins.groupby(["P_target_GPa", "T_K"]):
     hh = H[(H.P_target_GPa == P) & (H.T_K == T)]
     if not len(hh):
         print(f"{P:.0f} GPa {T:.0f} K: no pure-H run, skipped"); continue
+    dts = g.dt_fs.unique() if "dt_fs" in g else []
+    if len(dts) > 1:
+        print(f"{P:.0f} GPa {T:.0f} K: insertion runs with different dt {sorted(dts)}: using dt {min(dts)} only"); g = g[g.dt_fs == min(dts)]
+    if "dt_fs" in hh and len(dts):   # pure-H partner as in summarize.pick: same dt as the insertion runs (a dt bias of G_H enters mu_H - G_H in full, per H), then the longest run
+        same = hh[hh.dt_fs == g.dt_fs.iloc[0]]
+        if not len(same):
+            print(f"{P:.0f} GPa {T:.0f} K: no pure-H run with dt {g.dt_fs.iloc[0]} (have {sorted(hh.dt_fs.unique())}): skipped"); continue
+        hh = same
     h = hh.sort_values("ps_per_node").iloc[-1]; sth = stage0(h)
+    print(f"{P:.0f} GPa {T:.0f} K: pure-H partner {h.dir}/{h.tag} (dt {h.get('dt_fs', float('nan'))}, {h.ps_per_node:.1f} ps, G_H {h.G_meV_atom:.1f} +- {h.G_err_meV_atom:.1f})")
     g = g.sort_values("N"); n = g.N.values.astype(float); mu = g.G_meV_atom.values.copy(); err = g.G_err_meV_atom.values.copy()
     corr = g.P_corr_meV.values if "P_corr_meV" in g else np.full(len(g), np.nan); flag = ""
     if np.any(~np.isfinite(corr)):
