@@ -81,7 +81,7 @@ def main(model, path, n=0, max_atoms=0, device="cuda", min_box=0.0):
         cnt.append([syms.count("H"), syms.count("O")]); E_d.append(ref_e); E_m.append(e)
         rows.append(dict(comp=a.info.get("config_type"), T=a.info.get("T_K"), P_dft=a.info.get("P_GPa"),
                          f_se=np.mean((f - ref_f) ** 2), s_ae=np.mean(np.abs(s - ref_s)) * EV_A3_TO_GPA,
-                         dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n,
+                         dP=-np.trace(s - ref_s) / 3 * EV_A3_TO_GPA, n=n, N_H=syms.count("H"), N_O=syms.count("O"),
                          gamma_max=float(np.max(gam)) if gam is not None else np.nan, gamma_mean=float(np.mean(gam)) if gam is not None else np.nan,
                          # raw predictions, so parity plots are possible (virial pressure only: no kinetic term, identical for model and DFT)
                          P_virial_dft=-np.trace(ref_s) / 3 * EV_A3_TO_GPA, P_virial_mlp=-np.trace(s) / 3 * EV_A3_TO_GPA,
