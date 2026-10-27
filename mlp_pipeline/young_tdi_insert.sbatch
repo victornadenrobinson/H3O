@@ -15,7 +15,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --array=0-10
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
@@ -25,4 +25,4 @@ IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"
 I=${SLURM_ARRAY_TASK_ID:-0}; read -r P T N <<< "${TABLE[$I]}"
 [ -n "$N" ] || { echo "no table entry for array task $I"; exit 2; }
 echo "== task $I: insert n=$N at $P GPa, $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
-NGHOST=$N P=$P T=$T NODES=${NODES:-10} NPAR=${NPAR:-10} DT=${DT:-0.5} EQUIL=${EQUIL:-0.5} PS=${PS:-2} CHUNK=0.5 bash mlp_pipeline/young_tdi_par.sh insert
+NGHOST=$N P=$P T=$T NODES=${NODES:-10} NPAR=${NPAR:-10} DT=${DT:-0.5} EQUIL=${EQUIL:-0.5} PS=${PS:-8} CHUNK=0.5 bash mlp_pipeline/young_tdi_par.sh insert

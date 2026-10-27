@@ -254,6 +254,57 @@ if len(prep):
     ax.set_xticks(range(len(g))); ax.set_xticklabels([f"{r.P:.0f}/{r.T:.0f}\nH{r.h:g}O" for _, r in g.iterrows()], fontsize=6, rotation=90); ax.axhline(0, color="k", lw=.6); ax.grid(alpha=.25)
     ax.set_ylabel("G(prep run) - G(cold start) (meV/atom)"); ax.set_title("Start-configuration protocol (hold O, thermalise H, release O) vs cold start, P(GPa)/T(K). Grey squares: H2O control (no protocol in either: tests longer run / grid)", fontsize=7); figs["prep"] = fig
 
+# 6b melting line in P-T space: TDI G_liquid - G_fcc sign changes (+ free-NVT verdicts of H2O crystals where runs/melt* exist)
+fig, ax = plt.subplots(figsize=(7.5, 5.2)); anyd = False
+sys.path.insert(0, os.path.join(HERE, "..")); from tdi.verdict import verdict
+nv = []
+for dd in ("runs/melt_tdi", "runs/melt", "runs/melt_comp", "runs/eos_scan"):
+    import glob
+    for f in sorted(glob.glob(os.path.join(dd, "*.csv"))):
+        try: t = pd.read_csv(f)
+        except Exception: continue
+        for _, r in t.iterrows():
+            if r.get("branch", "solid") != "solid" or r.get("phase") not in ("fcc", "bcc") or "T_set" not in r or "P_GPa" not in r: continue
+            h = r.get("hper", 2.0); h = 2.0 if not np.isfinite(h) else float(h)
+            if abs(h - 2.0) > 0.02: continue
+            pt = r.get("P_target", np.nan); nv.append(dict(P=float(pt) if np.isfinite(pt) else float(r["P_GPa"]), T=float(r["T_set"]), v=verdict(r)))
+nv = pd.DataFrame(nv, columns=["P", "T", "v"])
+if len(nv):
+    anyd = True
+    for v, m, c, lab in (("melted", "x", "tab:red", "free NVT: melted"), ("marginal", "^", "tab:orange", "free NVT: marginal"), ("solid", "s", "tab:green", "free NVT: solid (6 ps; superheating possible)")):
+        g = nv[nv.v == v]
+        if len(g): ax.scatter(g.P, g["T"], marker=m, s=30, facecolors="none" if m == "s" else c, edgecolors=c, label=lab, linewidths=1.2)
+if len(cross):
+    anyd = True
+    for h, m, off in ((2.0, "o", 0), (2.25, "D", 6)):
+        g = cross[cross.h == h]
+        if len(g): ax.scatter(g.P + off, g["T"], c=np.where(g.dG < 0, "tab:red", "tab:blue"), marker=m, s=40, edgecolors="k", linewidths=.6, label=f"TDI H{h:g}O: red liquid lower G, blue crystal lower G")
+    for h, ls in ((2.0, "-"), (2.25, "--")):
+        pts = []
+        for P, g in cross[cross.h == h].groupby("P"):
+            g = g.sort_values("T").reset_index(drop=True)
+            for i in range(len(g) - 1):
+                if g.dG[i] * g.dG[i + 1] < 0: pts.append((P, g["T"][i] + (g["T"][i + 1] - g["T"][i]) * g.dG[i] / (g.dG[i] - g.dG[i + 1])))
+        if len(pts) >= 1: ax.plot(*zip(*sorted(pts)), "k" + ls, marker="*", ms=11, label=f"TDI melting estimate, H{h:g}O (linear interpolation of the sign change)")
+ax.set_xlabel("P (GPa)"); ax.set_ylabel("T (K)"); ax.grid(alpha=.25); ax.set_title("Melting of the fcc crystal in P-T space (statistical errors only; the TDI crystal is spring-held, so a molten crystal gives a wrong G)", fontsize=7)
+if anyd: ax.legend(fontsize=5.5, loc="upper left"); figs["meltline"] = fig
+
+# 6c finite size: G of the same state point and dt at different system sizes
+d1 = df[df.phase != "insert"].assign(h=df.H_per_O.fillna(-1)); rowsfs = []
+for key, g in d1.groupby(["phase", "P_target_GPa", "T_K", "h", "dt_fs"]):
+    g = g.sort_values("ps_per_node").groupby("N").tail(1)   # the longest run of each size
+    if g.N.nunique() >= 2: rowsfs.append((key, g.sort_values("N")))
+if rowsfs:
+    fig, axs = plt.subplots(1, 2, figsize=(11, 4.4))
+    for key, g in rowsfs:
+        ref = g.iloc[-1]; lab = f"{key[0]} {key[1]:.0f} GPa {key[2]:.0f} K" + ("" if key[3] < 0 else f" H{key[3]:g}O")
+        axs[0].errorbar(1 / g.N, g.G_meV_atom - ref.G_meV_atom, np.hypot(g.G_err_meV_atom, ref.G_err_meV_atom), fmt="o-", ms=4, lw=.8, capsize=2, label=lab)
+        axs[1].scatter(g.N, g.G_err_meV_atom, s=14 + 22 * g.ps_per_node, alpha=.7, label=lab)
+    axs[0].axhline(0, color="k", lw=.6); axs[0].set_xlabel("1/N (atoms)"); axs[0].set_ylabel("G(N) - G(largest N) (meV/atom)"); axs[0].legend(fontsize=5); axs[0].grid(alpha=.25)
+    axs[0].set_title("Finite size (extensive part cancelled per atom; runs differ in ps per lambda, see right)", fontsize=7)
+    axs[1].set_xlabel("N (atoms)"); axs[1].set_ylabel("statistical error of G (meV/atom)"); axs[1].set_title("Error vs size; marker area grows with ps per lambda", fontsize=7); axs[1].grid(alpha=.25); axs[1].set_xscale("log")
+    figs["finite_size"] = fig
+
 # 7 coverage
 fig, ax = plt.subplots(figsize=(7, 4.6)); mk = {"fcc": "s", "bcc": "^", "liquid": "o", "H": "D", "insert": "P"}
 for ph, g in raw.groupby("phase"):

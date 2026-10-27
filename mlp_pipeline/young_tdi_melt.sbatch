@@ -14,7 +14,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
-#SBATCH --time=06:00:00
+#SBATCH --time=14:00:00
 #SBATCH --array=0-35%6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
@@ -25,5 +25,5 @@ I=${SLURM_ARRAY_TASK_ID:-0}; PH=${PHASES[$((I % 3))]}; T=${TLIST[$(( (I / 3) % $
 echo "== task $I: $PH at $P GPa, $T K on $(hostname) $(date) git $(git rev-parse --short HEAD)"
 EQ=$([ $PH = liquid ] && echo 1.0 || echo 0.5)
 [ $PH = liquid ] && export NREP=${LIQNREP:-3}   # liquid cell only (108 O); LIQNREP overrides
-HOTV=$([ $PH = liquid ] && echo ${HOT-0.5}); P=$P T=$T HOT=$HOTV NODES=${NODES:-8} NPAR=${NPAR:-8} DT=0.5 EQUIL=$EQ PS=${PS:-2} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PH
+HOTV=$([ $PH = liquid ] && echo ${HOT-0.5}); P=$P T=$T HOT=$HOTV NODES=${NODES:-8} NPAR=${NPAR:-8} DT=0.5 EQUIL=$EQ PS=${PS:-8} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PH
 echo "== task $I finished $(date)"

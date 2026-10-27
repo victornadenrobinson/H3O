@@ -15,7 +15,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
-#SBATCH --time=01:30:00
+#SBATCH --time=06:00:00
 #SBATCH --array=0-5
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
@@ -25,4 +25,4 @@ IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"
 I=${SLURM_ARRAY_TASK_ID:-0}; read -r PH P T HP <<< "${TABLE[$I]}"
 [ -n "$P" ] || { echo "no table entry for array task $I"; exit 2; }
 echo "== task $I: $PH at $P GPa, $T K, H per O $HP on $(hostname) $(date)"
-P=$P T=$T HPER=$HP NODES=10 NPAR=10 DT=${DT:-0.5} EQUIL=${EQUIL:-0.4} PS=${PS:-2} CHUNK=0.25 PS1=1.5 bash mlp_pipeline/young_tdi_par.sh $PH
+P=$P T=$T HPER=$HP NODES=10 NPAR=10 DT=${DT:-0.5} EQUIL=${EQUIL:-0.4} PS=${PS:-8} CHUNK=0.25 PS1=1.5 bash mlp_pipeline/young_tdi_par.sh $PH

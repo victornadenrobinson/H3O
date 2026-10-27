@@ -13,7 +13,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=60G
-#SBATCH --time=03:00:00
+#SBATCH --time=12:00:00
 #SBATCH --array=0-83%8
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
@@ -24,4 +24,4 @@ I=${SLURM_ARRAY_TASK_ID:-0}; NC=${#COMPS[@]}; C=${COMPS[$((I % NC))]}; T=${TLIST
 echo "== task $I: $([ $C = H ] && echo pure H || echo liquid H${C}O) at $P GPa, $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 if [ $C = H ]; then PHASE=H; HPER=2; NAT=250; HOTV=""; else PHASE=liquid; HPER=$C; NAT=""; HOTV=${HOT-0.5}; fi
-P=$P T=$T HPER=$HPER NATOMS=$NAT HOT=$HOTV NODES=10 NPAR=10 DT=0.5 EQUIL=${EQUIL:-1.0} PS=${PS:-2} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PHASE
+P=$P T=$T HPER=$HPER NATOMS=$NAT HOT=$HOTV NODES=10 NPAR=10 DT=0.5 EQUIL=${EQUIL:-1.0} PS=${PS:-8} PS1=1.5 CHUNK=0.25 MINRUNS=8 bash mlp_pipeline/young_tdi_par.sh $PHASE
