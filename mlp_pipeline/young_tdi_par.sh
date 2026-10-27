@@ -17,7 +17,7 @@
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
-# env knobs: HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
+# env knobs: BULK (bulk modulus GPa, insert with VPA) HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
 # Design: the code is copied to runs/code/<time>_<pid> at launch and every process runs from that snapshot, and the body is one function parsed before it runs,
