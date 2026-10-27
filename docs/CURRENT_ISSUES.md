@@ -40,6 +40,7 @@ Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT
 - The report/figure generator (tdi_report.pdf) is not in the repo: commit it so its labels and fits can be reviewed.
 
 ## 5. Next tests, cheapest first
+Tests 1-2 (plus per-lambda tail/drift statistics of the crystal and pure-H runs) in one go, interactive GPU job: `bash mlp_pipeline/young_insert_checks.sh` -> runs/checks/insert_checks_<date>.txt.
 1. `short_range.py` on insert_500GPa_6000K_n1 (P2).
 2. `collect.py runs/tdi insert_500GPa_6000K_n1`: per-lambda integrand; compare with the toy profile (P2).
 3. Restore D1, relaunch insertions (D2), rerun summarize.
