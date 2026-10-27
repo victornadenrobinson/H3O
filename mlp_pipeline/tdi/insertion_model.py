@@ -16,7 +16,9 @@ import pandas as pd
 
 ap = argparse.ArgumentParser(); ap.add_argument("summary", help="CSV written by summarize.py -o"); ap.add_argument("-o", default=None); ap.add_argument("--host", default="fcc", choices=["fcc", "bcc"])
 ap.add_argument("--approx-corr", action="store_true"); ap.add_argument("--bulk", type=float, default=None, help="bulk modulus (GPa) for --approx-corr when the json has none")
-ap.add_argument("--P0", type=float, default=450.0); ap.add_argument("--T0", type=float, default=6000.0); a = ap.parse_args()
+ap.add_argument("--P0", type=float, default=450.0); ap.add_argument("--T0", type=float, default=6000.0)
+ap.add_argument("--melt-csv", default=None, help="optional melting line to draw: CSV with columns P_GPa, T_K (e.g. digitised literature, H2O)"); ap.add_argument("--melt-label", default="H2O melting line (literature)")
+a = ap.parse_args()
 EV_A3_GPA, KB = 160.21766, 8.617333262e-2   # GPa A^3 per eV; meV per K
 df = pd.read_csv(a.summary); runs_root = os.path.dirname(os.path.dirname(os.path.abspath(a.summary)))   # runs/checks/x.csv -> runs/
 
@@ -138,6 +140,18 @@ if a.o:
         if pts:
             kw = dict(color=col) if mk == "x" else dict(facecolors="none", edgecolors=col)
             ax.scatter(*zip(*pts), marker=mk, s=28, linewidths=1.2, zorder=3, label=f"free NVT {a.host} H2O: {v}", **kw)
+    br = {}   # our own melting bracket per pressure from the free-NVT runs: highest solid T and lowest melted T above it (superheating: the melted side is an upper bound)
+    for p_, t_, v_ in nv:
+        br.setdefault(round(p_ / 25) * 25, []).append((t_, v_))
+    lab_done = False
+    for p_, L in sorted(br.items()):
+        ts = [t_ for t_, v_ in L if v_ == "solid"]; tm = [t_ for t_, v_ in L if v_ == "melted" and (not ts or t_ > max(ts))]
+        if ts and tm:
+            lo_, hi_ = max(ts), min(tm)
+            ax.plot([p_, p_], [lo_, hi_], color="#eb6834", lw=3, alpha=0.8, solid_capstyle="butt", zorder=3, label=None if lab_done else "own melting bracket (last solid - first melted, free NVT)"); lab_done = True
+    if a.melt_csv:
+        m_ = pd.read_csv(a.melt_csv).sort_values("P_GPa")
+        ax.plot(m_.P_GPa, m_.T_K, color="#e87ba4", lw=2.2, ls="-", zorder=3, label=a.melt_label)
     ax.set_xlim(*Pr); ax.set_ylim(*Tr); ax.set_xlabel("P (GPa)"); ax.set_ylabel("T (K)")
     ax.set_title(f"Dilute H insertion into {a.host} H2O: linear model dg0 - ds (T - T0) + dv (P - P0) fitted to the runs; valid only where the host is solid", loc="left", fontsize=8.5)
     ax.legend(fontsize=7, frameon=False, loc="upper left")
