@@ -19,6 +19,7 @@ ap = argparse.ArgumentParser(); ap.add_argument("--base", default="docs/data/tdi
 ap.add_argument("--refresh", nargs="*", default=None, metavar="DIR", help="run summarize.py on these runs/ directories first (default dirs: runs/tdi runs/tdi_prep if none given)")
 ap.add_argument("--out", default="docs/figures/tdi_report"); ap.add_argument("--fmt", nargs="*", default=["png", "svg"], help="per-figure formats; the pdf with every page is always written")
 ap.add_argument("--lit", default="docs/data/dg_fcc_bcc.csv"); ap.add_argument("--cheng", default="docs/data/cheng2021_dmu_bcc_fcc.csv"); ap.add_argument("--dft-hull", default="data-h3o-convex-hull.csv")
+ap.add_argument("--qmax", type=float, default=50.0, help="exclude runs with |Kronrod - Gauss| above this (meV/atom)")
 ap.add_argument("--pmax-rel", type=float, default=0.12, help="exclude runs with |P_hi - P_target| / P_target above this")
 a = ap.parse_args()
 
@@ -40,6 +41,7 @@ for _, r in raw.iterrows():
     w = []
     if not str(r.status).startswith("done"): w.append(f"unfinished ({r.status})")
     if np.isfinite(r.P_dev) and abs(r.P_dev) > a.pmax_rel: w.append(f"P_hi {r.P_hi_GPa:.0f} vs target {r.P_target_GPa:.0f} GPa")
+    if np.isfinite(r.quad_diff_meV) and abs(r.quad_diff_meV) > a.qmax: w.append(f"Kronrod-Gauss {r.quad_diff_meV:.0f} meV/atom (lambda integral not converged, or a melted crystal held by springs)")
     why.append("; ".join(w))
 raw["excluded"] = why
 df = raw[raw.excluded == ""].copy()
@@ -127,6 +129,13 @@ if "tdi_prep" in set(raw.dir):
             prep.append(dict(P=p.P_target_GPa, T=p.T_K, h=p.H_per_O, dG=p.G_meV_atom - c.G_meV_atom, err=(p.G_err_meV_atom ** 2 + c.G_err_meV_atom ** 2) ** .5, ps_prep=p.ps_per_node, ps_cold=c.ps_per_node,
                              control=p.H_per_O == 2.0, caveat=(p.dt_fs != c.dt_fs) or (c.ps_per_node < 0.5 * p.ps_per_node)))
 prep = pd.DataFrame(prep, columns=["P", "T", "h", "dG", "err", "ps_prep", "ps_cold", "control", "caveat"])
+
+# ---------------------------------------------------------------- derived tables (printed and saved next to the figures)
+os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+for name, t in (("hull", hull), ("fcc_bcc", pairs), ("mixing", solid), ("melting", cross), ("prep", prep)):
+    if len(t):
+        t.to_csv(f"{a.out}_table_{name}.csv", index=False); print(f"\n== {name} (meV/atom; mixing and insertion per added H; caveat = dt / lambda grid / melted differ):")
+        print(t.drop(columns=[c for c in ("tags",) if c in t]).round(2).to_string(index=False))
 
 # ---------------------------------------------------------------- literature
 lit = pd.read_csv(a.lit, comment="#") if os.path.exists(a.lit) else pd.DataFrame()
