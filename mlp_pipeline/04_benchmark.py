@@ -11,7 +11,7 @@ EV_A3_TO_GPA = 160.21766
 
 
 def get_calc_spec(spec, device="cuda"):
-    """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'grace-ft:/path/final_model' | 'lj'"""
+    """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'grace-ft:/path/final_model' | 'lj' | 'toyice'"""
     if spec.startswith("mace-ft:"):
         from mace.calculators import MACECalculator
         return MACECalculator(model_paths=spec.split(":", 1)[1], device=device, default_dtype="float64")
@@ -29,6 +29,9 @@ def get_calc_spec(spec, device="cuda"):
             return tc.TPCalculator(p, **kw)
         except TypeError:
             return tc.TPCalculator(p)
+    if spec == "toyice":   # pair-potential stand-in for pipeline tests (tdi/toy_ice.py)
+        from tdi.toy_ice import ToyIce
+        return ToyIce()
     from smoke_test import get_calc
     kind, _, name = spec.partition(":")
     return get_calc(kind, name or None, device)
