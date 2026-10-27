@@ -48,6 +48,8 @@ MD diagnostics (sbatch; young_tdi_insert.sbatch, 4 h limit; every line keeps the
 - Heavy tail at small lambda (P2): the 4 smallest lambda values again, independent seed, 4x longer, separate directory; compare node_stats of the two:
   `SEED=11 OUTDIR=runs/tdi_seed ONLYNODES="0 1 2 3" NPAR=4 PS=8 JOBS="500 5500 1" sbatch --array=0 mlp_pipeline/young_tdi_insert.sbatch`
 - Same quantity by both routes (P1): H2.25O by insertion vs +141 / +76 meV direct:  `PS=4 JOBS="500 5500 27;500 6000 27" sbatch --array=0-1 --time=08:00:00 mlp_pipeline/young_tdi_insert.sbatch`
+- METHOD CHECK (do first): insertion into the pure-H fluid at the same (P, T) must give mu_H - G_H ~ 0 (summarize row "insert into pure H (METHOD CHECK)"):
+  `PS=4 JOBS="500 6000 1 - H;500 5500 1 - H" sbatch --array=0-1 mlp_pipeline/young_tdi_insert.sbatch`
 - Solubility limit (P1): `PS=4 JOBS="500 5500 8;500 5500 16;500 6000 8;500 6000 16" sbatch --array=0-3 --time=08:00:00 mlp_pipeline/young_tdi_insert.sbatch`
 1. `short_range.py` on insert_500GPa_6000K_n1 (P2).
 2. `collect.py runs/tdi insert_500GPa_6000K_n1`: per-lambda integrand; compare with the toy profile (P2).
