@@ -2,7 +2,7 @@
 commands that finish them with EXACTLY the settings recorded in each run's <tag>_stage0.json (any other setting would be refused by run_real.py: samples
 are never mixed). Only the missing / short lambda values are launched (ONLYNODES); finished ones are not touched.
 usage (repo root, login node, plain python3 with numpy):
-  python3 mlp_pipeline/tdi/finish_runs.py runs/tdi runs/tdi_fb runs/tdi_prep [--only-tags 'H_*,bcc_*'] [--skip-empty] [-o runs/finish_jobs.sh]
+  python3 mlp_pipeline/tdi/finish_runs.py runs/tdi runs/tdi_fb runs/tdi_prep [--only-tags 'H_*,bcc_*'] [--exclude 'insert_*'] [--exclude-from FILE] [--skip-empty] [-o runs/finish_jobs.sh]
   bash runs/finish_jobs.sh          # submits one GPU job per run, then moves them to the top of your queue (scontrol top)
 The table says per run: lambda values missing / short, the remaining MD steps, the estimated wall time; runs with a progress file written in the last
 3 min are RUNNING and skipped; runs with no node log at all were never launched (check squeue first: they may still be queued).
@@ -92,16 +92,22 @@ def scan(d, tag):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="+"); ap.add_argument("--only-tags", default=None, help="comma list of glob patterns")
+    ap.add_argument("--exclude", default=None, help="comma list of tag glob patterns to leave out")
+    ap.add_argument("--exclude-from", default=None, help="file with one <dir>/<tag> (or tag) per line to leave out, e.g. the pending tasks of an extension array")
     ap.add_argument("--skip-empty", action="store_true", help="leave out runs with no samples at all (never launched)"); ap.add_argument("-o", default="runs/finish_jobs.sh")
     ap.add_argument("--local", action="store_true"); ap.add_argument("--time-cap-h", type=float, default=12.0)
     a = ap.parse_args()
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     pats = a.only_tags.split(",") if a.only_tags else None
+    excl = a.exclude.split(",") if a.exclude else []
+    if a.exclude_from:
+        excl += [os.path.basename(l.strip()) for l in open(a.exclude_from) if l.strip()]
     lines, rows = [], []
     for d in a.dirs:
         for f in sorted(glob.glob(os.path.join(d, "*_stage0.json"))):
             tag = os.path.basename(f)[:-len("_stage0.json")]
             if pats and not any(fnmatch.fnmatch(tag, p) for p in pats): continue
+            if any(fnmatch.fnmatch(tag, p) for p in excl): print(f"{d + '/' + tag:52s} excluded"); continue
             try:
                 st, todo, running, left, never = scan(d, tag)
             except Exception as ex:   # noqa: BLE001 (a broken json must not stop the others)
