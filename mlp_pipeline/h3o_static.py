@@ -131,8 +131,11 @@ def main():
     rows = []; PROG["total"] = len(a.P) * (1 + len(h_candidates()) + len(variants))
     print(f"plan: {len(a.P)} pressures x ({1 + len(h_candidates())} references + {len(variants)} H3O variants) = {PROG['total']} relaxations", flush=True)
     for P in a.P:
-        _, hw, vw = relax(ice_x(), calc, P, a.steps, a.fmax, "ice X")
-        hs = {name: relax(c, calc, P, a.steps, a.fmax, name)[1:] for name, c in h_candidates().items()}
+        rw, hw, vw = relax(ice_x(), calc, P, a.steps, a.fmax, "ice X"); rw.write(os.path.join(a.o, f"iceX_{P:.0f}GPa_relaxed.extxyz"))   # references saved too: DFT single points of all of them check the MLP dH
+        hs = {}
+        for name, c in h_candidates().items():
+            rh, h_, v_ = relax(c, calc, P, a.steps, a.fmax, name); hs[name] = (h_, v_)
+            rh.write(os.path.join(a.o, f"Href_{name.split()[0] + '_' + name.split()[1]}_{P:.0f}GPa_relaxed.extxyz"))
         best = min(hs, key=lambda k: hs[k][0]); hH = hs[best][0]
         print(f"\n{P:.0f} GPa: ice X h {hw:.4f} eV/atom (V {vw:.3f}); H reference = {best} ({hH:.4f} eV/atom; " + ", ".join(f"{k} {v[0]:.4f}" for k, v in hs.items()) + ")")
         for n, v in sorted(variants.items()):
