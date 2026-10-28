@@ -6,6 +6,7 @@
 # Cost per task is an ESTIMATE from the 3 ps bcc 384-atom run (about 50 min with 10 processes): fcc + bcc about 1.5-2 h at 3 ps, so about 3.5-4.5 h at 8 ps = roughly 330-430 GPU-h for the whole grid. One task = one (P, T) point.
 # usage (login node):  cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit && sbatch mlp_pipeline/young_tdi_fccbcc.sbatch          subset: sbatch --array=0-9 ...          more time per lambda: PS=6 sbatch --time=08:00:00 ...
 #   own points:  POINTS="200 2250;300 2250" PS=3 sbatch --array=0-1 mlp_pipeline/young_tdi_fccbcc.sbatch
+#   own volumes: POINTS="100 2000 3.61 3.62;..." FBOUT=runs/tdi_fb_v2 ... (P T V_fcc V_bcc from tdi/vpa_fix.py; another volume = another run: use a new FBOUT)
 #SBATCH --job-name=tdifb
 #SBATCH --partition=gpu
 #SBATCH --account=allusers
@@ -17,16 +18,16 @@
 #SBATCH --array=0-94%8
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 [ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
-ARRAY_KEEP="PS POINTS"; . mlp_pipeline/array_env.sh
+ARRAY_KEEP="PS POINTS FBOUT"; . mlp_pipeline/array_env.sh
 export TF_FORCE_GPU_ALLOW_GROWTH=true; PY=$HOME/grace-venv/bin/python
 if [ -n "$POINTS" ]; then mapfile -t GRID < <(echo "$POINTS" | tr ';' '\n'); else mapfile -t GRID < <(python3 mlp_pipeline/tdi/fcc_bcc_grid.py grid); fi   # POINTS="P T;P T;...": own list instead of the grid
 I=${SLURM_ARRAY_TASK_ID:-0}; [ "$I" -lt "${#GRID[@]}" ] || { echo "task $I: grid has ${#GRID[@]} points"; exit 0; }
-read -r P T <<< "${GRID[$I]}"
+read -r P T VFCC VBCC <<< "${GRID[$I]}"   # optional 3rd / 4th field: V/atom of fcc / bcc (tdi/vpa_fix.py), else the DFT EOS
 echo "== task $I: fcc and bcc H2O at $P GPa $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
 for PH in fcc bcc; do
-  r=$($PY mlp_pipeline/tdi/fcc_bcc_grid.py vpa $PH $T $P 2>&1 | tail -n1)
+  if [ $PH = fcc ] && [ -n "$VFCC" ]; then r="$VFCC given"; elif [ $PH = bcc ] && [ -n "$VBCC" ]; then r="$VBCC given"; else r=$($PY mlp_pipeline/tdi/fcc_bcc_grid.py vpa $PH $T $P 2>&1 | tail -n1); fi
   case "$r" in NA|""|*Error*|*Traceback*) echo "-- $PH $P GPa $T K: no volume ($r): skipped"; continue;; esac
   V=${r%% *}; echo "-- $PH: V/atom $V A^3 (DFT EOS: ${r##* })"
-  NREP=$([ $PH = fcc ] && echo 3 || echo 4) VPA=$V P=$P T=$T HPER=2 NODES=10 NPAR=10 DT=0.5 EQUIL=1 PS=${PS:-8} PS1=1.5 CHUNK=0.5 OUTDIR=runs/tdi_fb bash mlp_pipeline/young_tdi_par.sh $PH
+  NREP=$([ $PH = fcc ] && echo 3 || echo 4) VPA=$V P=$P T=$T HPER=2 NODES=10 NPAR=10 DT=0.5 EQUIL=1 PS=${PS:-8} PS1=1.5 CHUNK=0.5 OUTDIR=${FBOUT:-runs/tdi_fb} bash mlp_pipeline/young_tdi_par.sh $PH
   echo "   exit $?"
 done
