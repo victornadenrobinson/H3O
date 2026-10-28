@@ -73,6 +73,13 @@ def guest_pairs(at):
 PROG = dict(done=0, total=1, t0=None)   # whole-run progress: relaxations done / planned, start time
 
 
+def guest_count(at):
+    """number of H farther than 1.3 A from every O (guest / channel protons)"""
+    from ase.geometry import get_distances
+    O = at.positions[at.numbers == 8]; H = at.positions[at.numbers == 1]
+    _, d = get_distances(H, O, cell=at.cell, pbc=True); return int((d.min(1) > 1.3).sum())
+
+
 def relax(at, calc, P, steps, fmax, label="", every=25):
     """constant-pressure relaxation with a progress line every `every` steps and a summary line (verbose on purpose: a GPU relaxation can take minutes)"""
     import time
@@ -125,7 +132,9 @@ def main():
             dH = (h * N - nO * 3 * hw - extra * hH) / N * 1e3
             rows.append(dict(P_GPa=P, H_per_O=2 + n, X=n / (n + 1), dH_meV_atom=dH, H_eV_cell=h * N, natoms=N, vpa=vv, H_ref=best))
             print(f"   H{2 + n:.3g}O (X {n / (n + 1):.3f}): dH_f {dH:7.1f} meV/atom   V/atom {vv:.3f}   H_cell {h * N:.4f} eV")
-            if n == 1.0: r.write(os.path.join(a.o, f"h3o_{P:.0f}GPa_relaxed.extxyz"))
+            r.write(os.path.join(a.o, f"H{2 + n:.3g}O_{P:.0f}GPa_relaxed.extxyz"))   # look at them: partly filled channels may collapse / rearrange
+            ng = guest_count(r); v0 = v.get_volume() / len(v)
+            print(f"      structure: {ng} of {extra} extra H still in channels (> 1.3 A from every O), V/atom {v0:.3f} -> {vv:.3f}; saved H{2 + n:.3g}O_{P:.0f}GPa_relaxed.extxyz", flush=True)
     with open(os.path.join(a.o, "h3o_static.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
     eos_table(rows, a.o)
