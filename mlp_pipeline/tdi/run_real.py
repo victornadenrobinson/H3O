@@ -349,13 +349,18 @@ def add_ghosts(host, n, seed=0, dmin=0.75):
     from ase.geometry import get_distances
     rng = np.random.default_rng(seed); at = host.copy()
     for _ in range(n):
+        best = (-1.0, None)
         for _try in range(20000):
             p = rng.random(3) @ at.cell.array
             _, d = get_distances(p[None, :], at.positions, cell=at.cell, pbc=True)
             if d.min() >= dmin:
                 at += Atoms("H", positions=[p], cell=at.cell, pbc=True); break
-        else:
-            raise SystemExit(f"could not place ghost {len(at) - len(host) + 1} with dmin {dmin} A")
+            best = max(best, (float(d.min()), p), key=lambda b: b[0])
+        else:   # a dense start lattice can have no hole of dmin (bcc pure H at 1.16 A^3/atom: largest hole 0.74 A): the roomiest point tried; the stage-0 / lambda MD relaxes it
+            if best[0] < 0.5 * dmin:
+                raise SystemExit(f"could not place ghost {len(at) - len(host) + 1}: largest hole found {best[0]:.2f} A (< {0.5 * dmin:.2f} A)")
+            print(f"NOTE: no point {dmin} A from every atom for ghost {len(at) - len(host) + 1}: placed at the roomiest point tried ({best[0]:.2f} A)", flush=True)
+            at += Atoms("H", positions=[best[1]], cell=at.cell, pbc=True)
     return at
 
 
