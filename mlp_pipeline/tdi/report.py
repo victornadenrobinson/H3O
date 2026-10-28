@@ -210,6 +210,9 @@ for ax, T in zip(axs, Tset):
     ax.axhline(0, color="k", lw=.6); ax.set_xscale("log"); ax.set_xticks([100, 200, 300, 500, 1000, 2000, 4000]); ax.set_xticklabels(["100", "200", "300", "500", "1000", "2000", "4000"]); ax.minorticks_off(); ax.set_xlim(85, 4500); ax.set_title(f"T = {T} K"); ax.set_xlabel("P (GPa)"); ax.grid(alpha=.25); ax.legend(fontsize=6)
 axs[0].set_ylabel("G_fcc - G_bcc (meV/atom)"); fig.suptitle("fcc - bcc superionic H2O vs literature (negative = fcc stable). Hollow = small cell or different dt/lambda grid. Our values are MLP (ft_m2), classical nuclei", fontsize=8)
 figs["fcc_bcc"] = fig
+if len(pairs):   # every isotherm and isobar, with Cheng 2021 at 2000-5000 K
+    sys.path.insert(0, os.path.join(HERE, "..")); from tdi.fig_fccbcc import fig_fccbcc_all
+    figs["fcc_bcc_all"] = fig_fccbcc_all(pairs, cheng, plt)
 
 # 2b fcc (ABC) - hcp (ABAB) in the same orthohexagonal cell, from the stage tables
 ph = []
@@ -229,7 +232,7 @@ if len(ph):
 # 3 solid mixing per added H
 sm = solid[solid.kind.isin(["fcc", "bcc"])]
 if len(sm):
-    Ps = sorted(sm.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.8 * len(Ps), 4.4), sharey=True, squeeze=False); YL = (-1000, 800); nout = 0
+    Ps = sorted(sm.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(max(13.0, 4.8 * len(Ps)), 4.6), sharey=True, squeeze=False); YL = (-1000, 800); nout = 0
     for ax, P in zip(axs[0], Ps):
         d = solid[solid.P == P]; jit = 0.012 * max(float(d["T"].max() - d["T"].min()), 500.0)
         for kind, m in (("fcc", "o"), ("bcc", "^"), ("insert", "s"), ("insert_bcc", "D")):
@@ -240,7 +243,10 @@ if len(sm):
         for kind, m, t in (("fcc", "o", "fcc H2.xO crystal"), ("bcc", "^", "bcc H2.xO crystal"), ("insert", "s", "insertion into fcc (n = 1, 2, 4: left, centre, right)"), ("insert_bcc", "D", "insertion into bcc")): ax.plot([], [], m, color="gray", label=t)
         Tl = np.linspace(d["T"].min() - 100, d["T"].max() + 100, 20); ax.fill_between(Tl, -kT(Tl), kT(Tl), color="gray", alpha=.12, label="+-kT")
         ax.set_ylim(*YL); ax.axhline(0, color="k", lw=.6); ax.set_title(f"{P:.0f} GPa"); ax.set_xlabel("T (K)"); ax.grid(alpha=.25); ax.legend(fontsize=6, loc="lower right")
-    axs[0][0].set_ylabel("dG per added H (meV)"); Tbar(fig, list(axs[0])); fig.suptitle("Crystal H2O + n H(fluid) -> H2+n/nO crystal, per added H (positive = H not soluble). Hollow = melted in free NVT / different dt or lambda grid" + (f"; {nout} off-scale rows not drawn (printed in the log)" if nout else ""), fontsize=8)
+    axs[0][0].set_ylabel("dG per added H (meV)"); Tbar(fig, list(axs[0])); fig.suptitle("H2O crystal + n H(fluid) -> H(2+a)O crystal, free energy per added H.\n"
+                 "Squares: first 1-4 H (cost of the NEXT H, dilute end; < 0 = ice takes up H).  Circles/triangles: AVERAGE over 27 / 54 H (to H2.25O / H2.5O).\n"
+                 "The ice saturates where the next-H cost reaches 0: average > 0 = saturated before that composition, NOT insoluble.  Hollow = melted / different dt or grid"
+                 + (f"; {nout} off-scale rows not drawn" if nout else ""), fontsize=7)
     figs["mix_solid"] = fig
 
 # 4 insertion: n dependence, one panel per pressure, colour = T
