@@ -11,7 +11,9 @@ from ase.geometry import find_mic
 
 ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("--lambdas", type=int, default=2, help="how many of the highest lambda values to check"); ap.add_argument("--dmin", type=float, default=1e-5)
 ap.add_argument("--glob", default="liquid_*", help="tags to check: liquid_* (did it stay liquid?), or insert_* / fcc_* / bcc_* (did the host / crystal stay SOLID at the high-lambda nodes?)")
-ap.add_argument("--lind-max", type=float, default=0.2, help="solid runs: O Lindemann ratio above this (or D_O > --dmin) = MELTED?"); a = ap.parse_args()
+ap.add_argument("--lind-max", type=float, default=0.2, help="solid runs: O Lindemann ratio above this (or D_O > --dmin) = MELTED?")
+ap.add_argument("--csv", default=None, help="also write the table (dir, tag, node, D_O, Lindemann, verdict) here, e.g. runs/checks/liquid_check.csv: report.py excludes runs with a bad high-lambda node"); a = ap.parse_args()
+rows = []
 want_liquid = a.glob.startswith("liquid")
 print(f"{'run':44s} {'lambda':>6s} {'frames':>6s} {'span ps':>8s} {'MSD_O end A^2':>14s} {'D_O cm2/s':>11s} {'Lindemann':>9s}  verdict")
 for d in (a.dirs or ["runs/tdi"]):
@@ -33,3 +35,10 @@ for d in (a.dirs or ["runs/tdi"]):
             lind = float(np.sqrt((u ** 2).sum(-1).mean()) / d1)
             verdict = ("liquid" if D > a.dmin else "frozen?") if want_liquid else ("solid" if D <= a.dmin and lind <= a.lind_max else "MELTED?")
             print(f"{d + '/' + tag:44s} {k:6d} {len(fr):6d} {t[-1]:8.2f} {msd[-1]:14.2f} {D:11.2e} {lind:9.3f}  {verdict}")
+            rows.append(dict(dir=os.path.basename(os.path.normpath(d)), tag=tag, node=k, frames=len(fr), msd_end=float(msd[-1]), D_O=float(D), lindemann=lind, verdict=verdict))
+if a.csv:
+    import pandas as pd
+    new = pd.DataFrame(rows)
+    if os.path.exists(a.csv):   # merge with earlier checks (other dirs / globs): newest wins per (dir, tag, node)
+        new = pd.concat([pd.read_csv(a.csv), new]).drop_duplicates(["dir", "tag", "node"], keep="last")
+    os.makedirs(os.path.dirname(os.path.abspath(a.csv)), exist_ok=True); new.to_csv(a.csv, index=False); print("wrote", a.csv)

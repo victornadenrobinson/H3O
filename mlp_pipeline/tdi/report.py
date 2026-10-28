@@ -19,6 +19,7 @@ ap = argparse.ArgumentParser(); ap.add_argument("--base", default="docs/data/tdi
 ap.add_argument("--refresh", nargs="*", default=None, metavar="DIR", help="run summarize.py on these runs/ directories first (default dirs: runs/tdi runs/tdi_prep if none given)")
 ap.add_argument("--out", default="docs/figures/tdi_report"); ap.add_argument("--fmt", nargs="*", default=["png", "svg"], help="per-figure formats; the pdf with every page is always written")
 ap.add_argument("--lit", default="docs/data/dg_fcc_bcc.csv"); ap.add_argument("--cheng", default="docs/data/cheng2021_dmu_bcc_fcc.csv"); ap.add_argument("--dft-hull", default="data-h3o-convex-hull.csv")
+ap.add_argument("--state-check", default="runs/checks/liquid_check.csv", help="liquid_check.py --csv output: liquid runs with a frozen high-lambda node and crystal / insertion runs with a MELTED? one are excluded")
 ap.add_argument("--no-gt", action="store_true", help="do not also run plot_all.py (G vs simulation time, separate svg next to the report, not in the pdf)")
 ap.add_argument("--gt-dirs", nargs="*", default=[], help="directories for plot_all.py (default: its own default, runs/tdi* without tdi_test)")
 ap.add_argument("--qmax", type=float, default=50.0, help="exclude runs with |Kronrod - Gauss| above this (meV/atom)")
@@ -39,11 +40,15 @@ mixnote = pd.read_csv(a.base.replace(".csv", "_mix.csv")) if os.path.exists(a.ba
 kT = lambda T: 8.617333e-2 * T   # meV
 raw["P_dev"] = (raw.P_hi_GPa - raw.P_target_GPa) / raw.P_target_GPa
 why = []
+lc = pd.read_csv(a.state_check) if a.state_check and os.path.exists(a.state_check) else pd.DataFrame(columns=["dir", "tag", "verdict"])
+badstate = {(d, t): v for (d, t), v in lc[lc.verdict.isin(["frozen?", "MELTED?"])].groupby(["dir", "tag"]).verdict.first().items()}
+if not len(lc): print(f"(no {a.state_check}: liquid / solid state of the high-lambda nodes not checked; run liquid_check.py --csv)")
 for _, r in raw.iterrows():
     w = []
     if not str(r.status).startswith("done"): w.append(f"unfinished ({r.status})")
     if np.isfinite(r.P_dev) and abs(r.P_dev) > a.pmax_rel: w.append(f"P_hi {r.P_hi_GPa:.0f} vs target {r.P_target_GPa:.0f} GPa")
     if np.isfinite(r.quad_diff_meV) and abs(r.quad_diff_meV) > a.qmax: w.append(f"Kronrod-Gauss {r.quad_diff_meV:.0f} meV/atom (lambda integral not converged, or a melted crystal held by springs)")
+    if (r.dir, r.tag) in badstate: w.append("liquid FROZEN at a high-lambda node (liquid_check)" if badstate[(r.dir, r.tag)] == "frozen?" else "O sublattice MELTED at a high-lambda node (liquid_check)")
     why.append("; ".join(w))
 raw["excluded"] = why
 df = raw[raw.excluded == ""].copy()
