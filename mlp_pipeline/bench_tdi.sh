@@ -81,5 +81,4 @@ for l in sys.stdin:
 done
 echo "== done $(date): $RES"; python3 mlp_pipeline/tdi/bench_table.py $RES
 }
-main "$@"
-exit $?
+main "$@"; exit $?
