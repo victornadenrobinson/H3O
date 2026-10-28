@@ -5,6 +5,7 @@
 # TMAX is a guess: points near it may be molten (a crystal held by springs gives a wrong G: check free NVT with young_melt_scan.sbatch, the quadrature estimate and the MLP pressure in summarize.py).
 # Cost per task is an ESTIMATE from the 3 ps bcc 384-atom run (about 50 min with 10 processes): fcc + bcc about 1.5-2 h at 3 ps, so about 3.5-4.5 h at 8 ps = roughly 330-430 GPU-h for the whole grid. One task = one (P, T) point.
 # usage (login node):  cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit && sbatch mlp_pipeline/young_tdi_fccbcc.sbatch          subset: sbatch --array=0-9 ...          more time per lambda: PS=6 sbatch --time=08:00:00 ...
+#   own points:  POINTS="200 2250;300 2250" PS=3 sbatch --array=0-1 mlp_pipeline/young_tdi_fccbcc.sbatch
 #SBATCH --job-name=tdifb
 #SBATCH --partition=gpu
 #SBATCH --account=allusers
@@ -16,9 +17,9 @@
 #SBATCH --array=0-94%8
 #SBATCH --output=runs/slurm_%x_%A_%a.out
 [ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
-ARRAY_KEEP="PS"; . mlp_pipeline/array_env.sh
+ARRAY_KEEP="PS POINTS"; . mlp_pipeline/array_env.sh
 export TF_FORCE_GPU_ALLOW_GROWTH=true; PY=$HOME/grace-venv/bin/python
-mapfile -t GRID < <(python3 mlp_pipeline/tdi/fcc_bcc_grid.py grid)
+if [ -n "$POINTS" ]; then mapfile -t GRID < <(echo "$POINTS" | tr ';' '\n'); else mapfile -t GRID < <(python3 mlp_pipeline/tdi/fcc_bcc_grid.py grid); fi   # POINTS="P T;P T;...": own list instead of the grid
 I=${SLURM_ARRAY_TASK_ID:-0}; [ "$I" -lt "${#GRID[@]}" ] || { echo "task $I: grid has ${#GRID[@]} points"; exit 0; }
 read -r P T <<< "${GRID[$I]}"
 echo "== task $I: fcc and bcc H2O at $P GPa $T K on $(hostname) $(date) code $(git rev-parse --short HEAD)"
