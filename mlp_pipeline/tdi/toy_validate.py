@@ -51,7 +51,7 @@ def cmd_eos(a):
     """P(V) by short MD at 3 starting volumes, then secant steps on ln P vs ln V until a point is within 1.5% of the target; final vpa from the local power law
     through the 3 points closest to the target (bracketing it)"""
     S = systems(); f = os.path.join(a.out, f"eos_{a.T:.0f}K.json"); out = json.load(open(f)) if os.path.exists(f) else {}
-    guess = {"h2o": [2.05, 2.14, 2.23], "h2.25o": [2.0, 2.09, 2.18], "H": [1.6, 1.9, 2.2]}
+    guess = {"h2o": [2.05, 2.14, 2.23], "h2.25o": [2.0, 2.09, 2.18], "H": ([1.25, 1.35, 1.45] if os.environ.get("TOYICE_FIT") else [1.6, 1.9, 2.2])}
     for name in (a.systems.split(",") if a.systems else S):
         build = S[name]; rows = []
         def point(v):
