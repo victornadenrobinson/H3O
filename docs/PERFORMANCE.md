@@ -63,9 +63,43 @@ per-lambda engine with 1, 2, 4, 8 processes, time-sliced and with MPS (total ste
 calls alone (one batched call of B structures vs B single calls, ms per structure). The markdown tables are printed at the end
 (`python3 mlp_pipeline/tdi/bench_table.py runs/bench/bench_*.jsonl`).
 
-### Results
+### Results (2026-10-28, node-x12t-006, A100-SXM4-40GB, 8 CPUs, GRACE ft_m2, code 549096a; insH = 1 H into 250-atom pure H, 2 model calls per step)
 
-(not yet run)
+| setup | total MD steps/s | ms/step each | GPU memory (MiB) |
+|---|---|---|---|
+| per-lambda engine, 1 process | 3.25 | 307 | 4569 |
+| per-lambda engine, 8 processes, time-slicing (current production) | **10.85** | 737 | 36534 |
+| per-lambda engine, 1 process, MPS | 3.26 | 307 | 4603 |
+| per-lambda engine, 8 processes, MPS | **11.89** (+10%) | 673 | 36526 |
+| batched engine, 8 lambda values in 1 process | 7.06 (-35%) | 1132 (1122 per model call) | - |
+| batched engine, 16 lambda values in 1 process | 7.07 (-35%) | 2262 (2241 per model call) | - |
+
+Model calls alone (ms per 251-atom structure; batched includes data preparation):
+
+| B structures | single TPCalculator call | one batched call | speed-up | data preparation per batched call (ms) |
+|---|---|---|---|---|
+| 1 | 160 | 98 | 1.63 | 35 |
+| 2 | 151 | 85 | 1.77 | 48 |
+| 4 | 151 | 73 | 2.06 | 63 |
+| 8 | 153 | 72 | 2.12 | 105 |
+| 16 | 152 | 70 | 2.18 | 199 |
+
+Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |dF| 1.8e-6 eV/A, |dstress| 9e-8 eV/A^3 (the GPU round-off level).
+
+**Conclusions**
+- The GPU itself is the limit. Eight time-sliced processes already push about 21.7 structures/s, or **46 ms of GPU per structure**. One batched call needs about 70 ms per
+  structure (about 58 ms of GPU after the 12 ms of data preparation), so the batched engine is 35% SLOWER than the current production setup. Most of the 160 ms of a
+  single call is CPU work (data preparation, about 60 ms) plus GPU latency. Eight processes hide both, and batching hides them as well, but it does not make the
+  GRACE kernels themselves cheaper.
+- MPS: +10% (11.9 vs 10.9 steps/s), with no code change and the same results: worth using.
+- Batched engine: keep it opt-in (correct, but slower on this hardware). It would only help if the GRACE kernel cost per structure fell, for example with the dense engine.
+- A faster neighbour list or data preparation would not help 8-process runs (the CPU work is already hidden). It would help the tail of a run, when fewer than NPAR
+  processes are left: one process with the batched data path needs 98 instead of 160 ms per call.
+- What remains: (a) more GPUs (lambda values split over GPUs or jobs: linear in wall time); (b) cheaper GRACE kernels: check the tensorpotential version on Young
+  (`~/grace-venv/bin/pip show tensorpotential`) for the dense "uniform" engine, documented as 1.3-1.7x per structure, to be validated against the current numbers;
+  TF32 matmuls are switched off by tensorpotential on purpose (precision), so they are not an option without a precision check; (c) fewer MD steps for the same error:
+  a heavier H mass in the MD with a larger dt (configurational averages do not depend on the masses), or an adaptive length per lambda value. These change how the
+  samples are generated (the expected G stays the same) and need your decision and a validation run.
 
 ## Using the faster options in production (after the benchmark)
 
