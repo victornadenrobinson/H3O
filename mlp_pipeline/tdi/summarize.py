@@ -148,7 +148,7 @@ for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = pick(hh, m.dt_fs)
-        solid.append(dict(phase=("insert into pure H (METHOD CHECK: should be ~0)" if "_Hhost" in m.tag else f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H2O, dilute)"), P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=2.0, n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
+        solid.append(dict(phase=("insert into pure H (METHOD CHECK: should be ~0)" if "_Hhost" in m.tag else f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H{m.H_per_O:g}O" + (", dilute)" if m.H_per_O == 2.0 else " host)")), P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=(2.0 if "_Hhost" in m.tag else m.H_per_O), n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
                           kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ")
                           + ("" if np.isfinite(m.P_corr_meV) else "NO PRESSURE CORRECTION (stage 0 older than the fix: rerun stage 0 of this run) ") + ("" if "_Hhost" in m.tag else nvt_flag("bcc" if "_bcc" in m.tag else "fcc", 2.0, m.P_target_GPa, m.T_K))))
 if solid:

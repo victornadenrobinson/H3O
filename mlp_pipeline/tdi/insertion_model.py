@@ -32,7 +32,7 @@ def stage0(r):
 
 
 ins = df[df.phase == "insert"].copy()
-ins = ins[ins.tag.str.contains("_bcc") == (a.host == "bcc")]; ins = ins[~ins.tag.str.contains("_Hhost")]
+ins = ins[ins.tag.str.contains("_bcc") == (a.host == "bcc")]; ins = ins[~ins.tag.str.contains("_Hhost")]; ins = ins[~ins.tag.str.contains(r"_h\d", regex=True)]   # H(2+a)O hosts (HPER) are not the dilute limit
 H = df[df.phase == "H"]
 rows = []
 for (P, T), g in ins.groupby(["P_target_GPa", "T_K"]):

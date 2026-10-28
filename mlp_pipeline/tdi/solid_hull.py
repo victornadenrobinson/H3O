@@ -55,7 +55,7 @@ def nvt_melted():
 def states_from_summary(path, host):
     df = pd.read_csv(path); melted = nvt_melted(); S = {}
     H = df[df.phase == "H"]
-    ins = df[(df.phase == "insert") & (~df.tag.str.contains("_Hhost"))]
+    ins = df[(df.phase == "insert") & (~df.tag.str.contains("_Hhost")) & (~df.tag.str.contains(r"_h\d", regex=True))]   # H2O hosts only
     ins = ins[ins.tag.str.contains("_bcc") == (host == "bcc")]
     for (P, T), g in ins.groupby(["P_target_GPa", "T_K"]):
         hh = H[(H.P_target_GPa == P) & (H.T_K == T)]

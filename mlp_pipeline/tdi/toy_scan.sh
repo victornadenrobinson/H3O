@@ -5,10 +5,17 @@
 #   3. dg = G(insert into H2O) - [G(insert into pure H) - fs], fs = the ideal-gas finite-size term of insertion into N = 128 H (T3 of toy_validate.py)
 # usage (repo root, a python with ASE; TOYICE_FIT=docs/data/toyfit_t4.json for the fitted potential):
 #   bash mlp_pipeline/tdi/toy_scan.sh "400:4000 400:5000 500:5000" [outdir]      (P:T pairs, GPa:K; finished states are skipped, so rerunning continues)
+#   PARALLEL=16 NPAR=4 ...: 16 states at once (64 cores; a Young node: PY=~/grace-venv/bin/python)
 # Result lines: <outdir>/scan.csv (P_GPa,T_K,vpa_h2o,vpa_H,msd_O,dg_meV,err_meV,mu_ice_meV,mu_Hhost_meV) and "SCAN P T dg +- err" on stdout.
 STATES=${1:?"P:T pairs, e.g. \"400:4000 500:5000\""}; R=${2:-runs/toyscan}; mkdir -p $R
 export MODEL=toyice ALLOW_NOGPU=1 PY=${PY:-python3} NODES=${NODES:-10} PS=${PS:-1} EQUIL=${EQUIL:-0.25} CHUNK=${CHUNK:-0.25} DT=0.5 PS1=${PS1:-0.5} NPAR=${NPAR:-4}
 [ -f $R/scan.csv ] || echo "P_GPa,T_K,vpa_h2o,vpa_H,msd_O,dg_meV,err_meV,mu_ice_meV,mu_Hhost_meV" > $R/scan.csv
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 CUDA_VISIBLE_DEVICES=   # pure numpy pair potential: one core per process, no GPU
+if [ "${PARALLEL:-1}" -gt 1 ] && [ -z "$TOYSCAN_CHILD" ]; then   # PARALLEL=k: k states at once (each uses NPAR cores; e.g. 16 states x NPAR 4 = 64 cores)
+  echo "== $(echo $STATES | wc -w) states, $PARALLEL at a time, $NPAR cores each $(date +%H:%M)"
+  echo $STATES | tr ' ' '\n' | xargs -P $PARALLEL -I{} env TOYSCAN_CHILD=1 bash $0 {} $R | grep --line-buffered -E "^SCAN|FAILED"
+  echo "== scan done $(date +%H:%M)"; sed "s/,/\t/g" $R/scan.csv; exit 0
+fi
 for s in $STATES; do
   P=${s%%:*}; T=${s##*:}; D=$R/P${P}_T${T}; mkdir -p $D; export P T OUTDIR=$D/tdi
   grep -q "^$P,$T," $R/scan.csv && { echo "SCAN $P GPa $T K: already in $R/scan.csv"; continue; }

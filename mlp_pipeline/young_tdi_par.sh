@@ -66,7 +66,7 @@ if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=
   [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"   # also on a resubmit: nodes that never started begin from the same frame as the others
 fi
 # memory-aware parallelism: start only as many lambda processes as fit in the free GPU memory (one TensorFlow context each; ~4.6 GB measured for 250 H on an A100; MEMPROC MiB per process, override for big cells)
-if command -v nvidia-smi >/dev/null 2>&1; then
+if [ "${MODEL%%:*}" != toyice ] && command -v nvidia-smi >/dev/null 2>&1; then   # the toy potential runs on CPU: no GPU memory cap
   GI=${CUDA_VISIBLE_DEVICES%%,*}; case "$GI" in ""|*[!0-9]*) GI=0;; esac
   FREE=$(nvidia-smi -i $GI --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc 0-9)
   if [ -n "$FREE" ]; then CAP=$(( FREE / ${MEMPROC:-4800} )); [ $CAP -lt 1 ] && CAP=1

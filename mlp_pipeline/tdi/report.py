@@ -110,7 +110,7 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         solid.append(dict(kind=m.phase, P=m.P_target_GPa, T=m.T_K, h=m.H_per_O, a=m.H_per_O - 2.0, n=int(n), dG=(m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n,
                           err=((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n,
                           caveat=("MELTED" in note) or not (m.dt_fs == w.dt_fs == hh.dt_fs and m.nodes == w.nodes == hh.nodes), tags=f"{m.dir}/{m.tag} | {w.dir}/{w.tag} | {hh.dir}/{hh.tag}"))
-for _, m in df[df.phase == "insert"].iterrows():
+for _, m in df[(df.phase == "insert") & (~df.tag.str.contains(r"_h\d", regex=True))].iterrows():   # H2O hosts only (H(2+a)O hosts: HPER)
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)

@@ -313,6 +313,8 @@ def vpa_at(a, P):
         return h_vpa(a.from_dft, a.T, P)
     if a.phase == "insert" and getattr(a, "host_phase", "fcc") == "H":   # pure-H fluid host (sanity check of the method: mu_H must equal G_H per atom)
         return h_vpa(a.from_dft, a.T, P)
+    if a.phase == "insert" and a.hper != 2.0:   # H(hper)O host crystal: the volume of that crystal (DFT EOS or ideal mixing, as for the crystal runs)
+        return solid_vpa(argparse.Namespace(**{**vars(a), "phase": getattr(a, "host_phase", "fcc")}), P)
     if a.phase == "insert":   # H2O host crystal: fcc (default) or bcc (--host-phase)
         return import_module("17_eos_md").dft_vpa(a.from_dft, getattr(a, "host_phase", "fcc"), a.T, [P], 2.0, min_runs=a.min_runs)[0]
     if a.phase == "liquid":
@@ -395,7 +397,7 @@ def setup(a):
         if hp == "H":   # pure-H fluid host: inserting H into H must give mu_H = G_H per atom (end-to-end check of the insertion route)
             host = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
         else:
-            host = eos.build(hp, vpa, a.nrep, a.seed, 2.0)
+            host = eos.build(hp, vpa, a.nrep, a.seed, a.hper)   # H2O, or H(hper)O with HPER (was always H2O: HPER only changed the tag)
         at0 = add_ghosts(host, a.nghost, a.seed + 7)
     elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
         a.nrep = a.nrep or 2
