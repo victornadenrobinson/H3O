@@ -111,3 +111,21 @@ Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |d
   Its own log is `runs/tdi/<tag>_batch.log` (status every minute: model calls, structures per call, ms per call, model share of the wall time).
 - Before making it the default: one short GRACE run side by side (e.g. an insertion with `PS=1`, `OUTDIR=runs/tdi_engcmp/{lambda,batch}`) and `summarize.py` on
   both directories: the same G within the errors.
+
+## Next: tensorpotential's dense engine (Young has 0.6.1, which has it)
+
+`GRACE_MODE=uniform` (read by `04_benchmark.get_calc_spec`, recorded in the stage0 json `meta.grace_mode`) creates the TPCalculator with `mode="uniform"`: the dense
+reshape aggregation, documented as 1.3-1.7x faster per structure for MD (fixed atom count, near-constant neighbour count). Same model and weights, only the summation
+layout changes (round-off-level differences; random GRACE-2L on CPU: 4e-16 eV/atom). It needs a `compute_dense` signature in the SavedModel; without one the calculator
+falls back to segment_sum with a warning. Test (GPU job, repo root, about 3 min):
+```
+~/grace-venv/bin/python mlp_pipeline/tdi/bench.py dense insH       # 'dense engine ACTIVE / NOT available', ms per call of both engines, max differences
+```
+If it is not available: re-export ft_m2 from its checkpoint with 0.6.1 into a new directory (the old model stays as it is), then run the same test with
+`--model grace-ft:<new dir>`:
+```
+find runs/grace/ft_m2 -name model.yaml; find runs/grace/ft_m2 -name "checkpoint*.index"
+~/grace-venv/bin/grace_utils -p <model.yaml> -c <checkpoint .index> export -n runs/grace/ft_m2_dense/saved_model
+```
+If it is faster and agrees: a throughput run `GRACE_MODE=uniform SYSTEMS=insH NPROCS=8 MPS="0 1" PARTS=engine bash mlp_pipeline/bench_tdi.sh`, then a short side-by-side
+GRACE run before using it in production.
