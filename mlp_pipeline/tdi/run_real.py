@@ -690,6 +690,8 @@ def run_node(c, st, k):
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
     n_per = per // a.every
     if done >= nchunk:
+        if not os.path.exists(f):   # complete state but no series file (deleted / lost): rewrite it from the state
+            np.save(f, np.array(r.series)); print(f"lambda {k}: series file was missing: rewritten from {sf}", flush=True)
         pr.write("done"); print(f"lambda {k}: already complete"); return
     t_resume = time.time()
     for ch in range(done + 1, nchunk + 1):
