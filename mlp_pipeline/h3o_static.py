@@ -8,7 +8,7 @@ Output: H per atom of everything; dH_f(x) = [H(H(2+n)O) - nO h(H2O) - n_extra h(
 difference H(P) - H(450 GPa) per cell next to the user's CASTEP values (docs/data/h3o_castep_enthalpy.csv): equal differences = the MLP reproduces
 the DFT equation of state of H3O (dH/dP = V), whatever the absolute energy reference.
 Caveat: the MLP was trained on hot superionic / fluid configurations, not on cold molecular or atomic H solids: the H reference is the weak link.
-usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [-o runs/h3o_static]
+usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static]
 """
 import argparse, csv, os, sys, warnings
 import numpy as np
@@ -99,7 +99,10 @@ def relax(at, calc, P, steps, fmax, label="", every=25):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda")
     ap.add_argument("--P", type=float, nargs="+", default=[300, 400, 450, 500, 600, 700, 800]); ap.add_argument("--cell", default="docs/data/h3o_huang.cell")
-    ap.add_argument("--steps", type=int, default=600); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static"); a = ap.parse_args()
+    ap.add_argument("--steps", type=int, default=600); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static")
+    ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)"); a = ap.parse_args()
+    if a.parallel > 1 and len(a.P) > 1:
+        return run_parallel(a)
     from importlib import import_module
     calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
     os.makedirs(a.o, exist_ok=True)
@@ -125,13 +128,54 @@ def main():
             if n == 1.0: r.write(os.path.join(a.o, f"h3o_{P:.0f}GPa_relaxed.extxyz"))
     with open(os.path.join(a.o, "h3o_static.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    eos_table(rows, a.o)
+
+
+def eos_table(rows, out):
     cast = {float(r["P_GPa"]): float(r["H_eV_cell"]) for r in csv.DictReader(l for l in open("docs/data/h3o_castep_enthalpy.csv") if not l.startswith("#"))}
     ml = {r["P_GPa"]: r["H_eV_cell"] for r in rows if abs(r["H_per_O"] - 3) < 1e-9}
     if 450 in cast and 450 in ml:
         print("\nH3O equation of state: H(P) - H(450 GPa) per 64-atom cell, eV (equal = the MLP reproduces the DFT dH/dP = V)")
         for P in sorted(ml):
             if P in cast: print(f"   {P:5.0f} GPa   MLP {ml[P] - ml[450]:9.3f}   CASTEP {cast[P] - cast[450]:9.3f}   diff {(ml[P] - ml[450]) - (cast[P] - cast[450]):7.3f}")
-    print("\nCaveat: the MLP never saw cold solid H; the H reference (and so the absolute dH_f) is the least trustworthy part. Wrote", os.path.join(a.o, "h3o_static.csv"))
+    print("\nCaveat: the MLP never saw cold solid H; the H reference (and so the absolute dH_f) is the least trustworthy part. Wrote", os.path.join(out, "h3o_static.csv"))
+
+
+def run_parallel(a):
+    """one child process per pressure (output <o>/P<P>), at most a.parallel at once; their lines are streamed with a [P GPa] prefix; results merged at the end"""
+    import subprocess, threading, time
+    base = [sys.executable, "-u", os.path.abspath(__file__), "--model", a.model, "--device", a.device, "--cell", a.cell, "--steps", str(a.steps), "--fmax", str(a.fmax)]
+    quiet = ("tensorflow", "xla", "cuda", "I0000", "W0000", "E0000", "ptxas", "absl", "cpu_feature", "AVX2", "Registers are spilled", "XLA service", "StreamExecutor", "rebuild TensorFlow")
+    def pump(proc, tag):
+        for line in proc.stdout:
+            if line.strip() and not any(q.lower() in line.lower() for q in quiet): print(f"[{tag:>4s} GPa] {line.rstrip()}", flush=True)
+    todo = list(a.P); running = []; t0 = time.time()
+    print(f"parallel: {len(todo)} pressures, at most {a.parallel} processes on the GPU at once", flush=True)
+    while todo or running:
+        while todo and len(running) < a.parallel:
+            P = todo.pop(0); out = os.path.join(a.o, f"P{P:.0f}")
+            pr = subprocess.Popen(base + ["--P", str(P), "-o", out], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            th = threading.Thread(target=pump, args=(pr, f"{P:.0f}"), daemon=True); th.start(); running.append((P, pr, th))
+            print(f"== started {P:.0f} GPa ({len(running)} running, {len(todo)} waiting, {(time.time() - t0) / 60:.1f} min)", flush=True)
+        time.sleep(5)
+        for P, pr, th in list(running):
+            if pr.poll() is not None:
+                th.join(); running.remove((P, pr, th))
+                print(f"== finished {P:.0f} GPa (exit {pr.returncode}; {len(running)} running, {len(todo)} waiting, {(time.time() - t0) / 60:.1f} min)", flush=True)
+    rows = []
+    for P in a.P:
+        f = os.path.join(a.o, f"P{P:.0f}", "h3o_static.csv")
+        if os.path.exists(f):
+            for r in csv.DictReader(open(f)):
+                rows.append({k: (float(v) if k not in ("H_ref",) else v) for k, v in r.items()})
+    if not rows: print("no results"); return
+    os.makedirs(a.o, exist_ok=True)
+    with open(os.path.join(a.o, "h3o_static.csv"), "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    print("\nformation dH (meV/atom) vs composition, all pressures:")
+    for P in sorted({r["P_GPa"] for r in rows}):
+        print(f"   {P:5.0f} GPa  " + "  ".join(f"H{r['H_per_O']:.3g}O {r['dH_meV_atom']:7.1f}" for r in sorted((r for r in rows if r["P_GPa"] == P), key=lambda r: r["H_per_O"])) + f"   (H ref: {[r for r in rows if r['P_GPa'] == P][0]['H_ref']})")
+    eos_table(rows, a.o)
 
 
 if __name__ == "__main__":
