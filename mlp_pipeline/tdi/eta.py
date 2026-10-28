@@ -1,8 +1,10 @@
 """Whole-job progress and ETA of a TDI run: all lambda values of the job, including those not started yet, from the <tag>_node<k>_progress.json files that
 run_real.py rewrites every 30 s (steps done, total, recent speed) and, for lambda values without one, the saved series (<tag>_node<k>.npy) or nothing (0 steps done).
   ETA = remaining MD steps of every lambda value of the job / measured total throughput (steps/s summed over the lambda values that are running now).
-The total throughput stays about constant while the GPU is shared (time-slicing / MPS / one batched process), so this is far more stable than the per-lambda ETAs.
-usage:  python3 mlp_pipeline/tdi/eta.py runs/tdi <tag> [--only "0 3 5"] [--npar 8] [--per-lambda]       (numpy only; young_tdi_par.sh prints it every 30 s)
+Per-lambda engine (--npar N): slots are refilled from the waiting lambda values; when fewer than N processes are left at the end, each runs faster (time-slicing,
+measured on an A100 with 251 atoms: 1 process 160, 2: 360, 8: 750 ms/step, CURRENT_ISSUES 2c), simulated with that table scaled to the speed measured now.
+Batched engine (--batch): all lambda values advance in lock step, so the job ends when the one with most steps left is done.
+usage:  python3 mlp_pipeline/tdi/eta.py runs/tdi <tag> [--only "0 3 5"] [--npar 8 | --batch] [--per-lambda]       (numpy only; young_tdi_par.sh prints it every 30 s)
 """
 import argparse, json, os, sys, time
 import numpy as np
@@ -44,12 +46,41 @@ def job_progress(d, tag, only=None):
     return rows
 
 
-def summary(rows, npar=None):
+TAB = [(1, 0.16), (2, 0.36), (8, 0.75)]   # s/step per process vs processes sharing one A100 (time-slicing, 251 atoms)
+
+
+def s_per_step(c):
+    c = max(1, c)
+    for (c0, t0), (c1, t1) in zip(TAB, TAB[1:]):
+        if c <= c1:
+            return t0 + (t1 - t0) * (c - c0) / (c1 - c0)
+    (c0, t0), (c1, t1) = TAB[-2], TAB[-1]
+    return t1 + (t1 - t0) * (c - c1) / (c1 - c0)
+
+
+def simulate(rows, npar, rate_each):
+    """seconds until every lambda is done: running ones first, waiting ones take free slots in order; per-process speed rate_each now (at the current count), scaled with TAB"""
+    run = [r["total"] - r["done"] for r in rows if r["state"] == "running"]; queue = [r["total"] - r["done"] for r in rows if r["state"] in ("waiting", "stopped")]
+    c0 = max(len(run), 1); T = 0.0
+    while len(run) < npar and queue:
+        run.append(queue.pop(0))
+    while run:
+        rate = rate_each * s_per_step(c0) / s_per_step(len(run)); m = min(run); T += m / rate
+        run = [x - m for x in run if x - m > 0]
+        while len(run) < npar and queue:
+            run.append(queue.pop(0))
+    return T
+
+
+def summary(rows, npar=None, batch=False):
     rem = sum(r["total"] - r["done"] for r in rows); tot = sum(r["total"] for r in rows)
     run = [r for r in rows if r["state"] == "running"]; rates = [r["rate"] for r in run if np.isfinite(r["rate"])]
     thr = float(np.mean(rates)) * len(run) if rates else float("nan")   # lambda values that just started have no speed yet: counted at the mean speed of the others
-    # while lambda values still wait for a free slot, the running ones are replaced as they finish: the total throughput stays the same, so ETA = remaining / throughput
-    eta = rem / thr if thr == thr and thr > 0 else float("nan")
+    eta = rem / thr if thr == thr and thr > 0 else float("nan")   # constant total throughput (no --npar / --batch)
+    if rates and batch:   # lock step: the lambda with most steps left sets the end
+        eta = max(r["total"] - r["done"] for r in rows) / float(np.mean(rates))
+    elif rates and npar:
+        eta = simulate(rows, npar, float(np.mean(rates)))
     cnt = {s: sum(r["state"] == s for r in rows) for s in ("running", "waiting", "done", "stopped", "failed")}
     parts = [f"{cnt['running']} running", f"{cnt['waiting']} waiting", f"{cnt['done']} done"] + [f"{cnt[s]} {s}" for s in ("stopped", "failed") if cnt[s]]
     msg = (f"JOB {100 * (tot - rem) / max(tot, 1):.0f}% ({tot - rem} / {tot} MD steps, {len(rows)} lambda: {', '.join(parts)}) | "
@@ -61,12 +92,12 @@ def summary(rows, npar=None):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("dir"); ap.add_argument("tag"); ap.add_argument("--only", default=None, help="the lambda values of this job (ONLYNODES)")
-    ap.add_argument("--npar", type=int, default=None); ap.add_argument("--per-lambda", action="store_true")
+    ap.add_argument("--npar", type=int, default=None); ap.add_argument("--batch", action="store_true"); ap.add_argument("--per-lambda", action="store_true")
     a = ap.parse_args()
     if not os.path.exists(os.path.join(a.dir, f"{a.tag}_stage0.json")):
         print(f"JOB {a.tag}: stage 0 not finished yet"); sys.exit(0)
     rows = job_progress(a.dir, a.tag, [int(x) for x in a.only.split()] if a.only else None)
-    print(summary(rows, a.npar))
+    print(summary(rows, a.npar, a.batch))
     if a.per_lambda:
         for r in rows:
             print(f"   lambda {r['k']:2d}: {r['state']:8s} {100 * r['done'] / max(r['total'], 1):3.0f}%" + (f"  {1000 / r['rate']:.0f} ms/step" if r["rate"] == r["rate"] and r["rate"] > 0 else ""))

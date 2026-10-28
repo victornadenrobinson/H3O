@@ -43,4 +43,4 @@ echo; echo "== done $(date)"
 } 2>&1 | tee $LOG
 echo "wrote $LOG"
 }
-main "$@"
+main "$@"; exit $?   # on ONE line (see young_tdi_par.sh)

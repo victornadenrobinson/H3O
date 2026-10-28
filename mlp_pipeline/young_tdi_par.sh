@@ -76,6 +76,7 @@ if command -v nvidia-smi >/dev/null 2>&1 && [ "$ENGINE" != batch ]; then
     [ $CAP -lt $NPAR ] && { echo "NOTE: $FREE MiB free on GPU $GI: NPAR $NPAR -> $CAP (MEMPROC=${MEMPROC:-4800} MiB per lambda process)"; NPAR=$CAP; }
   fi
 fi
+for k in $(seq 0 $((NODES-1))); do if [ -n "$ONLYNODES" ] && ! echo " $ONLYNODES " | grep -q " $k "; then continue; fi; echo "== launch $(date)" >> $OUT/${TAGNAME}_node$k.log; done   # marks this launch in every node log
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
 if [ -n "$ONLYNODES" ]; then ORDER=$(echo $ONLYNODES); else
 ORDER=$(python3 -c "
@@ -93,15 +94,15 @@ else
   echo $ORDER | tr ' ' '\n' | xargs -P $NPAR -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
 fi
 XP=$!
-# progress: whole-job ETA every 30 s (remaining MD steps of ALL lambda values of this job, also those not started, / measured total steps/s; tdi/eta.py),
-# per-lambda lines, GPU use and the live integral every 4 min
-IT=0
+# progress: whole-job ETA every MONEVERY (30) s (remaining MD steps of ALL lambda values of this job, also those not started, / measured total steps/s; tdi/eta.py),
+# per-lambda lines, GPU use and the live integral every 8th time
+ETAMODE="--npar $NPAR"; [ "$ENGINE" = batch ] && ETAMODE=--batch; IT=0
 while kill -0 $XP 2>/dev/null; do
-  sleep 30; kill -0 $XP 2>/dev/null || break; IT=$((IT + 1))
-  echo "-- $(date +%H:%M:%S) $(python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} 2>&1 | tail -n1)"
+  sleep ${MONEVERY:-30}; kill -0 $XP 2>/dev/null || break; IT=$((IT + 1))
+  echo "-- $(date +%H:%M:%S) $(python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} $ETAMODE 2>&1 | tail -n1)"
   [ $((IT % 8)) = 0 ] || continue
   echo "-- $(date +%H:%M) GPU $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader 2>/dev/null)"
-  python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} --per-lambda 2>&1 | tail -n +2
+  python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} $ETAMODE --per-lambda 2>&1 | tail -n +2
   if [ "$ENGINE" = batch ]; then grep -h "batched engine" $OUT/${TAGNAME}_batch.log | tail -n1; fi
   python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
@@ -114,5 +115,4 @@ if [ -n "$OOM" ] && [ -z "$NO_OOM_RETRY" ]; then
 fi
 echo "== done $(date)"; python3 $CODE/tdi/collect.py $OUT $TAGNAME
 }
-main "$@"
-exit $?
+main "$@"; exit $?   # on ONE line: bash reads a script as it runs, so after main returns it would read the next line at the old byte offset of a file that a `git pull` may have changed meanwhile
