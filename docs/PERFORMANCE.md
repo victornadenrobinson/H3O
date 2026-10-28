@@ -129,3 +129,9 @@ find runs/grace/ft_m2 -name model.yaml; find runs/grace/ft_m2 -name "checkpoint*
 ```
 If it is faster and agrees: a throughput run `GRACE_MODE=uniform SYSTEMS=insH NPROCS=8 MPS="0 1" PARTS=engine bash mlp_pipeline/bench_tdi.sh`, then a short side-by-side
 GRACE run before using it in production.
+
+### Dense engine result (2026-10-28, Young, ft_m2 as exported, tensorpotential 0.6.1)
+
+`bench.py dense insH`: dense engine ACTIVE (ft_m2 already has `compute_dense`, no re-export needed). Single process, alternating 251 / 250-atom structures:
+segment_sum 303 ms per call, dense 181 ms per call = **1.67x**. Differences dense vs segment_sum: max 5.6e-8 eV/atom, 2.3e-6 eV/A, 1.5e-7 eV/A^3 (float32 GPU
+round-off, the same level as two segment_sum runs). Next: throughput with 8 processes (`GRACE_MODE=uniform ... bench_tdi.sh`), then a side-by-side G check.
