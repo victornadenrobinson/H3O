@@ -182,7 +182,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("cmd", choices=["analyse", "plot"]); ap.add_argument("dirs", nargs="*", default=["runs/tdi"])
     ap.add_argument("--summary", default=None); ap.add_argument("--toy", nargs="*", default=None); ap.add_argument("-o", default="docs/data/pure_h")
     ap.add_argument("--pdf", default="docs/report_pure_h"); ap.add_argument("--png-dir", default="docs/figures")
-    a = ap.parse_args(); {"analyse": analyse, "plot": plot}[a.cmd](a)
+    a = ap.parse_intermixed_args(); {"analyse": analyse, "plot": plot}[a.cmd](a)   # intermixed: run directories may follow the options (python < 3.12 argparse)
 
 
 if __name__ == "__main__":
