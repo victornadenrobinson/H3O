@@ -141,3 +141,5 @@ round-off, the same level as two segment_sum runs). Next: throughput with 8 proc
 2.2 GB), the other 7 gave 9.5 steps/s (segment_sum 10.85 with 8). The dense layout pads every atom to the largest neighbour count. In the H fluid that count
 fluctuates, so the shapes change, recompile and keep their buffers. The 1.67x of `bench.py dense` was misleading: that test alternates 250- and 251-atom structures
 through one calculator, which penalised the segment_sum side. **Decision: keep the default segment_sum engine; GRACE_MODE stays an opt-in switch, not recommended.**
+
+**Not done (decided 2026-10-28):** Verlet neighbour list with a skin and the numpy data path for the per-lambda engine. It would only speed up single-process phases (stage 0, prep, the tail of a run; roughly 160 -> 100 ms per call), about 5-15% of a job, because with 8 processes the CPU work is already hidden behind the saturated GPU.
