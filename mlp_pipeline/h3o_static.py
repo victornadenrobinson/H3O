@@ -89,9 +89,9 @@ def relax(at, calc, P, steps, fmax, label="", every=25):
             print(f"        step {k:4d}  H {h:11.5f} eV/atom  max force {Fm:8.4f}  V {at.get_volume() / N:.4f} A^3/atom  {time.time() - t:6.1f} s", flush=True)
     opt.attach(report, interval=1)
     conv = opt.run(fmax=fmax, steps=steps)
-    E = at.get_potential_energy(); V = at.get_volume(); h = (E + P / EV_A3_GPA * V) / N
+    E = at.get_potential_energy(); V = at.get_volume(); h = (E + P / EV_A3_GPA * V) / N; Fm = float(np.sqrt((f.get_forces() ** 2).sum(1)).max())
     PROG["done"] += 1; el = time.time() - PROG["t0"]; eta = el / PROG["done"] * (PROG["total"] - PROG["done"])
-    print(f"        done: {opt.nsteps} steps, {'converged' if conv else 'NOT converged (raise --steps)'}, H {h:.5f} eV/atom, V {V / N:.4f} A^3/atom, {time.time() - t:.0f} s"
+    print(f"        done: {opt.nsteps} steps, {'converged' if conv else 'NOT converged (raise --steps)'} (max force {Fm:.3f}), H {h:.5f} eV/atom, V {V / N:.4f} A^3/atom, {time.time() - t:.0f} s"
           f"  | run: {PROG['done']}/{PROG['total']} relaxations, {el / 60:.1f} min so far, ETA ~{eta / 60:.0f} min", flush=True)
     return at, h, V / N
 
@@ -99,7 +99,7 @@ def relax(at, calc, P, steps, fmax, label="", every=25):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda")
     ap.add_argument("--P", type=float, nargs="+", default=[300, 400, 450, 500, 600, 700, 800]); ap.add_argument("--cell", default="docs/data/h3o_huang.cell")
-    ap.add_argument("--steps", type=int, default=600); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static")
+    ap.add_argument("--steps", type=int, default=2000); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static")
     ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)"); a = ap.parse_args()
     if a.parallel > 1 and len(a.P) > 1:
         return run_parallel(a)
