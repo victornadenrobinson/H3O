@@ -70,14 +70,30 @@ def guest_pairs(at):
     return pairs
 
 
-def relax(at, calc, P, steps, fmax):
+PROG = dict(done=0, total=1, t0=None)   # whole-run progress: relaxations done / planned, start time
+
+
+def relax(at, calc, P, steps, fmax, label="", every=25):
+    """constant-pressure relaxation with a progress line every `every` steps and a summary line (verbose on purpose: a GPU relaxation can take minutes)"""
+    import time
     from ase.filters import FrechetCellFilter
     from ase.optimize import FIRE
-    at = at.copy(); at.calc = calc
-    f = FrechetCellFilter(at, scalar_pressure=P / EV_A3_GPA)
-    FIRE(f, logfile=None).run(fmax=fmax, steps=steps)
-    E = at.get_potential_energy(); V = at.get_volume()
-    return at, (E + P / EV_A3_GPA * V) / len(at), V / len(at)
+    if PROG["t0"] is None: PROG["t0"] = time.time()
+    at = at.copy(); at.calc = calc; t = time.time(); N = len(at)
+    f = FrechetCellFilter(at, scalar_pressure=P / EV_A3_GPA); opt = FIRE(f, logfile=None)
+    print(f"   [{PROG['done'] + 1}/{PROG['total']}] {label} at {P:.0f} GPa ({N} atoms): relaxing (fmax {fmax} eV/A, at most {steps} steps)", flush=True)
+    def report():
+        k = opt.nsteps
+        if k % every == 0:
+            Fm = float(np.sqrt((f.get_forces() ** 2).sum(1)).max()); h = (at.get_potential_energy() + P / EV_A3_GPA * at.get_volume()) / N
+            print(f"        step {k:4d}  H {h:11.5f} eV/atom  max force {Fm:8.4f}  V {at.get_volume() / N:.4f} A^3/atom  {time.time() - t:6.1f} s", flush=True)
+    opt.attach(report, interval=1)
+    conv = opt.run(fmax=fmax, steps=steps)
+    E = at.get_potential_energy(); V = at.get_volume(); h = (E + P / EV_A3_GPA * V) / N
+    PROG["done"] += 1; el = time.time() - PROG["t0"]; eta = el / PROG["done"] * (PROG["total"] - PROG["done"])
+    print(f"        done: {opt.nsteps} steps, {'converged' if conv else 'NOT converged (raise --steps)'}, H {h:.5f} eV/atom, V {V / N:.4f} A^3/atom, {time.time() - t:.0f} s"
+          f"  | run: {PROG['done']}/{PROG['total']} relaxations, {el / 60:.1f} min so far, ETA ~{eta / 60:.0f} min", flush=True)
+    return at, h, V / N
 
 
 def main():
@@ -93,14 +109,15 @@ def main():
     for k in (0, 2, 4, 6):   # remove k guest pairs, spread over the list
         rm = sorted({i for p in pairs[::max(1, len(pairs) // k)][:k] for i in p}) if k else []
         v = h3o.copy(); del v[rm]; n = (int((v.numbers == 1).sum()) - 2 * nO) / nO; variants[n] = v
-    rows = []
+    rows = []; PROG["total"] = len(a.P) * (1 + len(h_candidates()) + len(variants))
+    print(f"plan: {len(a.P)} pressures x ({1 + len(h_candidates())} references + {len(variants)} H3O variants) = {PROG['total']} relaxations", flush=True)
     for P in a.P:
-        _, hw, vw = relax(ice_x(), calc, P, a.steps, a.fmax)
-        hs = {name: relax(c, calc, P, a.steps, a.fmax)[1:] for name, c in h_candidates().items()}
+        _, hw, vw = relax(ice_x(), calc, P, a.steps, a.fmax, "ice X")
+        hs = {name: relax(c, calc, P, a.steps, a.fmax, name)[1:] for name, c in h_candidates().items()}
         best = min(hs, key=lambda k: hs[k][0]); hH = hs[best][0]
         print(f"\n{P:.0f} GPa: ice X h {hw:.4f} eV/atom (V {vw:.3f}); H reference = {best} ({hH:.4f} eV/atom; " + ", ".join(f"{k} {v[0]:.4f}" for k, v in hs.items()) + ")")
         for n, v in sorted(variants.items()):
-            r, h, vv = relax(v, calc, P, a.steps, a.fmax)
+            r, h, vv = relax(v, calc, P, a.steps, a.fmax, f"H{2 + n:.3g}O")
             nH = int((r.numbers == 1).sum()); extra = nH - 2 * nO; N = len(r)
             dH = (h * N - nO * 3 * hw - extra * hH) / N * 1e3
             rows.append(dict(P_GPa=P, H_per_O=2 + n, X=n / (n + 1), dH_meV_atom=dH, H_eV_cell=h * N, natoms=N, vpa=vv, H_ref=best))
