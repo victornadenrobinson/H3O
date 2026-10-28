@@ -120,7 +120,7 @@ def meta():
         git = os.environ.get("H3O_GIT") or subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     except Exception:
         git = "unknown"
-    return dict(git=git, grace_mode=os.environ.get("GRACE_MODE", ""), host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
+    return dict(git=git, grace_mode=os.environ.get("GRACE_MODE", ""), hhwall=os.environ.get("HHWALL", ""), host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
 
 
 def write_json(path, d):
@@ -665,14 +665,14 @@ def run_node(c, st, k):
     r.pfn = mlp_pressure_fn(c["calc"])
     r.at.get_forces(); t0 = time.time()   # warm-up evaluation: XLA compile / model graph build stays out of the speed and ETA numbers
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
-    state_keys = (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"]), ("kE", float(st["kE"])), ("chunk_ps", a.chunk_ps), ("every", a.every), ("model", a.model))
+    state_keys = (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"]), ("kE", float(st["kE"])), ("chunk_ps", a.chunk_ps), ("every", a.every), ("model", a.model), ("hhwall", os.environ.get("HHWALL", "")))
     pf = os.path.join(a.outdir, f"{c['tag']}_node{k}_progress.json")   # steps done / total / speed of this lambda for the whole-job ETA (tdi/eta.py)
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
         for key, now in state_keys:   # a state from other settings would silently mix samples (old state files lack some keys: those are not checked)
-            if key not in z.files:
+            if key not in z.files and key != "hhwall":
                 continue
-            old = z[key].item()
+            old = z[key].item() if key in z.files else ""   # hhwall: a state written before the wall existed was run without it
             if (old != now) if isinstance(now, str) else abs(float(old) - float(now)) > 1e-9 * max(1.0, abs(float(now))):
                 print(f"lambda {k}: saved state has {key} = {old!r} but this run has {key} = {now!r}: refusing to mix samples. Use FRESH=1 (deletes the old files) or move them away.", flush=True); sys.exit(6)
         r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)

@@ -11,6 +11,16 @@ EV_A3_TO_GPA = 160.21766
 
 
 def get_calc_spec(spec, device="cuda"):
+    """the calculator of `spec`, with the optional short-range H-H wall of tdi/wall.py (HHWALL=r0,K in the environment; off by default)"""
+    calc = _get_calc_spec(spec, device)
+    if os.environ.get("HHWALL"):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from tdi.wall import wrap
+        calc = wrap(calc, os.environ["HHWALL"])
+    return calc
+
+
+def _get_calc_spec(spec, device="cuda"):
     """spec: 'mace' | 'mace:medium-omat-0' | 'mattersim' | 'grace:GRACE-2L-OMAT' | 'mace-ft:/path/model.model' | 'grace-ft:/path/final_model' | 'lj' | 'toyice'"""
     if spec.startswith("mace-ft:"):
         from mace.calculators import MACECalculator
