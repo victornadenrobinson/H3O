@@ -17,6 +17,9 @@
 # NATOMS=729: pure-H cell size (sc 9^3; default bcc 250)
 # insert mode: NGHOST=1,2,3,.. protons added to fcc H2O (ghosts at lambda=0): mu_H in the crystal; tag ..._n<NGHOST>
 # ONLYNODES="0 3": run just these nodes (e.g. after a GPU out-of-memory failure of one node); large cells (>400 atoms) need NPAR=8 or less on a 40 GB card
+# ENGINE=batch: all lambda values in ONE process with one batched model call per MD step (tdi/batched.py; NPAR is ignored; same node files, logs and restarts; the
+#   per-lambda engine stays the default). BATCHMAX=<atoms>: at most that many atoms per model call (GPU memory). Benchmarks: docs/PERFORMANCE.md (mlp_pipeline/bench_tdi.sh)
+# Progress: a whole-job line (all lambda values, done / remaining MD steps, total steps/s, ETA) every 30 s from tdi/eta.py; per-lambda lines every 4 min
 # env knobs: SEED (MD seed; not in the tag: use another OUTDIR) BULK (bulk modulus GPa, insert with VPA) HPER (H per O, 2; HPER=2.25 for H2.25O: tag gets _h2.25o) T (3000) P (400) MODEL NODES (12) DT (0.5 fs) ONLY0 POWER (4) PS (4) PS1 (1.5) CHUNK (0.5) EQUIL (1) NPAR (4) TAG
 # Logs: runs/tdi/<tag>_stage0.log, runs/tdi/<tag>_node<k>.log (every line is a full health report); watch the integral from any shell with
 #    watch -n 120 python3 mlp_pipeline/tdi/collect.py runs/tdi <tag>
@@ -66,28 +69,41 @@ if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=
   [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"   # also on a resubmit: nodes that never started begin from the same frame as the others
 fi
 # memory-aware parallelism: start only as many lambda processes as fit in the free GPU memory (one TensorFlow context each; ~4.6 GB measured for 250 H on an A100; MEMPROC MiB per process, override for big cells)
-if [ "${MODEL%%:*}" != toyice ] && command -v nvidia-smi >/dev/null 2>&1; then   # the toy potential runs on CPU: no GPU memory cap
+if [ "${MODEL%%:*}" != toyice ] && command -v nvidia-smi >/dev/null 2>&1 && [ "$ENGINE" != batch ]; then   # the toy potential runs on CPU: no GPU memory cap
   GI=${CUDA_VISIBLE_DEVICES%%,*}; case "$GI" in ""|*[!0-9]*) GI=0;; esac
   FREE=$(nvidia-smi -i $GI --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc 0-9)
   if [ -n "$FREE" ]; then CAP=$(( FREE / ${MEMPROC:-4800} )); [ $CAP -lt 1 ] && CAP=1
     [ $CAP -lt $NPAR ] && { echo "NOTE: $FREE MiB free on GPU $GI: NPAR $NPAR -> $CAP (MEMPROC=${MEMPROC:-4800} MiB per lambda process)"; NPAR=$CAP; }
   fi
 fi
-echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
-for k in $(seq 0 $((NODES-1))); do if [ -n "$ONLYNODES" ] && ! echo " $ONLYNODES " | grep -q " $k "; then continue; fi; echo "== launch $(date)" >> $OUT/${TAGNAME}_node$k.log; done   # tdi/eta.py: only lines after this count (a lambda still waiting for a slot shows "queued", not an old 100%)
+for k in $(seq 0 $((NODES-1))); do if [ -n "$ONLYNODES" ] && ! echo " $ONLYNODES " | grep -q " $k "; then continue; fi; echo "== launch $(date)" >> $OUT/${TAGNAME}_node$k.log; done   # marks this launch in every node log
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
-if [ -n "$ONLYNODES" ]; then echo $ONLYNODES | tr ' ' '\n'; else
-python3 -c "
+if [ -n "$ONLYNODES" ]; then ORDER=$(echo $ONLYNODES); else
+ORDER=$(python3 -c "
 n=$NODES; o=[i for i in (n//2, n-1, 0) if 0<=i<n]
 o=list(dict.fromkeys(o))
 while len(o)<n:
     o.append(max((i for i in range(n) if i not in o), key=lambda i: min(abs(i-j) for j in o)))
-print(*o, sep=chr(10))"
-fi | xargs -P $NPAR -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
+print(*o)")
+fi
+if [ "$ENGINE" = batch ]; then   # ENGINE=batch: all these lambda values in ONE process, one model call per MD step for all of them (tdi/batched.py; same node files and logs)
+  echo "== lambda $ORDER: batched engine, one process (log $OUT/${TAGNAME}_batch.log) $(date)"
+  $PY -u $CODE/tdi/run_real.py $COMMON --batch-nodes "$ORDER" ${BATCHMAX:+--batch-max-atoms $BATCHMAX} $FRESHFLAG >> $OUT/${TAGNAME}_batch.log 2>&1 &
+else
+  echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
+  echo $ORDER | tr ' ' '\n' | xargs -P $NPAR -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
+fi
 XP=$!
+# progress: whole-job ETA every MONEVERY (30) s (remaining MD steps of ALL lambda values of this job, also those not started, / measured total steps/s; tdi/eta.py),
+# per-lambda lines, GPU use and the live integral every 8th time
+ETAMODE="--npar $NPAR"; [ "$ENGINE" = batch ] && ETAMODE=--batch; IT=0
 while kill -0 $XP 2>/dev/null; do
-  sleep ${MONEVERY:-60}; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
-  python3 $CODE/tdi/eta.py $OUT $TAGNAME $NODES $NPAR "$ONLYNODES" 2>&1   # per lambda (this launch only) + whole-job ETA including the lambda values still queued
+  sleep ${MONEVERY:-30}; kill -0 $XP 2>/dev/null || break; IT=$((IT + 1))
+  echo "-- $(date +%H:%M:%S) $(python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} $ETAMODE 2>&1 | tail -n1)"
+  [ $((IT % 8)) = 0 ] || continue
+  echo "-- $(date +%H:%M) GPU $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader 2>/dev/null)"
+  python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} $ETAMODE --per-lambda 2>&1 | tail -n +2
+  if [ "$ENGINE" = batch ]; then grep -h "batched engine" $OUT/${TAGNAME}_batch.log | tail -n1; fi
   python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
 # second pass: lambda values whose process died of GPU out-of-memory at start-up (too many TensorFlow contexts on one card) are rerun, 2 at a time

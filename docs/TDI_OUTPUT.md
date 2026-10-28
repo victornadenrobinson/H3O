@@ -15,6 +15,8 @@ All files of a run live in `runs/tdi/` (tests: `runs/tdi_test/`, melt scan: `run
 | `_node<k>.npy` | float array: every recorded sample (every `--every` steps) of the integrand `U_full - U_ref` in eV for the whole cell, for lambda index k | after every chunk |
 | `_node<k>_state.npz` | restart state: positions, momenta, and the series (`series`, `tk`, `eful`, `espr`) | after every healthy chunk |
 | `_node<k>_thermo.csv` | one row per 40 steps: `t_ps, T_inst_K, U_MLP_eV, E_spring_eV, dUdl_eV, P_MLP_GPa, u_rms_A, u_max_A` | after every chunk (appended) |
+| `_node<k>_progress.json` | steps done / total / speed of this lambda (`state` running, done, failed): read by `tdi/eta.py` for the whole-job ETA; not a result | every 30 s |
+| `_batch.log` | batched engine (`ENGINE=batch`) only: the process log (self-check, status every minute); per-lambda lines stay in `_node<k>.log` | while running |
 | `_node<k>_traj.extxyz` | configurations every 40 steps, tagged with lambda, index, time (positions only; for single points / FEP / analysis) | after every chunk (appended) |
 | `_node<k>.log` | full text log of that lambda (see section 3) | appended |
 | `_stage0.log` | log of the stage-0 step | at start |
