@@ -13,6 +13,10 @@ import numpy as np
 
 KNOBS = ("MODEL P T HPER NGHOST HOSTPHASE NATOMS MINRUNS INIT RULE NGAUSS VPA NREP BULK PS PS1 NODES POWER DT CHUNK EQUIL OUTDIR SEED K HOT HOTT "
          "PREPHOLD PREPFREE ONLYNODES NPAR FRESH TAG ONLY0 UQ ENGINE MEMPROC TOYICE TOYICE_FIT ALLOW_NOGPU").split()
+# run_real.py defaults for settings that older stage0 jsons do not record (they predate the option, so the run used its default behaviour)
+DEFAULTS = dict(hper=2.0, nghost=1, host_phase="fcc", natoms=0, min_runs=20, rule="gl", ngauss=0, every=2, seed=0, hot_ps=0.0, hot_T=12000.0, init_from=None,
+                prep_hold_ps=1.0, prep_free_ps=1.0, k=None, bulk_gpa=None, vpa=None, from_dft=None, nrep=None, ps1=3.0, equil_ps=1.0)
+ESSENTIAL = ("model", "phase", "P", "T", "ps", "dt", "chunk_ps", "nodes", "power")   # never guessed: a run without them is listed, not resubmitted
 SPS = [(1, 0.16), (2, 0.36), (8, 0.75), (10, 0.88)]   # s/step per process vs processes on one A100 (251 atoms; CURRENT_ISSUES 2c)
 
 
@@ -20,9 +24,30 @@ def s_per_step(c):
     return float(np.interp(c, [x for x, _ in SPS], [y for _, y in SPS]))
 
 
+def tag_fn():
+    """make_tag of run_real.py, taken from its source (run_real imports ASE, which the login-node python may not have)"""
+    import ast
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_real.py")).read()
+    node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "make_tag")
+    ns = {}; exec(compile(ast.Module(body=[node], type_ignores=[]), "run_real.py", "exec"), ns); return ns["make_tag"]
+
+
+def same_tag(A, tag, e):
+    """does the launcher, given env e, rebuild exactly this tag? (a different tag would start a NEW run instead of finishing this one)"""
+    mk = tag_fn(); a = argparse.Namespace(**{**A, "tag": None, "nrep": int(e["NREP"]) if e["NREP"] else None, "natoms": int(e["NATOMS"] or 0),
+                                             "nghost": int(e["NGHOST"]), "hper": float(e["HPER"]), "host_phase": e["HOSTPHASE"] or "fcc"})
+    return mk(a)
+
+
+def args_of(st):
+    A = {**DEFAULTS, **st["args"]}; miss = [k for k in ESSENTIAL if k not in A]
+    if miss: raise KeyError(f"stage0 json has no {', '.join(miss)}: resubmit by hand")
+    return A
+
+
 def env_of(st, d, tag):
     """launcher environment that reproduces this run (every knob set: empty = unset, so nothing leaks in from the submitting shell)"""
-    A = st["args"]; e = {k: "" for k in KNOBS}
+    A = args_of(st); e = {k: "" for k in KNOBS}
     e.update(MODEL=A["model"], P=f"{A['P']:g}", T=f"{A['T']:g}", HPER=f"{A['hper']:g}", NGHOST=str(A["nghost"]), PS=f"{A['ps']:g}", PS1=f"{A['ps1']:g}",
              NODES=str(A["nodes"]), POWER=f"{A['power']:g}", DT=f"{A['dt']:g}", CHUNK=f"{A['chunk_ps']:g}", EQUIL=f"{A['equil_ps']:g}", OUTDIR=d, SEED=str(A.get("seed", 0)))
     if A["phase"] == "insert" and A.get("host_phase", "fcc") != "fcc": e["HOSTPHASE"] = A["host_phase"]
@@ -45,7 +70,7 @@ def env_of(st, d, tag):
 
 
 def scan(d, tag):
-    st = json.load(open(os.path.join(d, f"{tag}_stage0.json"))); A = st["args"]
+    st = json.load(open(os.path.join(d, f"{tag}_stage0.json"))); A = args_of(st)
     from tdi import analyze
     lam = analyze.rule_nodes(dict(nodes=A["nodes"], power=A["power"], rule=A.get("rule") or "gl", ngauss=A.get("ngauss") or 0))[0]
     per_ps = int(round(1000 / A["dt"])); target = int(round(A["ps"] * per_ps / A["every"]))   # samples per lambda at the target length
@@ -84,11 +109,19 @@ def main():
             if running: print(f"{d + '/' + tag:52s} RUNNING now (lambda {running}): skipped"); continue
             if not todo: continue
             if never and a.skip_empty: print(f"{d + '/' + tag:52s} never launched: skipped (--skip-empty)"); continue
-            A = st["args"]; npar = min(len(todo), 8); natoms = st.get("N_atoms_total") or st.get("N") or 251
+            A = args_of(st); npar = min(len(todo), 8); natoms = st.get("N_atoms_total") or st.get("N") or 251
             ins = 2 if A["phase"] == "insert" else 1   # insertion: two model calls per step
             hours = (left / len(todo)) * s_per_step(npar) * max(1.0, natoms / 251) * ins / 3600 * int(np.ceil(len(todo) / npar)) + 0.3
             hours = min(a.time_cap_h, max(1.0, 1.5 * hours))
-            e = env_of(st, d, tag); e.update(ONLYNODES=" ".join(map(str, todo)), NPAR=str(npar))
+            try:
+                e = env_of(st, d, tag)
+            except KeyError as ex:
+                print(f"{d + '/' + tag:52s} lambda {todo} to run, but {ex}"); continue
+            if same_tag(A, tag, e) != tag and e["NREP"]:   # older jsons store nrep after setup() filled in the default: the original launch had no NREP
+                e["NREP"] = ""
+            if same_tag(A, tag, e) != tag:
+                print(f"{d + '/' + tag:52s} lambda {todo} to run, but the rebuilt settings give tag {same_tag(A, tag, e)}: resubmit by hand"); continue
+            e.update(ONLYNODES=" ".join(map(str, todo)), NPAR=str(npar))
             if a.local:   # interactive / toy use: keep the caller's toy settings
                 for k in ("TOYICE", "TOYICE_FIT", "ALLOW_NOGPU"): e.pop(k)
             cmd = "env " + " ".join(f"{k}={shlex.quote(v)}" for k, v in e.items()) + f" bash mlp_pipeline/young_tdi_par.sh {A['phase']}"
