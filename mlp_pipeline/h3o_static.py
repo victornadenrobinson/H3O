@@ -11,6 +11,7 @@ Caveat: the MLP was trained on hot superionic / fluid configurations, not on col
 These are STATIC enthalpies (no zero-point energy); Huang's published dH(P) curve includes ZPE, so compare with a static DFT calculation of the same references.
 usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static]
 """
+import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes share one GPU: without this the first takes nearly all of its memory
 import argparse, csv, os, sys, warnings
 import numpy as np
 warnings.filterwarnings("ignore", message="logm result may be inaccurate")   # FrechetCellFilter's matrix log on near-identity cells
@@ -170,15 +171,18 @@ def run_parallel(a):
     quiet = ("tensorflow", "xla", "cuda", "I0000", "W0000", "E0000", "ptxas", "absl", "cpu_feature", "AVX2", "Registers are spilled", "XLA service", "StreamExecutor", "rebuild TensorFlow")
     def pump(proc, tag):
         for line in proc.stdout:
-            if line.strip() and not any(q.lower() in line.lower() for q in quiet): print(f"[{tag:>4s} GPa] {line.rstrip()}", flush=True)
+            err = any(k in line for k in ("Error", "error:", "Traceback", "OOM", "out of memory", "Exhausted")) and "_handle_getgr" not in line   # never hide the reason of a crash
+            if line.strip() and (err or not any(q.lower() in line.lower() for q in quiet)): print(f"[{tag:>4s} GPa] {line.rstrip()}", flush=True)
     todo = list(a.P); running = []; t0 = time.time()
     print(f"parallel: {len(todo)} pressures, at most {a.parallel} processes on the GPU at once", flush=True)
     while todo or running:
         while todo and len(running) < a.parallel:
             P = todo.pop(0); out = os.path.join(a.o, f"P{P:.0f}")
-            pr = subprocess.Popen(base + ["--P", str(P), "-o", out], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            env = dict(os.environ, TF_FORCE_GPU_ALLOW_GROWTH="true")
+            pr = subprocess.Popen(base + ["--P", str(P), "-o", out], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
             th = threading.Thread(target=pump, args=(pr, f"{P:.0f}"), daemon=True); th.start(); running.append((P, pr, th))
             print(f"== started {P:.0f} GPa ({len(running)} running, {len(todo)} waiting, {(time.time() - t0) / 60:.1f} min)", flush=True)
+            if todo: time.sleep(15)   # stagger: model load + XLA compile of several processes at once can exceed the GPU memory
         time.sleep(5)
         for P, pr, th in list(running):
             if pr.poll() is not None:
