@@ -48,6 +48,7 @@ for _, r in raw.iterrows():
     if not str(r.status).startswith("done"): w.append(f"unfinished ({r.status})")
     if np.isfinite(r.P_dev) and abs(r.P_dev) > a.pmax_rel: w.append(f"P_hi {r.P_hi_GPa:.0f} vs target {r.P_target_GPa:.0f} GPa")
     if np.isfinite(r.quad_diff_meV) and abs(r.quad_diff_meV) > a.qmax: w.append(f"Kronrod-Gauss {r.quad_diff_meV:.0f} meV/atom (lambda integral not converged, or a melted crystal held by springs)")
+    if np.isfinite(r.get("min_dHH_A", np.nan)) and r.min_dHH_A < 0.25: w.append(f"H-H COLLAPSE (min d(H-H) {r.min_dHH_A:.2f} A: MLP hole, G meaningless)")
     if (r.dir, r.tag) in badstate: w.append("liquid FROZEN at a high-lambda node (liquid_check)" if badstate[(r.dir, r.tag)] == "frozen?" else "O sublattice MELTED at a high-lambda node (liquid_check)")
     why.append("; ".join(w))
 raw["excluded"] = why
@@ -110,7 +111,7 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         solid.append(dict(kind=m.phase, P=m.P_target_GPa, T=m.T_K, h=m.H_per_O, a=m.H_per_O - 2.0, n=int(n), dG=(m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n,
                           err=((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n,
                           caveat=("MELTED" in note) or not (m.dt_fs == w.dt_fs == hh.dt_fs and m.nodes == w.nodes == hh.nodes), tags=f"{m.dir}/{m.tag} | {w.dir}/{w.tag} | {hh.dir}/{hh.tag}"))
-for _, m in df[(df.phase == "insert") & (~df.tag.str.contains(r"_h\d", regex=True))].iterrows():   # H2O hosts only (H(2+a)O hosts: HPER)
+for _, m in df[(df.phase == "insert") & (~df.tag.str.contains(r"_h\d", regex=True)) & (~df.tag.str.contains("_Hhost"))].iterrows():   # H2O hosts only (H(2+a)O hosts: HPER; pure-H host = method check)
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)

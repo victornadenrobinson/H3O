@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tdi import analyze
 from tdi.gcalc import G_from_nodes
 from tdi.verdict import verdict
+from tdi.collapse import run_min_hh, COLLAPSE_A
 EV_A3_GPA = 160.21766
 
 ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None)
@@ -66,7 +67,7 @@ for d in dirs:
                 pass
         rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
                          nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else "") + (f" (Gauss {A['ngauss']} only: Kronrod extension pending)" if partial_gk else ""), quad_diff_meV=qd, rule=A.get("rule") or "gl",
-                         G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], P_corr_meV=st.get("dG_P_eV", np.nan) / st["N"] * 1e3,
+                         min_dHH_A=run_min_hh(d, tag, lam), G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], P_corr_meV=st.get("dG_P_eV", np.nan) / st["N"] * 1e3,
                          dG_P2_meV_atom=(np.nan if st["phase"] == "insert" else -st["V"] / st["N"] * (P_hi - st["P_target"]) ** 2 / (2 * st.get("B_GPa", np.nan)) / EV_A3_GPA * 1e3), git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
@@ -74,11 +75,15 @@ if df.empty:
 df = df.sort_values(["phase", "P_target_GPa", "T_K", "H_per_O", "nrep", "dt_fs", "dir"]).reset_index(drop=True)
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 500)
 print(f"All runs{' (first ' + str(a.discard) + ' of every series discarded)' if a.discard else ''} (G in meV/atom, insertion rows: mu_H per added H; drift = G(all) - G(first half); quad_diff = Gauss-Kronrod minus Gauss-only (quadrature error estimate, only for rule gk runs); P_hi = MLP pressure at the highest lambda, target in P_target; dG_P2 = -V (P_hi - P_target)^2 / (2 B N): second-order correction G(P_target) - (F + P_target V) when the MLP pressure misses the target, NOT applied; nan = no bulk modulus in the stage0 json (older runs); insertion rows: P_corr = pressure correction to P_target included in G):")
-print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa", "dG_P2_meV_atom", "P_corr_meV"]].round(2).to_string(index=False))
+print(df[["dir", "tag", "N", "dt_fs", "nodes", "ps_per_node", "status", "G_meV_atom", "G_err_meV_atom", "drift_meV", "quad_diff_meV", "P_target_GPa", "P_hi_GPa", "dG_P2_meV_atom", "P_corr_meV", "min_dHH_A"]].round(2).to_string(index=False))
 if stale:
     print("\nNOT USED, stage0.json does not match the node files (rewritten by a later launch with other settings; restore it with the original settings, see HANDOFF session 4): " + "; ".join(stale))
 if skipped:
     print("\nnot summarised (no or incomplete samples): " + "; ".join(skipped))
+coll = df[df.min_dHH_A < COLLAPSE_A]
+if len(coll):   # two protons fused (MLP hole at short range): G meaningless; kept in the table and the csv, left out of every pair / mixing / hull below
+    print(f"\nH-H COLLAPSE (min d(H-H) < {COLLAPSE_A} A at the highest lambda values; G meaningless, not used in any pair below): " + "; ".join(f"{r.dir}/{r.tag} ({r.min_dHH_A:.2f} A)" for _, r in coll.iterrows()))
+full = df; df = df[~(df.min_dHH_A < COLLAPSE_A)].reset_index(drop=True)
 def pick(g, dt, nodes=None):
     """one row of g: same dt as `dt` if there is one, else the smallest dt; among those the same number of lambda values as `nodes` if there is one; then the longest run (the caller flags differences)"""
     same = g[g.dt_fs == dt]; g = same if len(same) else g[g.dt_fs == g.dt_fs.min()]
@@ -169,4 +174,4 @@ if hull:
     print("\nLiquid mixing free energy per atom, H2O + n H -> H(2+n)O (x_H = n/(1+n) as in the hull sheet; negative = mixing favourable), meV/atom. A hull of these per-atom values must be drawn against x_H_atom = n/(3+n) (fraction of atoms that are added H): against x_H its tie lines are not straight:")
     print(pd.DataFrame(hull).round(2).to_string(index=False))
 if a.o:
-    df.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(pairs_h).to_csv(a.o.replace(".csv", "_dGhcp.csv"), index=False); pd.DataFrame(solid).to_csv(a.o.replace(".csv", "_mix.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))
+    full.to_csv(a.o, index=False); pd.DataFrame(pairs).to_csv(a.o.replace(".csv", "_dG.csv"), index=False); pd.DataFrame(pairs_h).to_csv(a.o.replace(".csv", "_dGhcp.csv"), index=False); pd.DataFrame(solid).to_csv(a.o.replace(".csv", "_mix.csv"), index=False); pd.DataFrame(hull).to_csv(a.o.replace(".csv", "_hull.csv"), index=False); print("wrote", a.o, "and", a.o.replace(".csv", "_dG.csv"))
