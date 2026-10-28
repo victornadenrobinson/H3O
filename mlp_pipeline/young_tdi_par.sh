@@ -74,6 +74,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   fi
 fi
 echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
+for k in $(seq 0 $((NODES-1))); do if [ -n "$ONLYNODES" ] && ! echo " $ONLYNODES " | grep -q " $k "; then continue; fi; echo "== launch $(date)" >> $OUT/${TAGNAME}_node$k.log; done   # tdi/eta.py: only lines after this count (a lambda still waiting for a slot shows "queued", not an old 100%)
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
 if [ -n "$ONLYNODES" ]; then echo $ONLYNODES | tr ' ' '\n'; else
 python3 -c "
@@ -85,8 +86,8 @@ print(*o, sep=chr(10))"
 fi | xargs -P $NPAR -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} $FRESHFLAG >> $OUT/${TAGNAME}_node{}.log 2>&1" &
 XP=$!
 while kill -0 $XP 2>/dev/null; do
-  sleep 120; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
-  for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed "s/${TAGNAME}_node/lambda /"): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
+  sleep ${MONEVERY:-60}; echo "-- $(date +%H:%M) $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader)"
+  python3 $CODE/tdi/eta.py $OUT $TAGNAME $NODES $NPAR "$ONLYNODES" 2>&1   # per lambda (this launch only) + whole-job ETA including the lambda values still queued
   python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
 # second pass: lambda values whose process died of GPU out-of-memory at start-up (too many TensorFlow contexts on one card) are rerun, 2 at a time
@@ -98,5 +99,4 @@ if [ -n "$OOM" ] && [ -z "$NO_OOM_RETRY" ]; then
 fi
 echo "== done $(date)"; python3 $CODE/tdi/collect.py $OUT $TAGNAME
 }
-main "$@"
-exit $?
+main "$@"; exit $?   # on ONE line: bash reads a script as it runs, so after main returns it would read the next line at the old byte offset of a file that a `git pull` may have changed meanwhile
