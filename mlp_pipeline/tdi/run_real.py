@@ -23,6 +23,7 @@ from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from tdi import refs, engine, analyze
+from tdi.progress import StepProgress
 from tdi.gcalc import stats, G_total_eV, G_from_nodes   # noqa: F401 (collect.py and live.py import these from here)
 
 EV_A3_GPA = 160.21766
@@ -178,6 +179,7 @@ def free_md_pressure(c, atoms0, seed, label):
     zero = lambda at: (0.0, np.zeros((len(at), 3)))
     r = LambdaRun(atoms0, {"full": c["full"], "E": zero}, 1.0, a.T, np.array([], dtype=int), a.dt, a.tau, seed, a.every, c["steps"](a.equil_ps))
     r.pfn = mlp_pressure_fn(c["calc"]); tot = c["steps"](a.ps1); blk = max(1, c["steps"](0.25)); done = 0
+    r.dyn.attach(StepProgress(r.dyn, c["steps"](a.equil_ps) + tot, label=label, print_s=60), interval=1)   # a line every minute, also during the equilibration (reads the clock only)
     print(f"free NVT of {label} ({len(atoms0)} atoms): {a.equil_ps} ps equilibration + {a.ps1} ps production, progress every 0.25 ps", flush=True)
     while done < tot:   # in pieces, with a progress line (the run was silent for minutes)
         nstep = min(blk, tot - done); r.advance(nstep); done += nstep
@@ -508,6 +510,7 @@ def stage0(c):
     d1_0 = float(neighbor_list("d", at0[iO], 0.6 * V ** (1 / 3)).min())
     r1 = LambdaRun(at0, {"full": c["full"], "E": engine.einstein_component(c["sitesO"], iO, 1.0)}, 1.0, a.T, iO, a.dt, a.tau, a.seed, a.every, c["steps"](a.equil_ps))
     neq, nq = c["steps"](a.equil_ps), int(round(a.ps1 / 0.25)); st25 = c["steps"](0.25); tot = neq + nq * st25
+    r1.dyn.attach(StepProgress(r1.dyn, tot, label="lambda=1 run", print_s=60), interval=1)   # progress line every minute (the equilibration was silent)
     r1.start(); print(f"lambda=1 equilibrated ({a.equil_ps} ps), {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     for q in range(nq):
         tl = time.time(); r1.advance(c["steps"](0.25))
@@ -613,7 +616,9 @@ def acquire_lock(path, stale_s):
         except OSError:
             pass
     threading.Thread(target=heartbeat, daemon=True).start()
-    atexit.register(release); signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+    atexit.register(release)
+    if threading.current_thread() is threading.main_thread():   # the batched engine runs nodes in threads: its main thread sets the handler
+        signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
     return True
 
 
@@ -627,10 +632,12 @@ def prep(c):
     from ase.io import write
     at = c["at0"].copy(); at.calc = c["calc"]; iO = c["iO"]; rng = np.random.default_rng(a.seed + 777); t0 = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = 0; at.set_momenta(p, apply_constraint=False); at.set_constraint(FixAtoms(indices=iO))
-    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng); dyn.run(c["steps"](a.prep_hold_ps))
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng)
+    dyn.attach(StepProgress(dyn, c["steps"](a.prep_hold_ps), label="prep (O held)", print_s=60), interval=1); dyn.run(c["steps"](a.prep_hold_ps))
     print(f"prep: H thermalised with O held for {a.prep_hold_ps} ps ({time.time() - t0:.0f} s), T_kin {at.get_temperature():.0f} K", flush=True)
     at.set_constraint(); tmp = at.copy(); MaxwellBoltzmannDistribution(tmp, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = tmp.get_momenta()[iO]; at.set_momenta(p)
-    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng); dyn.run(c["steps"](a.prep_free_ps))
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng)
+    dyn.attach(StepProgress(dyn, c["steps"](a.prep_free_ps), label="prep (O released)", print_s=60), interval=1); dyn.run(c["steps"](a.prep_free_ps))
     d = find_mic(at.positions[iO] - c["sitesO"], c["at0"].cell, True)[0]; shift = d.mean(0); at.positions -= shift   # O lattice drifted as a whole: put its centre of mass back (the TDI fixes it)
     d = d - shift; print(f"prep: O released for {a.prep_free_ps} ps ({time.time() - t0:.0f} s): rms O displacement from the ideal sites {np.sqrt((d ** 2).sum(-1).mean()):.3f} A, max {np.sqrt((d ** 2).sum(-1)).max():.3f} A, T_kin {at.get_temperature():.0f} K "
           f"(compare: Einstein-spring rms at k = 25 eV/A^2 is {np.sqrt(3 * units.kB * a.T / 25.0):.3f} A; much larger = the lattice is melting)", flush=True)
@@ -642,7 +649,7 @@ def run_node(c, st, k):
     a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
     lock = os.path.join(a.outdir, f"{c['tag']}_node{k}.lock")
     if not acquire_lock(lock, a.lock_stale_min * 60): return
-    comps = {"full": c["full"], "E": E_component(c, st["kE"])}
+    comps = {"full": c["full"], "E": c["E_fn"](st["kE"]) if "E_fn" in c else E_component(c, st["kE"])}   # E_fn: the batched engine's host component (tdi/batched.py)
     r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
     if c.get("init_pos") is not None:
         r.at.set_positions(c["init_pos"])
@@ -652,6 +659,7 @@ def run_node(c, st, k):
     r.at.get_forces(); t0 = time.time()   # warm-up evaluation: XLA compile / model graph build stays out of the speed and ETA numbers
     sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
     state_keys = (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"]), ("kE", float(st["kE"])), ("chunk_ps", a.chunk_ps), ("every", a.every), ("model", a.model))
+    pf = os.path.join(a.outdir, f"{c['tag']}_node{k}_progress.json")   # steps done / total / speed of this lambda for the whole-job ETA (tdi/eta.py)
     if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
         z = np.load(sf)
         for key, now in state_keys:   # a state from other settings would silently mix samples (old state files lack some keys: those are not checked)
@@ -663,17 +671,19 @@ def run_node(c, st, k):
         r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
         r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
         r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
+        pr = StepProgress(r.dyn, tot, base=neq + done * per, path=pf, info=dict(k=k, lam=l)); r.dyn.attach(pr, interval=1)
         print(f"lambda {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
     else:
+        pr = StepProgress(r.dyn, tot, path=pf, info=dict(k=k, lam=l)); r.dyn.attach(pr, interval=1)   # reads the step counter and the clock only
         r.start()
         Teq = 2 * r.at.get_kinetic_energy() / (r.ndof * units.kB)
         if not np.isfinite(Teq) or Teq > 20 * a.T:
-            print(f"lambda {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); sys.exit(5)
+            print(f"lambda {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); pr.write("failed"); sys.exit(5)
         print(f"lambda {k} = {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
     f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
     n_per = per // a.every
     if done >= nchunk:
-        print(f"lambda {k}: already complete"); return
+        pr.write("done"); print(f"lambda {k}: already complete"); return
     t_resume = time.time()
     for ch in range(done + 1, nchunk + 1):
         tl = time.time(); n_before = len(r.series)
@@ -685,7 +695,7 @@ def run_node(c, st, k):
         except Unstable as ex:
             print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({ch - 1} of {nchunk}). "
                   f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
-            sys.exit(5)
+            pr.write("failed"); sys.exit(5)
         np.save(f[:-4] + ".tmp.npy", np.array(r.series)); os.replace(f[:-4] + ".tmp.npy", f)   # atomic: readers and a kill never see a truncated series
         np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, **dict(state_keys)); os.replace(sf + ".tmp.npz", sf)
         pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
@@ -706,9 +716,10 @@ def run_node(c, st, k):
             r.snaps = []
         m, e = stats(r.series)
         print(f"lambda {k} = {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
+    pr.write("done")
 
 
-if __name__ == "__main__":
+def make_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "hcp", "fccl", "H", "liquid", "insert"], required=True)
     ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
@@ -725,8 +736,14 @@ if __name__ == "__main__":
     ap.add_argument("--host-phase", choices=["fcc", "bcc", "H"], default="fcc", help="insert: host of the added H: fcc H2O (108 O), bcc H2O (128 O; tag _bcc), or H = pure-H fluid (250 atoms or --natoms; tag _Hhost[_N<natoms>]): the method check, mu_H - G_H must be ~0"); ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
     ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
     ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--batch-nodes", default=None, help='batched engine: these lambda values ("0 1 2 ...") in ONE process, one model call per MD step for all of them (tdi/batched.py); same files as --node')
+    ap.add_argument("--batch-max-atoms", type=int, default=0, help="batched engine: at most this many atoms per model call (0 = all in one call; lower it if the GPU runs out of memory)")
     ap.add_argument("--print-tag", action="store_true", help="print the run's tag (file-name stem) and exit")
-    a = ap.parse_args()
+    return ap
+
+
+if __name__ == "__main__":
+    a = make_parser().parse_args()
     if a.print_tag:
         print(make_tag(a)); sys.exit(0)
     sys.path.insert(0, HERE)
@@ -738,6 +755,12 @@ if __name__ == "__main__":
     if a.node is not None:
         st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
         run_node(c, st, a.node); sys.exit(0)
+    if a.batch_nodes is not None:
+        import signal
+        from tdi.batched import run_batched
+        signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+        st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
+        sys.exit(run_batched(c, st, [int(x) for x in a.batch_nodes.replace(",", " ").split()], run_node))
     # all in one process
     st = stage0(c); t0 = time.time(); lam, w, N = c["lam"], c["w"], c["N"]
     comps = {"full": c["full"], "E": E_component(c, st["kE"])}
