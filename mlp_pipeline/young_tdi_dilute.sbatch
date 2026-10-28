@@ -15,7 +15,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --array=0-6%4
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 ARRAY_KEEP="PS"; . mlp_pipeline/array_env.sh
 DEFAULT="500 6000 2;500 6000 5;500 6000 11;500 5500 5;500 5500 11;400 5000 5;400 5000 11"
 IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"

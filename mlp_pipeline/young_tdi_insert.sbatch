@@ -19,7 +19,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --array=0-10
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 ARRAY_KEEP="CHUNK"; . mlp_pipeline/array_env.sh   # CHUNK may be overridden (keep it fixed for all later extensions of the same run); drop run knobs exported by the submitting shell (they would apply to every task)
 DEFAULT="400 5000 2;400 5000 4;400 6500 1;400 6500 2;400 6500 4;500 5000 1;500 5000 2;500 5000 4;500 7000 1;500 7000 2;500 7000 4"
 IFS=';' read -ra TABLE <<< "${JOBS:-$DEFAULT}"

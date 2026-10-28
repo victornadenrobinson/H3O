@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --time=04:00:00
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 D=${1:?usage: young_dft_check.sbatch <prepared dir, e.g. runs/dft_check/probe>}
 [ -f $D/dirs.txt ] || { echo "no $D/dirs.txt: run tdi/dft_check.py prep-probe / prep-fep first"; exit 2; }
 module load ${VASP_MODULE:-vasp/6.5.1-intel-oneapi-mpi/oneapi-2024.2.1} || { echo "module load failed: set VASP_MODULE (module avail vasp)"; exit 2; }

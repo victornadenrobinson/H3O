@@ -16,7 +16,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --array=0-59%6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 ARRAY_KEEP="PS"; . mlp_pipeline/array_env.sh
 mapfile -t BASES < <(python3 mlp_pipeline/tdi/endmember_list.py runs/tdi)
 I=${SLURM_ARRAY_TASK_ID:-0}; [ "$I" -lt "${#BASES[@]}" ] || { echo "task $I: only ${#BASES[@]} end-member runs: nothing to do"; exit 0; }

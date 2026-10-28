@@ -16,7 +16,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --array=0-83%8
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 . mlp_pipeline/array_env.sh   # drop run knobs exported by the submitting shell (they would apply to every task)
 PLIST=(${PLIST:-300 400 500 600}); TLIST=(${TLIST:-4000 5000 6000}); COMPS=(2 2.25 2.5 3 4 5 H)
 I=${SLURM_ARRAY_TASK_ID:-0}; NC=${#COMPS[@]}; C=${COMPS[$((I % NC))]}; T=${TLIST[$(( (I / NC) % ${#TLIST[@]} ))]}; P=${PLIST[$(( I / (NC * ${#TLIST[@]}) ))]}

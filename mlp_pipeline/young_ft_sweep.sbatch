@@ -27,7 +27,7 @@
 #SBATCH --array=0-1
 #SBATCH --output=runs/grace/slurm_%x_%A_%a.out
 
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 PY=$HOME/grace-venv/bin/python
 EPOCHS=${EPOCHS:-21}
 BATCH=2

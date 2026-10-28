@@ -18,7 +18,7 @@
 #SBATCH --time=06:00:00
 #SBATCH --array=0-20%6
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 HLIST=(${HLIST:-2.1 2.25 2.5}); PLIST=(${PLIST:-100 200 300 400 500 600 700}); TLIST=(${TLIST:-3000 4000 5000 6000 7000 8000 9000 10000 11000})
 I=${SLURM_ARRAY_TASK_ID:-0}; H=${HLIST[$((I % ${#HLIST[@]}))]}; P=${PLIST[$((I / ${#HLIST[@]}))]}

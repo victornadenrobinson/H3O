@@ -20,7 +20,7 @@
 #SBATCH --time=02:30:00
 #SBATCH --array=0-32
 #SBATCH --output=runs/slurm_%x_%A_%a.out
-cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1
+[ -d mlp_pipeline ] || cd "${SLURM_SUBMIT_DIR:-$PWD}" || exit 1   # interactive jobs set SLURM_SUBMIT_DIR to where the job was started (often $HOME): keep a repo-root cwd
 table() { for h in 2 2.25 2.5 2.75 3; do for T in 3000 5000 7000; do echo "fcc solid $T $h"; done; for T in 5000 7000 9000; do echo "fcc liquid $T $h"; done; done; for T in 5000 7000 9000; do echo "H fluid $T 2"; done; }
 if [ -n "$JOBS" ]; then IFS=';' read -ra TABLE <<< "$JOBS"; else mapfile -t TABLE < <(table); fi
 I=${SLURM_ARRAY_TASK_ID:-0}; read -r PH BR T H <<< "${TABLE[$I]}"
