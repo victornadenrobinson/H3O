@@ -51,11 +51,16 @@ def cmd_eos(a):
     """P(V) by short MD at 3 starting volumes, then secant steps on ln P vs ln V until a point is within 1.5% of the target; final vpa from the local power law
     through the 3 points closest to the target (bracketing it)"""
     S = systems(); f = os.path.join(a.out, f"eos_{a.T:.0f}K.json"); out = json.load(open(f)) if os.path.exists(f) else {}
+    sc = (a.P / 450) ** -0.35   # starting volumes are for 450 GPa; V ~ P^(-P/B) with P/B ~ 0.35 near 450 GPa
     guess = {"h2o": [2.05, 2.14, 2.23], "h2.25o": [2.0, 2.09, 2.18], "H": ([1.25, 1.35, 1.45] if os.environ.get("TOYICE_FIT") else [1.6, 1.9, 2.2])}
+    guess = {k: [x * sc for x in v] for k, v in guess.items()}
     for name in (a.systems.split(",") if a.systems else S):
-        build = S[name]; rows = []
+        build = S[name]; rows = []; msd = {}
         def point(v):
-            P, pe, _, _ = md(build(v), a.T, 1.0, 0.25, 1); rows.append((v, P, pe)); print(f"  {name:7s} vpa {v:.4f}: P {P:7.1f} +- {pe:.1f} GPa", flush=True)
+            P, pe, _, (fr, at) = md(build(v), a.T, 1.0, 0.25, 1, frames=True); rows.append((v, P, pe))
+            isO = at.numbers == 8   # O mean-square displacement over 1 ps relative to the O centre of mass (positions are not wrapped; in a superionic crystal the flowing H drags the whole O lattice, several A^2 per ps)
+            dO = fr[-1][isO] - fr[0][isO]; msd[v] = float(((dO - dO.mean(0)) ** 2).sum(-1).mean()) if isO.any() else float("nan")
+            print(f"  {name:7s} vpa {v:.4f}: P {P:7.1f} +- {pe:.1f} GPa" + (f"  O MSD over 1 ps {msd[v]:.3f} A^2" if isO.any() else ""), flush=True)
         for v in guess[name]:
             point(v)
         for _ in range(5):
@@ -68,7 +73,10 @@ def cmd_eos(a):
         v, P = np.array([t[0] for t in r]), np.array([t[1] for t in r]); c = np.polyfit(np.log(v), np.log(P), 1)
         vt = float(np.exp((np.log(a.P) - c[1]) / c[0])); B = float(-c[0] * a.P)
         out[name] = dict(vpa=vt, B_GPa=B, scan=rows)
-        print(f"{name:7s}: vpa at {a.P:g} GPa = {vt:.4f} A^3/atom, B = {B:.0f} GPa", flush=True)
+        m = msd[r[0][0]]   # at the volume closest to the target pressure
+        if np.isfinite(m):   # crystal: solid O (vibration only, ~0.1 A^2 at 3000-6000 K, 500 GPa) or diffusing O (melted: several A^2 per ps at 5000 K); a small perfect cell can superheat, so "solid" is an upper bound on the melting T
+            out[name].update(msd_O_1ps=m, solid=bool(m < 0.5))
+        print(f"{name:7s}: vpa at {a.P:g} GPa = {vt:.4f} A^3/atom, B = {B:.0f} GPa" + (f", O MSD over 1 ps {m:.3f} A^2: {'solid' if m < 0.5 else 'MELTED (O diffuses)'}" if np.isfinite(m) else ""), flush=True)
     os.makedirs(a.out, exist_ok=True)
     json.dump(dict(out, T=a.T, P=a.P), open(f, "w"), indent=1); print("wrote", f)
 
