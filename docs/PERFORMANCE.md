@@ -143,3 +143,22 @@ fluctuates, so the shapes change, recompile and keep their buffers. The 1.67x of
 through one calculator, which penalised the segment_sum side. **Decision: keep the default segment_sum engine; GRACE_MODE stays an opt-in switch, not recommended.**
 
 **Not done (decided 2026-10-28):** Verlet neighbour list with a skin and the numpy data path for the per-lambda engine. It would only speed up single-process phases (stage 0, prep, the tail of a run; roughly 160 -> 100 ms per call), about 5-15% of a job, because with 8 processes the CPU work is already hidden behind the saturated GPU.
+
+## How many lambda processes per GPU (bench_tdi.sh, 2026-10-28, A100 40 GB, GRACE ft_m2, segment_sum engine)
+
+Total MD steps/s (ms per step of each process); GPU memory with time-slicing:
+
+| processes | insH 251 atoms (2 calls/step) | insH with MPS | pure H 250 (1 call/step) | GPU memory, insH (MiB) |
+|---|---|---|---|---|
+| 1 | 3.25 (307) | 3.26 (307) | 6.59 (152) | 4569 |
+| 2 | 6.63 (302) | 6.60 (303) | - | 9139 |
+| 3 | 8.93 (336) | 7.54 (398) | - | 13702 |
+| 4 | **11.48** (348) | 8.98 (445) | **22.66** (177) | 18268 |
+| 6 | 10.59 (567) | 10.89 (551) | - | 27405 |
+| 8 | 10.85 (737) | 11.89 (673) | 22.02 (363) | 36534 |
+
+- **The GPU is saturated at 4 processes**: about 23 GRACE calls/s for 250 atoms (43 ms per call) for both systems. Up to 4 processes each runs at
+  single-process speed. More processes only slice the same GPU time thinner, and need more memory (4.6 GB each; the 9th and 10th died of out of memory before).
+- **Recommendation: NPAR=4** (the launcher's default). Same total speed as 8, half the GPU memory, no out-of-memory retries. MPS gives nothing at 4 (it was slower at 3-4)
+  and +10% only at 8. Two jobs on one GPU cannot run faster in total than one job with NPAR=4.
+- tdi/eta.py's tail model now uses this table.

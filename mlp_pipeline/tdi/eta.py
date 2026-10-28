@@ -2,7 +2,7 @@
 run_real.py rewrites every 30 s (steps done, total, recent speed) and, for lambda values without one, the saved series (<tag>_node<k>.npy) or nothing (0 steps done).
   ETA = remaining MD steps of every lambda value of the job / measured total throughput (steps/s summed over the lambda values that are running now).
 Per-lambda engine (--npar N): slots are refilled from the waiting lambda values; when fewer than N processes are left at the end, each runs faster (time-slicing,
-measured on an A100 with 251 atoms: 1 process 160, 2: 360, 8: 750 ms/step, CURRENT_ISSUES 2c), simulated with that table scaled to the speed measured now.
+bench_tdi.sh on an A100, 251-atom insertion: 1-4 processes 300-350 ms/step, 6: 570, 8: 740; docs/PERFORMANCE.md), simulated with that table scaled to the speed measured now.
 Batched engine (--batch): all lambda values advance in lock step, so the job ends when the one with most steps left is done.
 usage:  python3 mlp_pipeline/tdi/eta.py runs/tdi <tag> [--only "0 3 5"] [--npar 8 | --batch] [--per-lambda]       (numpy only; young_tdi_par.sh prints it every 30 s)
 """
@@ -46,7 +46,7 @@ def job_progress(d, tag, only=None):
     return rows
 
 
-TAB = [(1, 0.16), (2, 0.36), (8, 0.75)]   # s/step per process vs processes sharing one A100 (time-slicing, 251 atoms)
+TAB = [(1, 0.307), (2, 0.302), (3, 0.336), (4, 0.348), (6, 0.567), (8, 0.737)]   # s/step per process vs processes sharing one A100 (time-slicing, insH 251 atoms, bench 2026-10-28)
 
 
 def s_per_step(c):
