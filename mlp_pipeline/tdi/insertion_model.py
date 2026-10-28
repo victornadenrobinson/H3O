@@ -63,7 +63,11 @@ for (P, T), g in ins.groupby(["P_target_GPa", "T_K"]):
                 mu[i] += -st["V"] / (2 * B) * ((ph[i] - P) ** 2 - (P_host - P) ** 2) / EV_A3_GPA / n[i] * 1e3
             flag = "approx P corr"
         else:
-            flag = "NO P corr"
+            fin = np.isfinite(corr)
+            if fin.any():   # mixed group: never fit corrected and uncorrected rows together; remove the correction from the rows that have it
+                mu[fin] -= corr[fin]; flag = "NO P corr (mixed rows: all on the uncorrected basis)"
+            else:
+                flag = "NO P corr"
     dg = mu - h.G_meV_atom; e = np.hypot(err, h.G_err_meV_atom)
     if len(n) >= 2:
         w = 1 / e ** 2; X = np.vstack([np.ones_like(n), n]).T; C = np.linalg.inv(X.T @ (X * w[:, None])); b = C @ X.T @ (w * dg)

@@ -109,8 +109,9 @@ for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = best(hh, m.dt_fs)
-        solid.append(dict(kind="insert_bcc" if "_bcc" in m.tag else "insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
-solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "a", "n", "dG", "err", "caveat", "tags"])
+        solid.append(dict(kind="insert_bcc" if "_bcc" in m.tag else "insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom,
+                          pcorr=float(m.get("P_corr_meV", np.nan)), err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
+solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "a", "n", "dG", "err", "caveat", "tags", "pcorr"])
 if len(solid) and (solid.dG.abs() > 1500).any():
     print("mixing/insertion rows with |dG| > 1500 meV per H (off scale in the figure; check their input runs):"); print(solid[solid.dG.abs() > 1500][["kind", "P", "T", "n", "dG", "tags"]].round(0).to_string(index=False))
 
@@ -242,11 +243,15 @@ if len(ins):
     Ps = sorted(ins.P.unique()); fig, axs = plt.subplots(1, len(Ps), figsize=(4.6 * len(Ps), 4.4), sharey=True, squeeze=False); out = []
     for ax, P in zip(axs[0], Ps):
         for T in sorted(ins[ins.P == P]["T"].unique()):
-            g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n"); c = Tcol(T)
+            g = ins[(ins.P == P) & (ins["T"] == T)].sort_values("n").copy(); c = Tcol(T); pc = g["pcorr"].values if "pcorr" in g else np.full(len(g), np.nan)
+            mixed = np.isfinite(pc).any() and not np.isfinite(pc).all()
+            if mixed:   # never fit pressure-corrected and uncorrected rows together: put all on the uncorrected basis
+                g["dG"] = g.dG.values - np.nan_to_num(pc)
             ax.errorbar(g.n, g.dG, g.err, fmt="o-", color=c, ms=5, capsize=2, lw=1.0, label=f"{T:.0f} K")
             if len(g) >= 2:
                 w = 1 / np.maximum(g.err.values, 1e-6) ** 2; A = np.vstack([np.ones(len(g)), g.n.values]).T; cov = np.linalg.inv(A.T @ (A * w[:, None])); b = cov @ (A.T @ (w * g.dG.values))
-                ax.plot([0, g.n.max()], [b[0], b[0] + b[1] * g.n.max()], "--", color=c, lw=.7); out.append(f"{P:.0f} GPa {T:.0f} K: n->0 {b[0]:7.0f} +- {cov[0, 0] ** .5:4.0f} meV, slope {b[1]:5.0f} meV/H")
+                ax.plot([0, g.n.max()], [b[0], b[0] + b[1] * g.n.max()], "--", color=c, lw=.7); out.append(f"{P:.0f} GPa {T:.0f} K: n->0 {b[0]:7.0f} +- {cov[0, 0] ** .5:4.0f} meV, slope {b[1]:5.0f} meV/H"
+                                                                                             + ("   (mixed P correction: all rows on the uncorrected basis)" if mixed else "   (P-corrected)" if np.isfinite(pc).all() else ""))
         ax.axhline(0, color="k", lw=.6); ax.set_xlabel("inserted H n (fixed V, 108 O host)"); ax.set_title(f"{P:.0f} GPa", fontsize=9); ax.grid(alpha=.25); ax.legend(fontsize=6); ax.set_xlim(0, None)
     axs[0][0].set_ylabel("mu_H(insertion) - G_H(pure) (meV per H)"); Tbar(fig, list(axs[0]))
     fig.suptitle("Insertion vs n per pressure: dashed = weighted linear fit to n->0; the slope contains the fixed-V pressure rise of the cell (before the stage-0 correction)", fontsize=8); figs["insert_n"] = fig
