@@ -135,3 +135,9 @@ GRACE run before using it in production.
 `bench.py dense insH`: dense engine ACTIVE (ft_m2 already has `compute_dense`, no re-export needed). Single process, alternating 251 / 250-atom structures:
 segment_sum 303 ms per call, dense 181 ms per call = **1.67x**. Differences dense vs segment_sum: max 5.6e-8 eV/atom, 2.3e-6 eV/A, 1.5e-7 eV/A^3 (float32 GPU
 round-off, the same level as two segment_sum runs). Next: throughput with 8 processes (`GRACE_MODE=uniform ... bench_tdi.sh`), then a side-by-side G check.
+
+**Throughput with the dense engine in the real lambda engine (2026-10-28 19:53, `GRACE_MODE=uniform bench_tdi.sh`, insH): NO gain, MORE memory.** 1 process: 336 ms/step
+(segment_sum 307), 2.98 steps/s; 236 s to warm up (many XLA compiles); 6.6 GB per process (segment_sum 4.6). 8 processes: one died of GPU out of memory (allocating
+2.2 GB), the other 7 gave 9.5 steps/s (segment_sum 10.85 with 8). The dense layout pads every atom to the largest neighbour count. In the H fluid that count
+fluctuates, so the shapes change, recompile and keep their buffers. The 1.67x of `bench.py dense` was misleading: that test alternates 250- and 251-atom structures
+through one calculator, which penalised the segment_sum side. **Decision: keep the default segment_sum engine; GRACE_MODE stays an opt-in switch, not recommended.**
