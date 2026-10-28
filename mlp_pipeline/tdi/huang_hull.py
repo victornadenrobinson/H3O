@@ -1,6 +1,7 @@
 """Huang-style formation free energy of H(2+n)O from H2O + n H(fluid), per atom, vs X = n / (n + 1) (Huang et al.: X = N_H / (N_H + N_H2O), H3O at X = 0.5),
-for the superionic fcc solid solution at finite T from our GRACE TDI: regular-solution form from insertion (mu_H - G_H = mu0 + s n, n = added H per O):
-   dG(n) per formula unit = mu0 n + s n^2 / 2,  per atom / (3 + n);  minimum at n* = -mu0 / s (the solubility), dG(n*) = -mu0^2 / (2 s).
+for the superionic fcc solid solution at finite T from our GRACE TDI: regular-solution form from insertion (AVERAGE dG per added H = mu0 + s n, n = added H per O;
+   insertion of n H and the direct crystals both measure averages): dG(n) per formula unit = mu0 n + s n^2, per atom / (3 + n); next-H cost mu0 + 2 s n;
+   minimum at n* = -mu0 / (2 s) (the solubility), dG(n*) = -mu0^2 / (4 s).
 Direct crystal TDI points (H2.25O, H2.5O; summarize mixing rows, melted / mismatched ones left out) per atom = n * (average per added H) / (3 + n).
 Compared with Huang's DFT enthalpy of the ordered H3O phase INCLUDING zero-point energy (their figure, read off; our numbers are classical, no ZPE). Different objects: theirs is an ordered crystal at 0 K, ours a
 disordered superionic solution at 4000-7000 K (G, including entropy); an ordered H3O phase below our curve would be the stable one.
@@ -32,10 +33,10 @@ def main():
     n = np.linspace(0, 1.0, 200); X = n / (n + 1)
     for axi, P in zip(ax[:3], (400, 500, 600)):
         for r in [r for r in fit if r["P_GPa"] == P]:
-            g = (r["mu0"] * n + r["s"] * n ** 2 / 2) / (3 + n); c = col(r["T_K"]); sol = n <= 0.5
+            g = (r["mu0"] * n + r["s"] * n ** 2) / (3 + n); c = col(r["T_K"]); sol = n <= 0.5
             axi.plot(X[sol], g[sol], "-", color=c, lw=2, label=f"{r['T_K']:.0f} K (insertion, regular solution)")
             axi.plot(X[~sol], g[~sol], ":", color=c, lw=1.5)
-            ns = -r["mu0"] / r["s"]; axi.plot(ns / (ns + 1), -r["mu0"] ** 2 / (2 * r["s"]) / (3 + ns), "o", color=c, mec="k", ms=7)
+            ns = -r["mu0"] / (2 * r["s"]); axi.plot(ns / (ns + 1), -r["mu0"] ** 2 / (4 * r["s"]) / (3 + ns), "o", color=c, mec="k", ms=7)
         for (p, T, nn, d, e) in CRYSTAL:
             if p == P:
                 axi.errorbar(nn / (nn + 1), nn * d / (3 + nn), nn * e / (3 + nn), fmt="s", color=col(T), mec="k", ms=6, capsize=2)
@@ -50,7 +51,7 @@ def main():
     ax[0].set_ylabel("formation free energy per atom (meV/atom)\nH2O + n H(fluid) -> H(2+n)O")
     b = ax[3]
     for T in sorted({r["T_K"] for r in fit}):
-        s = sorted((r["P_GPa"], -r["mu0"] ** 2 / (2 * r["s"]) / (3 - r["mu0"] / r["s"])) for r in fit if r["T_K"] == T)
+        s = sorted((r["P_GPa"], -r["mu0"] ** 2 / (4 * r["s"]) / (3 - r["mu0"] / (2 * r["s"]))) for r in fit if r["T_K"] == T)
         b.plot(*zip(*s), "o-", color=col(T), label=f"our minimum, {T:.0f} K (superionic solid solution, G)")
     b.plot([x["P_GPa"] for x in hu], [x["dH_meV_atom"] for x in hu], "*-", color="#2a78d6", ms=10, label="Huang: H3O, DFT dH incl. ZPE (0 K)")
     s2 = [x for x in hs if x["P_GPa"] <= 650]; b.plot([x["P_GPa"] for x in s2], [x["dH_meV_atom"] for x in s2], "*--", color="#2a78d6", mfc="white", ms=10, label="Huang SI: static (no ZPE)")
@@ -59,7 +60,7 @@ def main():
                  "squares: direct crystal TDI (H2.25O, H2.5O). Huang: ordered H3O at 0 K WITH zero-point energy (ours: classical nuclei) - a different object.", fontsize=8)
     fig.tight_layout(rect=(0, 0, 1, 0.94)); fig.savefig(a.o, dpi=130); print("wrote", a.o)
     for r in fit:
-        ns = -r["mu0"] / r["s"]; print(f"{r['P_GPa']:.0f} GPa {r['T_K']:.0f} K: solubility n* = {ns:.3f} H per O (H{2 + ns:.2f}O, X = {ns / (1 + ns):.3f}), minimum {-r['mu0'] ** 2 / (2 * r['s']) / (3 + ns):6.1f} meV/atom")
+        ns = -r["mu0"] / (2 * r["s"]); print(f"{r['P_GPa']:.0f} GPa {r['T_K']:.0f} K: solubility n* = {ns:.3f} H per O (H{2 + ns:.2f}O, X = {ns / (1 + ns):.3f}), minimum {-r['mu0'] ** 2 / (4 * r['s']) / (3 + ns):6.1f} meV/atom")
 
 
 if __name__ == "__main__":

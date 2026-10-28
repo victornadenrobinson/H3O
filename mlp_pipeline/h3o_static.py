@@ -9,7 +9,8 @@ difference H(P) - H(450 GPa) per cell next to the user's CASTEP values (docs/dat
 the DFT equation of state of H3O (dH/dP = V), whatever the absolute energy reference.
 Caveat: the MLP was trained on hot superionic / fluid configurations, not on cold molecular or atomic H solids: the H reference is the weak link.
 These are STATIC enthalpies (no zero-point energy); Huang's published dH(P) curve includes ZPE, so compare with a static DFT calculation of the same references.
-usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static]
+usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static] [--variants 3 2.5] [--redo]
+   batch job: sbatch mlp_pipeline/young_h3o_static.sbatch   (finished pressures in <o>/P<P> are reused)
 """
 import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes share one GPU: without this the first takes nearly all of its memory
 import argparse, csv, os, sys, warnings
@@ -109,7 +110,9 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda")
     ap.add_argument("--P", type=float, nargs="+", default=[300, 400, 450, 500, 600, 700, 800]); ap.add_argument("--cell", default="docs/data/h3o_huang.cell")
     ap.add_argument("--steps", type=int, default=2000); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static")
-    ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)"); a = ap.parse_args()
+    ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)")
+    ap.add_argument("--variants", type=float, nargs="+", default=[3, 2.75, 2.5, 2.25], help="H per O of the H3O-derived variants to relax (e.g. --variants 3 to skip the partly filled ones)")
+    ap.add_argument("--redo", action="store_true", help="parallel mode: rerun pressures whose <o>/P<P>/h3o_static.csv exists (default: reuse them)"); a = ap.parse_args()
     if a.parallel > 1 and len(a.P) > 1:
         return run_parallel(a)
     from importlib import import_module
@@ -120,7 +123,9 @@ def main():
     variants = {}
     for k in (0, 2, 4, 6):   # remove k guest pairs, spread over the list
         rm = sorted({i for p in pairs[::max(1, len(pairs) // k)][:k] for i in p}) if k else []
-        v = h3o.copy(); del v[rm]; n = (int((v.numbers == 1).sum()) - 2 * nO) / nO; variants[n] = v
+        v = h3o.copy(); del v[rm]; n = (int((v.numbers == 1).sum()) - 2 * nO) / nO
+        if any(abs(2 + n - h) < 1e-6 for h in a.variants): variants[n] = v
+    print(f"variants: " + ", ".join(f"H{2 + n:.3g}O" for n in sorted(variants)) + f" (--variants {' '.join(f'{h:g}' for h in a.variants)})", flush=True)
     rows = []; PROG["total"] = len(a.P) * (1 + len(h_candidates()) + len(variants))
     print(f"plan: {len(a.P)} pressures x ({1 + len(h_candidates())} references + {len(variants)} H3O variants) = {PROG['total']} relaxations", flush=True)
     for P in a.P:
@@ -167,13 +172,16 @@ def eos_table(rows, out):
 def run_parallel(a):
     """one child process per pressure (output <o>/P<P>), at most a.parallel at once; their lines are streamed with a [P GPa] prefix; results merged at the end"""
     import subprocess, threading, time
-    base = [sys.executable, "-u", os.path.abspath(__file__), "--model", a.model, "--device", a.device, "--cell", a.cell, "--steps", str(a.steps), "--fmax", str(a.fmax)]
+    base = [sys.executable, "-u", os.path.abspath(__file__), "--model", a.model, "--device", a.device, "--cell", a.cell, "--steps", str(a.steps), "--fmax", str(a.fmax),
+            "--variants"] + [f"{h:g}" for h in a.variants]
     quiet = ("tensorflow", "xla", "cuda", "I0000", "W0000", "E0000", "ptxas", "absl", "cpu_feature", "AVX2", "Registers are spilled", "XLA service", "StreamExecutor", "rebuild TensorFlow")
     def pump(proc, tag):
         for line in proc.stdout:
             err = any(k in line for k in ("Error", "error:", "Traceback", "OOM", "out of memory", "Exhausted")) and "_handle_getgr" not in line   # never hide the reason of a crash
             if line.strip() and (err or not any(q.lower() in line.lower() for q in quiet)): print(f"[{tag:>4s} GPa] {line.rstrip()}", flush=True)
-    todo = list(a.P); running = []; t0 = time.time()
+    done = [P for P in a.P if not a.redo and os.path.exists(os.path.join(a.o, f"P{P:.0f}", "h3o_static.csv"))]
+    if done: print("reusing finished pressures (--redo to rerun): " + ", ".join(f"{P:.0f} GPa" for P in done), flush=True)
+    todo = [P for P in a.P if P not in done]; running = []; t0 = time.time()
     print(f"parallel: {len(todo)} pressures, at most {a.parallel} processes on the GPU at once", flush=True)
     while todo or running:
         while todo and len(running) < a.parallel:
