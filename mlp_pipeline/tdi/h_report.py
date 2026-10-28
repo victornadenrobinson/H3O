@@ -112,8 +112,9 @@ def plot(a):
     col = {P: ramp[min(len(ramp) - 1, int(i * (len(ramp) - 1) / max(1, len(Ps) - 1)))] for i, P in enumerate(Ps)}
     figs = {}
     best = {}
-    for r in R:   # one row per (model, P, T): the longest-run / smallest error
+    for r in R:   # one row per (model, P, T): the longest-run / smallest error; collapsed runs (protons fused, tdi/collapse.py) are never used
         k = (r["model"], r["P_GPa"], r["T_K"])
+        if r["r_min"] < 0.25: continue
         if np.isfinite(r["G_meV_atom"]) and (k not in best or r["G_err_meV_atom"] < best[k]["G_err_meV_atom"]): best[k] = r
     G = [v for v in best.values() if v["model"] == "GRACE"]
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.4))
@@ -144,9 +145,11 @@ def plot(a):
         fig, axs = plt.subplots(1, len(Pg), figsize=(max(7.5, 3.6 * len(Pg)), 3.8), sharey=True, squeeze=False)
         Tall = sorted({t[2] for t in tags}); cmap = plt.get_cmap("plasma")
         for ax, P in zip(axs[0], Pg):
+            coll = {r["tag"] for r in R if r["r_min"] < 0.25}
             for m, _, T, tag in [t for t in tags if t[0] == "GRACE" and t[1] == P]:
                 rr = [(float(x["r_A"]), float(x["g"])) for x in GR if x["tag"] == tag and x["model"] == m]
-                r_, g_ = zip(*rr); ax.plot(r_, g_, color=cmap((T - min(Tall)) / max(1, max(Tall) - min(Tall)) * 0.85), lw=1.5, label=f"{T:.0f} K")
+                r_, g_ = zip(*rr); ax.plot(r_, g_, color=cmap((T - min(Tall)) / max(1, max(Tall) - min(Tall)) * 0.85), lw=1.5, ls=":" if tag in coll else "-",
+                                           label=f"{T:.0f} K" + (" COLLAPSED" if tag in coll else ""))
             ax.axvline(0.74, color=MUTED, ls=":", lw=1); ax.text(0.76, 0.1, "H2 bond", fontsize=7, color=MUTED)
             ax.set(xlabel="r (A)", xlim=(0.4, 3), title=f"{P:.0f} GPa"); ax.legend(fontsize=6.5)
         axs[0][0].set_ylabel("g_HH(r), highest lambda value"); fig.suptitle("H-H pair distribution (GRACE): a molecular fluid has a sharp peak at 0.74 A", fontsize=9); fig.tight_layout(); figs["gr"] = fig
@@ -167,10 +170,10 @@ def plot(a):
         lines = ["Every dg = mu_H(ice) - G_H and every hull point uses G_H of these runs: an error in G_H shifts all of them by the same amount.",
                  "Questions: (1) is the fluid atomic at our (P, T), i.e. beyond the molecular -> atomic transition (DFT-PBE: ~150 GPa near 2000 K, below ~1000 K by 300 GPa)?",
                  "(2) is G_H(P, T) smooth and thermodynamically consistent (dG/dP = V)? A crossing of the transition would show as molecules (g(r) peak at 0.74 A,",
-                 "persistent pairs) and as a bump in S = -dG/dT.", "", "Runs (model, P, T, N, G_H meV/atom, molecular pair fraction, persistence over 40 fs):"]
+                 "persistent pairs) and as a bump in S = -dG/dT. Runs with two protons fused (min d(H-H) < 0.25 A: an MLP hole) are listed but not used.", "", "Runs (model, P, T, N, G_H meV/atom, molecular pair fraction, persistence over 40 fs):"]
         for r in sorted(R, key=lambda r: (r["model"], r["P_GPa"], r["T_K"])):
             lines.append(f"   {r['model']:5s} {r['P_GPa']:5.0f} GPa {r['T_K']:5.0f} K  N {r['N']:4.0f}  G {r['G_meV_atom']:9.1f} +- {r['G_err_meV_atom']:5.1f}  "
-                         f"f_pair {r['f_pair']:.3f}  persist {r['persist_2']:.2f}  g(r) peak {r['r_peak']:.2f} A")
+                         f"f_pair {r['f_pair']:.3f}  persist {r['persist_2']:.2f}  g(r) peak {r['r_peak']:.2f} A  min d {r['r_min']:.2f} A" + ("  COLLAPSED: not used" if r["r_min"] < 0.25 else ""))
         for i, l in enumerate(lines[:60]): fig.text(0.06, 0.87 - 0.0135 * i, l, fontsize=7.5, family="monospace" if l.startswith("   ") else None, color=INK2)
         pdf.savefig(fig); plt.close(fig)
         for n, f in figs.items():
