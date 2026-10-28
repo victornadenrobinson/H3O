@@ -37,12 +37,13 @@ trap 'mps_off; rm -rf $TMPB' EXIT
 gpumem() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc 0-9; }
 engine() {   # $1 system, $2 number of processes, $3 mps 0/1: start them, release the timed part together once every process is warmed up
   local s=$1 n=$2 m=$3 i mem=0 B=$TMPB/go_$1_$2_$3; rm -f $B
+  echo "   ... engine $s, $n process(es)$([ $m = 1 ] && echo ' with MPS'): loading the model, then $STEPS timed steps $(date +%H:%M:%S)"
   for i in $(seq $n); do $PY -u mlp_pipeline/tdi/bench.py engine $s --steps $STEPS --barrier $B > $TMPB/e_${s}_${n}_${m}_$i.log 2>&1 & done
   local t0=$(date +%s)
   while [ $(cat $TMPB/e_${s}_${n}_${m}_*.log 2>/dev/null | grep -c "^READY") -lt $n ]; do
     sleep 2; [ $(jobs -r | wc -l) -lt $n ] && break; [ $(( $(date +%s) - t0 )) -gt 900 ] && break
   done
-  touch $B; sleep 20; mem=$(gpumem); wait
+  touch $B; echo "   ... all warmed up after $(( $(date +%s) - t0 )) s, timing $(date +%H:%M:%S)"; sleep 20; mem=$(gpumem); wait
   grep -h "^RESULT" $TMPB/e_${s}_${n}_${m}_*.log | sed 's/^RESULT //' >> $RES
   local nres=$(grep -h "^RESULT" $TMPB/e_${s}_${n}_${m}_*.log | wc -l)
   [ $nres -lt $n ] && { echo "   WARNING: only $nres of $n processes finished (tail of a failed log:)"; for f in $TMPB/e_${s}_${n}_${m}_*.log; do grep -q "^RESULT" $f || { tail -n 3 $f; break; }; done; }
@@ -63,6 +64,7 @@ for s in $SYSTEMS; do
   esac
   case " $PARTS " in *" batch "*)
     for r in $NREPS; do
+      echo "   ... batched engine $s, $r lambda values in one process (self-check, compile, then $STEPS timed steps) $(date +%H:%M:%S)"
       $PY -u mlp_pipeline/tdi/bench.py batch $s --nrep $r --steps $STEPS ${BATCHMAX:+--max-atoms $BATCHMAX} > $TMPB/b_${s}_$r.log 2>&1
       grep -h "^RESULT" $TMPB/b_${s}_$r.log | sed 's/^RESULT //' >> $RES
       grep -h "^RESULT" $TMPB/b_${s}_$r.log | sed 's/^RESULT //' | python3 -c "
@@ -73,6 +75,7 @@ for l in sys.stdin:
     done;;
   esac
   case " $PARTS " in *" calls "*)
+    echo "   ... model calls $s: B = $SIZES structures, batched vs single $(date +%H:%M:%S)"
     $PY -u mlp_pipeline/tdi/bench.py calls $s --sizes $SIZES ${BATCHMAX:+--max-atoms $BATCHMAX} > $TMPB/c_$s.log 2>&1
     grep -h "self-check" $TMPB/c_$s.log | sed 's/^/   /'
     grep -h "^RESULT" $TMPB/c_$s.log | sed 's/^RESULT //' >> $RES
