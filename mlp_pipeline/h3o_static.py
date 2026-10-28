@@ -10,6 +10,7 @@ the DFT equation of state of H3O (dH/dP = V), whatever the absolute energy refer
 Caveat: the MLP was trained on hot superionic / fluid configurations, not on cold molecular or atomic H solids: the H reference is the weak link.
 These are STATIC enthalpies (no zero-point energy); Huang's published dH(P) curve includes ZPE, so compare with a static DFT calculation of the same references.
 usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static] [--variants 3 2.5] [--redo]
+   tables from the pressures finished so far (no GPU needed):  python mlp_pipeline/h3o_static.py --table
    batch job: sbatch mlp_pipeline/young_h3o_static.sbatch   (finished pressures in <o>/P<P> are reused)
 """
 import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes share one GPU: without this the first takes nearly all of its memory
@@ -112,8 +113,9 @@ def main():
     ap.add_argument("--steps", type=int, default=2000); ap.add_argument("--fmax", type=float, default=0.01); ap.add_argument("-o", default="runs/h3o_static")
     ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)")
     ap.add_argument("--variants", type=float, nargs="+", default=[3, 2.75, 2.5, 2.25], help="H per O of the H3O-derived variants to relax (e.g. --variants 3 to skip the partly filled ones)")
+    ap.add_argument("--table", action="store_true", help="no relaxations: merge the finished <o>/P<P>/h3o_static.csv files and print the dH tables (works while other pressures still run)")
     ap.add_argument("--redo", action="store_true", help="parallel mode: rerun pressures whose <o>/P<P>/h3o_static.csv exists (default: reuse them)"); a = ap.parse_args()
-    if a.parallel > 1 and len(a.P) > 1:
+    if a.table or (a.parallel > 1 and len(a.P) > 1):
         return run_parallel(a)
     from importlib import import_module
     calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
@@ -181,8 +183,9 @@ def run_parallel(a):
             if line.strip() and (err or not any(q.lower() in line.lower() for q in quiet)): print(f"[{tag:>4s} GPa] {line.rstrip()}", flush=True)
     done = [P for P in a.P if not a.redo and os.path.exists(os.path.join(a.o, f"P{P:.0f}", "h3o_static.csv"))]
     if done: print("reusing finished pressures (--redo to rerun): " + ", ".join(f"{P:.0f} GPa" for P in done), flush=True)
-    todo = [P for P in a.P if P not in done]; running = []; t0 = time.time()
-    print(f"parallel: {len(todo)} pressures, at most {a.parallel} processes on the GPU at once", flush=True)
+    todo = [] if a.table else [P for P in a.P if P not in done]; running = []; t0 = time.time()
+    if a.table: print("not finished yet: " + (", ".join(f"{P:.0f} GPa" for P in a.P if P not in done) or "none"), flush=True)
+    if todo: print(f"parallel: {len(todo)} pressures, at most {a.parallel} processes on the GPU at once", flush=True)
     while todo or running:
         while todo and len(running) < a.parallel:
             P = todo.pop(0); out = os.path.join(a.o, f"P{P:.0f}")
