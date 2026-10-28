@@ -283,7 +283,7 @@ if len(prep):
     fig, ax = plt.subplots(figsize=(max(6, 0.45 * len(prep) + 2), 4.2)); g = prep.sort_values(["control", "h", "P", "T"]).reset_index(drop=True)
     for k, r in g.iterrows():
         ax.errorbar(k, r.dG, r.err, fmt="o" if not r.control else "s", color="tab:red" if not r.control else "gray", mfc="none" if r.caveat else None, capsize=2)
-    ax.set_xticks(range(len(g))); ax.set_xticklabels([f"{r.P:.0f}/{r.T:.0f}\nH{r.h:g}O" for _, r in g.iterrows()], fontsize=6, rotation=90); ax.axhline(0, color="k", lw=.6); ax.grid(alpha=.25)
+    ax.set_xticks(range(len(g))); ax.set_xticklabels([f"{r.P:.0f}/{r['T']:.0f}\nH{r.h:g}O" for _, r in g.iterrows()], fontsize=6, rotation=90); ax.axhline(0, color="k", lw=.6); ax.grid(alpha=.25)
     ax.set_ylabel("G(prep run) - G(cold start) (meV/atom)"); ax.set_title("Start-configuration protocol (hold O, thermalise H, release O) vs cold start, P(GPa)/T(K). Grey squares: H2O control (no protocol in either: tests longer run / grid)", fontsize=7); figs["prep"] = fig
 
 # 6b melting line in P-T space: TDI G_liquid - G_fcc sign changes (+ free-NVT verdicts of H2O crystals where runs/melt* exist)
