@@ -105,6 +105,15 @@ def md_frames(model, at0, a, seed, label):
     return np.array(pos), np.array(P)
 
 
+def o_msd(pos, numbers):
+    """O mean-square displacement (A^2) from the first frame, relative to the O centre of mass (the flowing H drags the whole O lattice), in 10 time slices; nan without O"""
+    o = numbers == 8
+    if not o.any():
+        return []
+    d = pos[:, o] - pos[0, o]; d -= d.mean(1, keepdims=True); m = (d ** 2).sum(-1).mean(1)
+    return [float(x) for x in m[np.linspace(0, len(m) - 1, 10).astype(int)]]
+
+
 def blocks(x, nb=5):
     return np.array_split(np.asarray(x), nb)
 
@@ -152,6 +161,11 @@ def cmd_run(a):
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
         np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers)
         print("wrote", ff, flush=True)
+    msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
+    melted = any(m and m[-1] > 1.0 for m in msd.values())   # solid O: < ~0.3 A^2 at 3000-6000 K; a melted crystal diffuses several A^2 per ps
+    if msd["host"]:
+        print(f"O MSD (A^2, relative to the O centre of mass) over the host run: {' '.join(f'{x:.2f}' for x in msd['host'])}; host + 1 H: {' '.join(f'{x:.2f}' for x in msd['full'])}"
+              + ("  MELTED: the O lattice diffuses, this is not the crystal (results are written but flagged)" if melted else "  (solid)"), flush=True)
     if a.frames_only:
         return
     p = proxy_params(a.proxy); K = 1 if p is None else a.K; t0 = time.time()
@@ -203,6 +217,7 @@ def cmd_run(a):
              mu_ex_widom_meV=mu_w * 1e3, mu_ex_widom_err_meV=ew * 1e3, mu_ex_delete_meV=mu_d * 1e3, mu_ex_delete_err_meV=ed * 1e3, mu_ex_bar_meV=mu_b * 1e3, mu_ex_bar_err_meV=eb * 1e3,
              proxy_gap_std_kT_ins=float(np.std(gap_ins) / kT), proxy_gap_std_kT_del=float(np.std(gap_del) / kT), kish_frac_ins=kish,
              ideal_meV=ideal * 1e3, P_host_GPa=ph, P_host_err_GPa=eph, P_full_GPa=pf, P_full_err_GPa=epf, B_GPa=B, dG_P_meV=dGP * 1e3, dG_P_err_meV=dGPe * 1e3,
+             msd_O_host=msd["host"], msd_O_full=msd["full"], melted=melted,
              mu_fixedV_meV=(mu_b + ideal) * 1e3, mu_P_meV=(mu_b + ideal + dGP) * 1e3, mu_P_err_meV=float(np.hypot(eb, dGPe)) * 1e3)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
@@ -219,6 +234,8 @@ def cmd_dg(a):
     w, h = (json.load(open(f)) for f in (a.ice, a.hfluid)); kT = KB * w["T"] * 1e3; N = h["N_H"]
     fs = kT * (log(N + 1) - lgamma(N + 1) / N - 1)
     dg = w["mu_P_meV"] - (h["mu_P_meV"] - fs); e = float(np.hypot(w["mu_P_err_meV"], h["mu_P_err_meV"]))
+    if w.get("melted"):
+        print(f"WARNING: {a.ice}: the crystal MELTED in the free MD (O MSD {w['msd_O_host'][-1]:.2f} / {w['msd_O_full'][-1]:.2f} A^2): dg is not that of the solid")
     print(f"dg = mu_H(ice) - G_H = {dg:.1f} +- {e:.1f} meV at {w['P_target']:g} GPa {w['T']:.0f} K (ice {w['mu_P_meV']:.1f}, pure H {h['mu_P_meV']:.1f}, fs {fs:.1f}; proxies {w['proxy']} / {h['proxy']})")
 
 
