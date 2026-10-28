@@ -141,7 +141,19 @@ def main():
     eos_table(rows, a.o)
 
 
+def huang_table(rows):
+    """GRACE static dH_f(H3O) next to Huang's static (SI Fig. S5A) and ZPE-included (main text) values"""
+    rd = lambda f: {float(r["P_GPa"]): float(r["dH_meV_atom"]) for r in csv.DictReader(l for l in open(f) if not l.startswith("#"))}
+    st, zp = rd("docs/data/huang_h3o_dH_static_SI.csv"), rd("docs/data/huang_h3o_dH.csv")
+    interp = lambda d, P: float(np.interp(P, sorted(d), [d[k] for k in sorted(d)]))
+    print("\nH3O formation dH (meV/atom): MLP static vs Huang static (SI, like for like) and Huang with ZPE (main text)")
+    for r in sorted((r for r in rows if abs(r["H_per_O"] - 3) < 1e-9), key=lambda r: r["P_GPa"]):
+        P = r["P_GPa"]; hs = interp(st, P)
+        print(f"   {P:5.0f} GPa   MLP {r['dH_meV_atom']:7.1f}   Huang static {hs:7.1f}   diff {r['dH_meV_atom'] - hs:7.1f}   Huang incl. ZPE {interp(zp, P):7.1f}   (MLP H ref: {r['H_ref']})")
+
+
 def eos_table(rows, out):
+    huang_table(rows)
     cast = {float(r["P_GPa"]): float(r["H_eV_cell"]) for r in csv.DictReader(l for l in open("docs/data/h3o_castep_enthalpy.csv") if not l.startswith("#"))}
     ml = {r["P_GPa"]: r["H_eV_cell"] for r in rows if abs(r["H_per_O"] - 3) < 1e-9}
     if 450 in cast and 450 in ml:

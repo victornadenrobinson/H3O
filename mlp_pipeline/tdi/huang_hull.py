@@ -26,7 +26,7 @@ def rows(f):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("-o", default="docs/figures/huang_style_hull.png"); a = ap.parse_args()
-    fit = rows("docs/data/insertion_regsol_fit.csv"); hu = rows("docs/data/huang_h3o_dH.csv")
+    fit = rows("docs/data/insertion_regsol_fit.csv"); hu = rows("docs/data/huang_h3o_dH.csv"); hs = rows("docs/data/huang_h3o_dH_static_SI.csv")
     Ts = sorted({r["T_K"] for r in fit} | {c[1] for c in CRYSTAL}); cm = plt.get_cmap("plasma"); col = lambda T: cm(0.05 + 0.8 * (T - 4000) / 3000)
     fig, ax = plt.subplots(1, 4, figsize=(17, 4.6), gridspec_kw=dict(width_ratios=[1, 1, 1, 1.1]))
     n = np.linspace(0, 1.0, 200); X = n / (n + 1)
@@ -41,6 +41,8 @@ def main():
                 axi.errorbar(nn / (nn + 1), nn * d / (3 + nn), nn * e / (3 + nn), fmt="s", color=col(T), mec="k", ms=6, capsize=2)
         h = [x for x in hu if x["P_GPa"] == P]
         if h: axi.plot(0.5, h[0]["dH_meV_atom"], "*", color="#2a78d6", ms=15, mec="k", label="Huang: ordered H3O, DFT dH incl. ZPE (0 K)")
+        h2 = [x for x in hs if x["P_GPa"] == P]
+        if h2: axi.plot(0.5, h2[0]["dH_meV_atom"], "*", color="white", ms=13, mec="#2a78d6", mew=1.5, label="Huang SI: static (no ZPE)")
         axi.axhline(0, color="k", lw=0.8); axi.set(xlim=(0, 0.55), ylim=(-80, 120), xlabel="X = N_H / (N_H + N_H2O)   (H3O at 0.5)", title=f"{P} GPa")
         axi.grid(color=GRID); axi.legend(fontsize=6.5, loc="upper left")
         sec = axi.secondary_xaxis("top", functions=(lambda x: 2 + x / np.maximum(1 - x, 1e-9), lambda h: (h - 2) / (h - 1)))
@@ -51,6 +53,7 @@ def main():
         s = sorted((r["P_GPa"], -r["mu0"] ** 2 / (2 * r["s"]) / (3 - r["mu0"] / r["s"])) for r in fit if r["T_K"] == T)
         b.plot(*zip(*s), "o-", color=col(T), label=f"our minimum, {T:.0f} K (superionic solid solution, G)")
     b.plot([x["P_GPa"] for x in hu], [x["dH_meV_atom"] for x in hu], "*-", color="#2a78d6", ms=10, label="Huang: H3O, DFT dH incl. ZPE (0 K)")
+    s2 = [x for x in hs if x["P_GPa"] <= 650]; b.plot([x["P_GPa"] for x in s2], [x["dH_meV_atom"] for x in s2], "*--", color="#2a78d6", mfc="white", ms=10, label="Huang SI: static (no ZPE)")
     b.axhline(0, color="k", lw=0.8); b.set(xlabel="P (GPa)", ylabel="meV/atom", title="our minimum vs Huang H3O"); b.grid(color=GRID); b.legend(fontsize=6.5)
     fig.suptitle("Huang-style hull at finite T: H2O + n H -> H(2+n)O. Lines: regular-solution form from insertion (solid to H2.5O, dotted beyond: extrapolated); dots: minimum = solubility; "
                  "squares: direct crystal TDI (H2.25O, H2.5O). Huang: ordered H3O at 0 K WITH zero-point energy (ours: classical nuclei) - a different object.", fontsize=8)
