@@ -177,7 +177,12 @@ def free_md_pressure(c, atoms0, seed, label):
     a = c["a"]; t0 = time.time()
     zero = lambda at: (0.0, np.zeros((len(at), 3)))
     r = LambdaRun(atoms0, {"full": c["full"], "E": zero}, 1.0, a.T, np.array([], dtype=int), a.dt, a.tau, seed, a.every, c["steps"](a.equil_ps))
-    r.pfn = mlp_pressure_fn(c["calc"]); r.advance(c["steps"](a.ps1))
+    r.pfn = mlp_pressure_fn(c["calc"]); tot = c["steps"](a.ps1); blk = max(1, c["steps"](0.25)); done = 0
+    print(f"free NVT of {label} ({len(atoms0)} atoms): {a.equil_ps} ps equilibration + {a.ps1} ps production, progress every 0.25 ps", flush=True)
+    while done < tot:   # in pieces, with a progress line (the run was silent for minutes)
+        nstep = min(blk, tot - done); r.advance(nstep); done += nstep
+        pp = [x["P_MLP_GPa"] for x in r.thermo]
+        print(f"  {label}: {done * a.dt / 1000:.2f} / {a.ps1} ps  P so far {np.mean(pp) if pp else float('nan'):.1f} GPa  {(time.time() - t0) / 60:.1f} min", flush=True)
     p = [x["P_MLP_GPa"] for x in r.thermo]; m, e = stats(p)
     if not np.isfinite(e):
         raise SystemExit(f"{label}: only {len(p)} pressure samples in --ps1 {a.ps1} ps (need 25): increase --ps1")
