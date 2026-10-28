@@ -142,13 +142,13 @@ def main():
             r, h, vv = relax(v, calc, P, a.steps, a.fmax, f"H{2 + n:.3g}O")
             nH = int((r.numbers == 1).sum()); extra = nH - 2 * nO; N = len(r)
             dH = (h * N - nO * 3 * hw - extra * hH) / N * 1e3
-            rows.append(dict(P_GPa=P, H_per_O=2 + n, X=n / (n + 1), dH_meV_atom=dH, H_eV_cell=h * N, natoms=N, vpa=vv, H_ref=best))
+            rows.append(dict(P_GPa=P, H_per_O=2 + n, X=n / (n + 1), dH_meV_atom=dH, H_eV_cell=h * N, natoms=N, vpa=vv, H_ref=best, h_iceX_eV_atom=hw, h_Href_eV_atom=hH))
             print(f"   H{2 + n:.3g}O (X {n / (n + 1):.3f}): dH_f {dH:7.1f} meV/atom   V/atom {vv:.3f}   H_cell {h * N:.4f} eV")
             r.write(os.path.join(a.o, f"H{2 + n:.3g}O_{P:.0f}GPa_relaxed.extxyz"))   # look at them: partly filled channels may collapse / rearrange
             ng = guest_count(r); v0 = v.get_volume() / len(v)
             print(f"      structure: {ng} of {extra} extra H still in channels (> 1.3 A from every O), V/atom {v0:.3f} -> {vv:.3f}; saved H{2 + n:.3g}O_{P:.0f}GPa_relaxed.extxyz", flush=True)
     with open(os.path.join(a.o, "h3o_static.csv"), "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+        w = csv.DictWriter(fh, fieldnames=list(dict.fromkeys(k for r in rows for k in r)), restval=""); w.writeheader(); w.writerows(rows)
     eos_table(rows, a.o)
 
 
@@ -171,6 +171,17 @@ def eos_table(rows, out):
         print("\nH3O equation of state: H(P) - H(450 GPa) per 64-atom cell, eV (equal = the MLP reproduces the DFT dH/dP = V)")
         for P in sorted(ml):
             if P in cast: print(f"   {P:5.0f} GPa   MLP {ml[P] - ml[450]:9.3f}   CASTEP {cast[P] - cast[450]:9.3f}   diff {(ml[P] - ml[450]) - (cast[P] - cast[450]):7.3f}")
+    ix = {float(r["P_GPa"]): float(r["H_eV_cell"]) / 2 for r in csv.DictReader(l for l in open("docs/data/icex_castep_enthalpy.csv") if not l.startswith("#"))}   # per H2O
+    e_c = {P: (cast[P] - 16 * ix[P]) / 16 for P in cast if P in ix}
+    e_m = {r["P_GPa"]: (r["H_eV_cell"] - 48 * r["h_iceX_eV_atom"]) / 16 for r in rows if abs(r["H_per_O"] - 3) < 1e-9 and r.get("h_iceX_eV_atom") not in (None, "")}
+    com = sorted(set(e_c) & set(e_m))
+    if len(com) > 1:
+        P0 = com[0]
+        print(f"\nH-reference-free check: e(P) = [H(H3O) - 16 H(ice X per H2O)] / 16 per extra H, relative to {P0:.0f} GPa (eV; slope = partial volume of the extra H, {1 / EV_A3_GPA:.5f} eV/GPa per A^3)")
+        for P in com:
+            print(f"   {P:5.0f} GPa   MLP {e_m[P] - e_m[P0]:8.4f}   CASTEP {e_c[P] - e_c[P0]:8.4f}   diff {(e_m[P] - e_m[P0]) - (e_c[P] - e_c[P0]):8.4f} eV per H  ({250 * ((e_m[P] - e_m[P0]) - (e_c[P] - e_c[P0])):6.1f} meV/atom of H3O)")
+    elif e_c:
+        print(f"\n(H-reference-free check needs ice X with h_iceX_eV_atom in the csv at two of {sorted(e_c)} GPa: rerun those pressures with this version)")
     print("\nCaveat: the MLP never saw cold solid H; the H reference (and so the absolute dH_f) is the least trustworthy part. Wrote", os.path.join(out, "h3o_static.csv"))
 
 
@@ -207,11 +218,11 @@ def run_parallel(a):
         f = os.path.join(a.o, f"P{P:.0f}", "h3o_static.csv")
         if os.path.exists(f):
             for r in csv.DictReader(open(f)):
-                rows.append({k: (float(v) if k not in ("H_ref",) else v) for k, v in r.items()})
+                rows.append({k: (float(v) if k not in ("H_ref",) and v != "" else v) for k, v in r.items()})
     if not rows: print("no results"); return
     os.makedirs(a.o, exist_ok=True)
     with open(os.path.join(a.o, "h3o_static.csv"), "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+        w = csv.DictWriter(fh, fieldnames=list(dict.fromkeys(k for r in rows for k in r)), restval=""); w.writeheader(); w.writerows(rows)
     print("\nformation dH (meV/atom) vs composition, all pressures:")
     for P in sorted({r["P_GPa"] for r in rows}):
         print(f"   {P:5.0f} GPa  " + "  ".join(f"H{r['H_per_O']:.3g}O {r['dH_meV_atom']:7.1f}" for r in sorted((r for r in rows if r["P_GPa"] == P), key=lambda r: r["H_per_O"])) + f"   (H ref: {[r for r in rows if r['P_GPa'] == P][0]['H_ref']})")
