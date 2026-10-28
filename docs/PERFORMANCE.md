@@ -63,9 +63,43 @@ per-lambda engine with 1, 2, 4, 8 processes, time-sliced and with MPS (total ste
 calls alone (one batched call of B structures vs B single calls, ms per structure). The markdown tables are printed at the end
 (`python3 mlp_pipeline/tdi/bench_table.py runs/bench/bench_*.jsonl`).
 
-### Results
+### Results (2026-10-28, node-x12t-006, A100-SXM4-40GB, 8 CPUs, GRACE ft_m2, code 549096a; insH = 1 H into 250-atom pure H, 2 model calls per step)
 
-(not yet run)
+| setup | total MD steps/s | ms/step each | GPU memory (MiB) |
+|---|---|---|---|
+| per-lambda engine, 1 process | 3.25 | 307 | 4569 |
+| per-lambda engine, 8 processes, time-slicing (current production) | **10.85** | 737 | 36534 |
+| per-lambda engine, 1 process, MPS | 3.26 | 307 | 4603 |
+| per-lambda engine, 8 processes, MPS | **11.89** (+10%) | 673 | 36526 |
+| batched engine, 8 lambda values in 1 process | 7.06 (-35%) | 1132 (1122 per model call) | - |
+| batched engine, 16 lambda values in 1 process | 7.07 (-35%) | 2262 (2241 per model call) | - |
+
+Model calls alone (ms per 251-atom structure; batched includes data preparation):
+
+| B structures | single TPCalculator call | one batched call | speed-up | data preparation per batched call (ms) |
+|---|---|---|---|---|
+| 1 | 160 | 98 | 1.63 | 35 |
+| 2 | 151 | 85 | 1.77 | 48 |
+| 4 | 151 | 73 | 2.06 | 63 |
+| 8 | 153 | 72 | 2.12 | 105 |
+| 16 | 152 | 70 | 2.18 | 199 |
+
+Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |dF| 1.8e-6 eV/A, |dstress| 9e-8 eV/A^3 (the GPU round-off level).
+
+**Conclusions**
+- The GPU itself is the limit. Eight time-sliced processes already push about 21.7 structures/s, or **46 ms of GPU per structure**. One batched call needs about 70 ms per
+  structure (about 58 ms of GPU after the 12 ms of data preparation), so the batched engine is 35% SLOWER than the current production setup. Most of the 160 ms of a
+  single call is CPU work (data preparation, about 60 ms) plus GPU latency. Eight processes hide both, and batching hides them as well, but it does not make the
+  GRACE kernels themselves cheaper.
+- MPS: +10% (11.9 vs 10.9 steps/s), with no code change and the same results: worth using.
+- Batched engine: keep it opt-in (correct, but slower on this hardware). It would only help if the GRACE kernel cost per structure fell, for example with the dense engine.
+- A faster neighbour list or data preparation would not help 8-process runs (the CPU work is already hidden). It would help the tail of a run, when fewer than NPAR
+  processes are left: one process with the batched data path needs 98 instead of 160 ms per call.
+- What remains: (a) more GPUs (lambda values split over GPUs or jobs: linear in wall time); (b) cheaper GRACE kernels: check the tensorpotential version on Young
+  (`~/grace-venv/bin/pip show tensorpotential`) for the dense "uniform" engine, documented as 1.3-1.7x per structure, to be validated against the current numbers;
+  TF32 matmuls are switched off by tensorpotential on purpose (precision), so they are not an option without a precision check; (c) fewer MD steps for the same error:
+  a heavier H mass in the MD with a larger dt (configurational averages do not depend on the masses), or an adaptive length per lambda value. These change how the
+  samples are generated (the expected G stays the same) and need your decision and a validation run.
 
 ## Using the faster options in production (after the benchmark)
 
@@ -77,3 +111,27 @@ calls alone (one batched call of B structures vs B single calls, ms per structur
   Its own log is `runs/tdi/<tag>_batch.log` (status every minute: model calls, structures per call, ms per call, model share of the wall time).
 - Before making it the default: one short GRACE run side by side (e.g. an insertion with `PS=1`, `OUTDIR=runs/tdi_engcmp/{lambda,batch}`) and `summarize.py` on
   both directories: the same G within the errors.
+
+## Next: tensorpotential's dense engine (Young has 0.6.1, which has it)
+
+`GRACE_MODE=uniform` (read by `04_benchmark.get_calc_spec`, recorded in the stage0 json `meta.grace_mode`) creates the TPCalculator with `mode="uniform"`: the dense
+reshape aggregation, documented as 1.3-1.7x faster per structure for MD (fixed atom count, near-constant neighbour count). Same model and weights, only the summation
+layout changes (round-off-level differences; random GRACE-2L on CPU: 4e-16 eV/atom). It needs a `compute_dense` signature in the SavedModel; without one the calculator
+falls back to segment_sum with a warning. Test (GPU job, repo root, about 3 min):
+```
+~/grace-venv/bin/python mlp_pipeline/tdi/bench.py dense insH       # 'dense engine ACTIVE / NOT available', ms per call of both engines, max differences
+```
+If it is not available: re-export ft_m2 from its checkpoint with 0.6.1 into a new directory (the old model stays as it is), then run the same test with
+`--model grace-ft:<new dir>`:
+```
+find runs/grace/ft_m2 -name model.yaml; find runs/grace/ft_m2 -name "checkpoint*.index"
+~/grace-venv/bin/grace_utils -p <model.yaml> -c <checkpoint .index> export -n runs/grace/ft_m2_dense/saved_model
+```
+If it is faster and agrees: a throughput run `GRACE_MODE=uniform SYSTEMS=insH NPROCS=8 MPS="0 1" PARTS=engine bash mlp_pipeline/bench_tdi.sh`, then a short side-by-side
+GRACE run before using it in production.
+
+### Dense engine result (2026-10-28, Young, ft_m2 as exported, tensorpotential 0.6.1)
+
+`bench.py dense insH`: dense engine ACTIVE (ft_m2 already has `compute_dense`, no re-export needed). Single process, alternating 251 / 250-atom structures:
+segment_sum 303 ms per call, dense 181 ms per call = **1.67x**. Differences dense vs segment_sum: max 5.6e-8 eV/atom, 2.3e-6 eV/A, 1.5e-7 eV/A^3 (float32 GPU
+round-off, the same level as two segment_sum runs). Next: throughput with 8 processes (`GRACE_MODE=uniform ... bench_tdi.sh`), then a side-by-side G check.

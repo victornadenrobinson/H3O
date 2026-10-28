@@ -2,6 +2,7 @@
 usage (repo root, inside a GPU job, ~/grace-venv/bin/python):
   python mlp_pipeline/tdi/bench.py engine H   --steps 150        one lambda process (the per-lambda engine): prints one RESULT line (steps/s of this process)
   python mlp_pipeline/tdi/bench.py batch  H   --nrep 8           the batched engine: 8 lambda values in this process, one model call per step (tdi/batched.py)
+  python mlp_pipeline/tdi/bench.py dense  insH                   default (segment_sum) vs dense ('uniform', GRACE_MODE=uniform) tensorpotential engine: ms per call, differences
   python mlp_pipeline/tdi/bench.py calls  H   --sizes 1,2,4,8,16 model calls alone: one batched call of B structures vs B single TPCalculator calls (task: does batching pay?)
 systems: h2o = fcc H2O, 108 O (324 atoms, Einstein springs, 400 GPa 3000 K); H = pure-H fluid, 250 atoms (500 GPa 6000 K);
          ins = insertion of 1 H into fcc H2O (325 atoms, two model calls per step: host + ghost, host alone; 500 GPa 6000 K); insH = 1 H into the 250-atom pure-H fluid (251 atoms)
@@ -106,12 +107,41 @@ def mode_calls(b):
                extract_ms_per_call=1000 * te, speedup=ts / tb)
 
 
+def mode_dense(b):
+    """tensorpotential engines: the default segment_sum ('diverse') against the dense reshape ('uniform', GRACE_MODE=uniform) on the same structures: ms per call and the
+    largest differences (round-off is expected: different summation order). Tells whether the SavedModel has the dense signature at all."""
+    from importlib import import_module
+    run_real, a, c, kE = build(b)
+    spec = import_module("04_benchmark").get_calc_spec; os.environ.pop("GRACE_MODE", None)
+    seg = spec(b.model, b.device); os.environ["GRACE_MODE"] = "uniform"; den = spec(b.model, b.device); os.environ.pop("GRACE_MODE", None)
+    has = bool(getattr(den, "dense_reshape", False))
+    print(f"SavedModel signatures of the dense calculator: dense engine {'ACTIVE' if has else 'NOT available (fell back to segment_sum: the model must be re-exported with tensorpotential >= 0.6 for it)'}", flush=True)
+    rng = np.random.default_rng(0); base = [c["at0"]] + ([c["at0"][c["host_idx"]]] if c.get("host_idx") is not None else [])
+    S = []
+    for i in range(8):
+        x = base[i % len(base)].copy(); x.calc = None; x.set_constraint(); x.positions += rng.normal(0, 0.03, x.positions.shape); S.append(x)
+    out, t = {}, {}
+    for name, calc in (("segment", seg), ("dense", den)):
+        for x in S[:2]:
+            calc.reset(); y = x.copy(); y.calc = calc; y.get_forces()   # compile
+        r = []; t0 = time.time()
+        for _ in range(b.repeat):
+            r = []
+            for x in S:
+                calc.reset(); y = x.copy(); y.calc = calc; r.append((y.get_potential_energy() / len(y), y.get_forces(), y.get_stress()))
+        t[name] = (time.time() - t0) / (b.repeat * len(S)); out[name] = r
+    dE = max(abs(p[0] - q[0]) for p, q in zip(out["segment"], out["dense"])); dF = max(float(np.abs(p[1] - q[1]).max()) for p, q in zip(out["segment"], out["dense"]))
+    dS = max(float(np.abs(p[2] - q[2]).max()) for p, q in zip(out["segment"], out["dense"]))
+    result(mode="dense", system=b.system, natoms=len(c["at0"]), dense_active=has, segment_ms_per_call=1000 * t["segment"], dense_ms_per_call=1000 * t["dense"],
+           speedup=t["segment"] / t["dense"], max_dE_eV_atom=dE, max_dF_eV_A=dF, max_dstress=dS)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["engine", "batch", "calls"]); ap.add_argument("system", choices=list(SYSTEMS))
+    ap.add_argument("mode", choices=["engine", "batch", "calls", "dense"]); ap.add_argument("system", choices=list(SYSTEMS))
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--from-dft", default="inventory_binned.csv"); ap.add_argument("--vpa", type=float, default=None)
     ap.add_argument("--P", type=float, default=None); ap.add_argument("--T", type=float, default=None); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--device", default="cuda")
     ap.add_argument("--steps", type=int, default=150); ap.add_argument("--warm", type=int, default=20); ap.add_argument("--lam", type=float, default=0.5); ap.add_argument("--barrier", default=None)
     ap.add_argument("--nrep", type=int, default=8); ap.add_argument("--max-atoms", type=int, default=0); ap.add_argument("--sizes", default="1,2,4,8,16"); ap.add_argument("--repeat", type=int, default=5)
     b = ap.parse_args()
-    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls}[b.mode](b)
+    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls, "dense": mode_dense}[b.mode](b)

@@ -120,7 +120,7 @@ def meta():
         git = os.environ.get("H3O_GIT") or subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     except Exception:
         git = "unknown"
-    return dict(git=git, host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
+    return dict(git=git, grace_mode=os.environ.get("GRACE_MODE", ""), host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
 
 
 def write_json(path, d):

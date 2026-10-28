@@ -18,6 +18,8 @@ def get_calc_spec(spec, device="cuda"):
     if spec.startswith("grace-ft:"):   # exported gracemaker model dir (e.g. runs/grace/ft_s/final_model)
         import tensorpotential.calculator as tc
         kw = {"enable_uq": True} if os.environ.get("GRACE_UQ") else {}
+        if os.environ.get("GRACE_MODE"):   # GRACE_MODE=uniform: tensorpotential's dense engine (>= 0.6; needs a compute_dense signature in the SavedModel, else it falls back with a warning)
+            kw["mode"] = os.environ["GRACE_MODE"]
         import glob
         p = os.path.expanduser(spec.split(":", 1)[1])
         if not os.path.exists(os.path.join(p, "saved_model.pb")):   # gracemaker writes final_model under seed/<n>/; search below the given dir
