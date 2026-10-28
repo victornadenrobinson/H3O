@@ -65,35 +65,49 @@ class ToyIce(Calculator):
         if fit is not None:
             self.p = dict(self.p, fit=fit, rc=fit["rc"])
 
-    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
-        super().calculate(atoms, properties, system_changes)
-        a = self.atoms; n = len(a); p = self.p; rc = p["rc"]; cell = np.asarray(a.cell)
-        isH = a.numbers == 1
-        kind = np.where(~isH[:, None] & ~isH[None, :], 0, np.where(isH[:, None] & isH[None, :], 2, 1))   # n x n
-        inv = np.linalg.inv(cell); s = a.positions @ inv
-        ds = s[None, :, :] - s[:, None, :]; ds -= np.round(ds)   # minimum-image base, then the images within rc
-        width = a.get_volume() / np.linalg.norm(np.cross(cell[[1, 2, 0]], cell[[2, 0, 1]]), axis=1)   # perpendicular widths
-        nimg = [int(np.floor(rc / w + 0.5)) for w in width]   # base image has |ds| <= 1/2: images k with |k| <= rc/w + 1/2 can be within rc
-        E = 0.0; F = np.zeros((n, 3)); vir = np.zeros((3, 3))
+    SKIN = 0.3   # A: Verlet list of pairs within rc + SKIN, rebuilt when an atom has moved more than SKIN / 2 since the last build
+
+    def _build(self, a, rc):
+        """unique pairs (i, j, integer image shift T) within rc + SKIN: D_ij = (s_j - s_i + T) @ cell with s = positions in cell coordinates (not wrapped)"""
+        cell = np.asarray(a.cell); inv = np.linalg.inv(cell); s = a.positions @ inv; n = len(a)
+        ds = s[None, :, :] - s[:, None, :]; base = -np.round(ds); ds = ds + base
+        width = a.get_volume() / np.linalg.norm(np.cross(cell[[1, 2, 0]], cell[[2, 0, 1]]), axis=1); rl = rc + self.SKIN
+        nimg = [int(np.floor(rl / w + 0.5)) for w in width]; iu = np.triu_indices(n, 1); I, J, T = [], [], []
         for sx in range(-nimg[0], nimg[0] + 1):
             for sy in range(-nimg[1], nimg[1] + 1):
                 for sz in range(-nimg[2], nimg[2] + 1):
-                    D = (ds + np.array([sx, sy, sz])) @ cell   # D[i, j] = r_j - r_i (+ image)
-                    d = np.linalg.norm(D, axis=-1)
-                    m = d < rc
+                    sh = np.array([sx, sy, sz]); d = np.linalg.norm((ds + sh) @ cell, axis=-1)
                     if sx == sy == sz == 0:
-                        np.fill_diagonal(m, False)
-                    if not m.any():
+                        m = np.zeros_like(d, bool); m[iu] = d[iu] < rl
+                    elif (sx, sy, sz) > (0, 0, 0):   # the mirror image is the same pair
+                        m = d < rl
+                    else:
                         continue
-                    ii, jj = np.nonzero(m); dd = d[m]; kk = kind[m]; e = np.zeros(len(dd)); de = np.zeros(len(dd))
-                    for k in (0, 1, 2):
-                        q = kk == k
-                        if q.any():
-                            e[q], de[q] = pair_energy(k, dd[q], p)
-                    f = (de / dd)[:, None] * D[m]   # each ordered pair (i, j, image): half of the pair energy
-                    E += 0.5 * e.sum(); np.add.at(F, ii, f); vir += 0.5 * (D[m][:, :, None] * f[:, None, :]).sum(0)
-        stress = vir / a.get_volume()
-        self.results = dict(energy=float(E), free_energy=float(E), forces=F, stress=stress.flat[[0, 4, 8, 5, 2, 1]])
+                    ii, jj = np.nonzero(m); I.append(ii); J.append(jj); T.append(base[ii, jj] + sh)
+        I, J = np.concatenate(I), np.concatenate(J); T = np.concatenate(T).astype(float)
+        z = a.numbers; kind = np.where((z[I] == 8) & (z[J] == 8), 0, np.where((z[I] == 1) & (z[J] == 1), 2, 1))
+        return dict(ref=a.positions.copy(), i=I, j=J, T=T, kind=kind)
+
+    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+        a = self.atoms; n = len(a); p = self.p; rc = p["rc"]; cell = np.asarray(a.cell)
+        key = (n, a.numbers.tobytes(), cell.tobytes())   # one list per system (the TDI engine calls the same calculator on host and host + ghosts)
+        cache = getattr(self, "_nl", {}); self._nl = cache; nl = cache.get(key)
+        if nl is None or np.abs(a.positions - nl["ref"]).max() > self.SKIN / 2:
+            if len(cache) > 8: cache.clear()
+            nl = cache[key] = self._build(a, rc)
+        s = a.positions @ np.linalg.inv(cell); i, j = nl["i"], nl["j"]
+        D = (s[j] - s[i] + nl["T"]) @ cell; d = np.linalg.norm(D, axis=1); m = d < rc
+        i, j, D, d, kk = i[m], j[m], D[m], d[m], nl["kind"][m]
+        e = np.zeros(len(d)); de = np.zeros(len(d))
+        for k in (0, 1, 2):
+            q = kk == k
+            if q.any():
+                e[q], de[q] = pair_energy(k, d[q], p)
+        f = (de / d)[:, None] * D   # force on i (D = r_j - r_i): +phi' u; on j: -phi' u
+        F = np.zeros((n, 3)); np.add.at(F, i, f); np.add.at(F, j, -f)
+        stress = (D[:, :, None] * f[:, None, :]).sum(0) / a.get_volume()
+        self.results = dict(energy=float(e.sum()), free_energy=float(e.sum()), forces=F, stress=stress.flat[[0, 4, 8, 5, 2, 1]])
 
 
 def ghost_energy(pos_ghost, host_pos, host_is_H, cell, p=None):
