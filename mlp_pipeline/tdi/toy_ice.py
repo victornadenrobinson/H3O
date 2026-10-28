@@ -5,6 +5,7 @@
 All terms are finite at r = 0, so the ideal-gas end of every TDI path (all H, and O in the fluid path) is regular. Shifted-force cutoff rc (energy and force go
 to zero at rc), so MD conserves energy. Units eV, A. Use as a model spec in the pipeline: `run_real.py toyice ...` (04_benchmark.get_calc_spec).
 Parameters can be overridden with TOYICE="A_OO=..,rho_OO=..,D=..,a=..,r0=..,B=..,rho_H=..,rc=.." in the environment.
+TOYICE_FIT=<toy_fit.py json>: force-matched spline pairs fitted to DFT snapshots instead (tdi/toy_fit.py; same cutoff handling, quadratic soft core).
 """
 import os
 import numpy as np
@@ -17,7 +18,23 @@ def params():
     p = dict(DEFAULTS)
     for kv in filter(None, os.environ.get("TOYICE", "").split(",")):
         k, v = kv.split("="); p[k.strip()] = float(v)
+    if os.environ.get("TOYICE_FIT"):   # force-matched spline pairs from tdi/toy_fit.py instead of the analytic forms
+        import json
+        p["fit"] = json.load(open(os.environ["TOYICE_FIT"])); p["rc"] = p["fit"]["rc"]
     return p
+
+
+def _spline_pair(fit, kind, r):
+    """phi, phi' of a toy_fit.py spline pair (quadratic core below r_lo); r array"""
+    from scipy.interpolate import BSpline
+    q = fit["pairs"][("OO", "OH", "HH")[kind]]
+    if "_bs" not in q:
+        t = np.array(q["t"]); c = np.r_[q["c"], 0.0, 0.0]   # the two dropped end functions have zero weight
+        q["_bs"] = BSpline(t, c, 3, extrapolate=False); q["_dbs"] = q["_bs"].derivative()
+    r = np.asarray(r, float); rl, rc, K = q["r_lo"], fit["rc"], fit["K"]
+    x = np.clip(r, rl, rc); v = np.nan_to_num(q["_bs"](x)); dv = np.nan_to_num(q["_dbs"](x)); dl = np.where(r < rl, rl - r, 0.0)
+    e = np.where(r < rc, v - dl * dv + K * dl ** 2, 0.0); de = np.where(r < rc, dv - 2 * K * dl, 0.0)
+    return e, de
 
 
 def _pair(kind, r, p):
@@ -29,9 +46,12 @@ def _pair(kind, r, p):
     e = p["B"] * np.exp(-r / p["rho_H"]); return e, -e / p["rho_H"]   # H-H
 
 
-def pair_energy(kind, r, p=None):
-    """shifted-force pair energy and its derivative (zero beyond rc)"""
-    p = p or params(); rc = p["rc"]; r = np.asarray(r, float)
+def pair_energy(kind, r, p=None, fit=None):
+    """shifted-force pair energy and its derivative (zero beyond rc); spline pairs when a toy_fit.py fit is given (argument, p['fit'] or TOYICE_FIT)"""
+    p = p or params(); fit = fit or p.get("fit")
+    if fit is not None:
+        return _spline_pair(fit, kind, r)
+    rc = p["rc"]; r = np.asarray(r, float)
     e, de = _pair(kind, r, p); ec, dec = _pair(kind, np.array(rc), p)
     m = r < rc
     return np.where(m, e - ec - (r - rc) * dec, 0.0), np.where(m, de - dec, 0.0)
@@ -40,8 +60,10 @@ def pair_energy(kind, r, p=None):
 class ToyIce(Calculator):
     implemented_properties = ["energy", "forces", "stress", "free_energy"]
 
-    def __init__(self, **kw):
+    def __init__(self, fit=None, **kw):
         super().__init__(**kw); self.p = params()
+        if fit is not None:
+            self.p = dict(self.p, fit=fit, rc=fit["rc"])
 
     def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)
