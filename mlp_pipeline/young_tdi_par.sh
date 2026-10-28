@@ -65,6 +65,14 @@ if [ -n "$PREPHOLD" ] && { [ $PH = bcc ] || [ $PH = fcc ]; }; then   # PREPHOLD=
   fi
   [ -z "$INIT" ] && COMMON="$COMMON --init-from $OUT/${TAGNAME}_prep.extxyz"   # also on a resubmit: nodes that never started begin from the same frame as the others
 fi
+# memory-aware parallelism: start only as many lambda processes as fit in the free GPU memory (one TensorFlow context each; ~4.6 GB measured for 250 H on an A100; MEMPROC MiB per process, override for big cells)
+if command -v nvidia-smi >/dev/null 2>&1; then
+  GI=${CUDA_VISIBLE_DEVICES%%,*}; case "$GI" in ""|*[!0-9]*) GI=0;; esac
+  FREE=$(nvidia-smi -i $GI --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc 0-9)
+  if [ -n "$FREE" ]; then CAP=$(( FREE / ${MEMPROC:-4800} )); [ $CAP -lt 1 ] && CAP=1
+    [ $CAP -lt $NPAR ] && { echo "NOTE: $FREE MiB free on GPU $GI: NPAR $NPAR -> $CAP (MEMPROC=${MEMPROC:-4800} MiB per lambda process)"; NPAR=$CAP; }
+  fi
+fi
 echo "== lambda 0..$((NODES-1)), $NPAR at a time $(date)"
 # node order when NPAR < NODES: middle and both ends first, then the largest gaps (a coarse integral exists early; tdi/live.py PREVIEW uses whatever is there)
 if [ -n "$ONLYNODES" ]; then echo $ONLYNODES | tr ' ' '\n'; else
@@ -81,6 +89,13 @@ while kill -0 $XP 2>/dev/null; do
   for f in $OUT/${TAGNAME}_node*.log; do echo "   $(basename $f .log | sed "s/${TAGNAME}_node/lambda /"): $(grep -h ETA $f | tail -n1 | grep -o "[0-9]* ms/step.*")"; done
   python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
+# second pass: lambda values whose process died of GPU out-of-memory at start-up (too many TensorFlow contexts on one card) are rerun, 2 at a time
+OOM=$(for f in $OUT/${TAGNAME}_node*.log; do [ -f "$f" ] || continue; k=$(basename $f .log | sed "s/${TAGNAME}_node//"); case "$k" in *[!0-9]*|"") continue;; esac; tail -n 30 "$f" | grep -qiE "out of memory|ResourceExhausted" && echo $k; done | sort -n | tr '\n' ' ')
+if [ -n "$OOM" ] && [ -z "$NO_OOM_RETRY" ]; then
+  echo "== GPU out-of-memory at lambda $OOM: rerunning them 2 at a time $(date)"
+  for k in $OOM; do echo "-- OOM retry $(date)" >> $OUT/${TAGNAME}_node$k.log; done
+  echo $OOM | tr ' ' '\n' | grep -v "^$" | xargs -P 2 -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} >> $OUT/${TAGNAME}_node{}.log 2>&1"
+fi
 echo "== done $(date)"; python3 $CODE/tdi/collect.py $OUT $TAGNAME
 }
 main "$@"
