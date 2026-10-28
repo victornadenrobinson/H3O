@@ -101,6 +101,8 @@ Do not `git pull` while a launcher started with `bash` (interactive) is running:
 - NEXT (Young): `mlp_pipeline/young_pwidom.sbatch` at 500 GPa / 6000 K on the hosts of the existing insertion runs (commands in MU_METHODS.md). The first number
   to read is std(dU_GRACE - phi_pair) at the selected points.
 
+- **Toy scan completed (24 states, 2026-10-28):** 500 GPa: -126..-135 meV at 2000-6000 K, -416 at 7000 K; 600 GPa: -325..-489 at 2000-7000 K; 400 GPa: +215..+101 at 2000-5000 K, -207 at 6000 K; 300 GPa: +530..+553 (melted >= 4000 K). In the toy, PRESSURE decides (dg = 0 near 460 GPa, nearly T independent below ~5000 K); T lowers dg only close to melting. The toy sits ~100 GPa "behind" GRACE (GRACE dg -250..-560 at 300-500 GPa). For GRACE this predicts little T dependence away from melting: consistent with the unresolved GRACE dg/dT at 500 GPa (+16 +- 36 per 1000 K). P-T diagrams: tdi/pt_diagram.py -> docs/figures/pt_{grace,toy,both}.png.
+
 ## 3. Verified correct (do not re-check without a reason)
 Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT ln V), ideal-gas H with ln N!, 3N kT ln Lambda, P V units, insertion reference kT ln((N_H+n)!/N_H!) - n kT ln V + 3 n kT ln Lambda (same counting as the crystal route), Gauss-Legendre in lambda = x^4 and the Gauss-Kronrod rule, insertion integral vs Widom on a toy LJ fluid (-9 +- 13 vs -1 +- 9 meV), pressure correction vs exact Legendre transform (0.2% at 20 GPa offsets), shell array decoding of every sbatch table.
 

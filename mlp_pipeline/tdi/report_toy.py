@@ -130,7 +130,7 @@ def fig_scan(rows):
         b.text(t_, p_ + 16, f"{d_:+.0f}", ha="center", color=INK2, fontsize=7.5)
     mel = [r for r in rows if r["dg_meV"] == "melted"]
     b.scatter([float(r["T_K"]) for r in mel], [float(r["P_GPa"]) for r in mel], marker="x", s=60, color=MUTED, linewidth=2, zorder=3, label="toy ice melted")
-    b.set(xlabel="T (K)", ylabel="P (GPa)", xlim=(1500, 7500), ylim=(260, 640), title="toy dg over (P, T): red = rejects H, blue = takes H"); b.legend(loc="upper left")
+    b.set(xlabel="T (K)", ylabel="P (GPa)", xlim=(1500, 7500), ylim=(260, 650), title="toy dg over (P, T): red = rejects H, blue = takes H, x = ice melted")
     fig.colorbar(sc, ax=b, label="dg (meV per H)")
     fig.tight_layout(); return fig
 
@@ -144,7 +144,8 @@ def fig_phase():
     # solid solution limit a*(T): ~0 when cold (dg > 0), grows when hot (dg < 0), largest just below melting, then the solidus
     Tx, amax = 6300.0, 1.0   # largest solubility (H3O) just below melting
     Ts = np.linspace(Te, Tx, 200)
-    a_solv = amax * np.clip((Ts - 3500) / (Tx - 3500), 0, 1) ** 1.6 + 0.02
+    a0 = 0.35   # cold solubility at ~500 GPa: dg ~ -130 meV (toy), ~ -500 (GRACE) at 2000-5000 K, mu_H rising ~330 meV per H/O -> a ~ 0.4
+    a_solv = a0 + (amax - a0) * np.clip((Ts - 4500) / (Tx - 4500), 0, 1) ** 1.6
     xs_solv = xa(a_solv)
     Tsol = np.linspace(Tx, Tm, 60); xs_sol = np.interp(Tsol, [Tx, Tm], [xs_solv[-1], x0]) + 0.006 * np.sin(np.linspace(0, np.pi, 60))   # solidus
     xl = np.linspace(x0, 0.995, 300); Tliq = Te + (Tm - Te) * ((0.995 - xl) / (0.995 - x0)) ** 0.25   # liquidus: melting lowered as H is added; stays H-richer than the solidus
@@ -154,11 +155,11 @@ def fig_phase():
     ax.plot(xl, Tliq, color="#d55181", lw=2.2)
     ax.plot([x0, 1.0], [Te, Te], color=INK2, lw=1.2, ls="--")
     ax.plot([x0], [Tm], "o", color=INK, ms=6); ax.annotate(f"SI H2O melts ~{Tm:.0f} K\n(GRACE / Cheng 2021, ~500 GPa)", (x0, Tm), xytext=(12, 8), textcoords="offset points", fontsize=8.5, color=INK2)
-    ax.text(0.672, 3000, "superionic\nH(2+a)O\nsolid solution", color="#1c5cab", fontsize=10, weight="bold")
+    ax.text(0.671, 2200, "superionic\nH(2+a)O\nsolid\nsolution", color="#1c5cab", fontsize=9.5, weight="bold")
     ax.text(0.84, 8200, "fluid (H2O-H fully miscible)", color="#a8335f", fontsize=11, weight="bold", ha="center")
     ax.text(0.86, 3500, "SI H(2+a)O  +  H-rich fluid", color=INK2, fontsize=10.5, ha="center")
     ax.text(0.86, Te - 380, "eutectic ~ melting of pure H (low; shape below it not explored)", color=INK2, fontsize=8, ha="center")
-    ax.annotate("solubility grows with T\n(dg < 0 only when hot: toy & GRACE trend)", (xs_solv[150], Ts[150]), xytext=(60, -10), textcoords="offset points",
+    ax.annotate("finite solubility even when cold at 500 GPa\n(dg < 0 from 2000 K), growing near melting\n(at 400 GPa: ~0 when cold, toy dg > 0)", (xs_solv[170], Ts[170]), xytext=(60, -30), textcoords="offset points",
                 arrowprops=dict(arrowstyle="->", color=INK2), fontsize=8.5, color=INK2)
     ax.annotate("liquidus: dissolved H lowers\nthe melting (if H prefers the liquid)", (xl[150], Tliq[150]), xytext=(30, 25), textcoords="offset points",
                 arrowprops=dict(arrowstyle="->", color=INK2), fontsize=8.5, color=INK2)
@@ -170,7 +171,7 @@ def fig_phase():
     ax.set(xlim=(x0 - 0.005, 1.0), ylim=(0, 9000), xlabel="atom fraction of H, (2+a)/(3+a)   (right edge: pure H)", ylabel="T (K)",
            title="SCHEMATIC H2O - H phase diagram near 500 GPa (shapes from the dg trends; boundaries not computed)")
     ax.grid(False)
-    fig.text(0.06, 0.01, "Built from: toy scan (dg > 0 cold, < 0 hot; more negative at higher P), toy checks (mu_H rises ~330 meV per H/O as the ice fills: finite solubility), GRACE dg < 0 at 5000-7000 K, "
+    fig.text(0.06, 0.01, "Built from: toy scan (dg < 0 at 500-600 GPa from 2000 K, > 0 at 300-400 GPa below ~5000 K; most negative near melting), toy checks (mu_H rises ~330 meV per H/O as the ice fills: finite solubility), GRACE dg < 0 at 5000-7000 K, "
              "GRACE liquid hull (miscible). Not computed: solidus / liquidus positions, the partition coefficient (needed for the sign of the melting-point change), the eutectic.", fontsize=7.5, color=INK2, wrap=True)
     fig.tight_layout(rect=(0, 0.04, 1, 1)); return fig
 
@@ -191,15 +192,15 @@ def main():
             "2. The lambda integral agrees with independent routes: method check (insertion into pure H = G_H) passes at 3000 / 5000 K, insertion n = 8 =",
             "    crystal route, insertion = Widom/BAR within ~1-2 sigma, MBAR = TI. 10 Gauss lambda values are too coarse for crystals (-14 meV/atom).",
             "3. Quick checks (450 GPa, 5000 K): path independence (x^2 vs x^4), finite size (108 vs 32 O), linearity in composition: all within 1 sigma.",
-            f"4. Scan of dg = mu_H(ice) - G_H over {len(ok)} solid (P, T) states: dg > 0 when cold, < 0 when hot; strongly P dependent (300 GPa: +530..+550,",
-            "    400 GPa: +215 at 2000 K -> -207 at 6000 K, 500 GPa: -86 at 4000 K -> -416 at 7000 K). Insertion becomes favourable with T and with P.",
-            "    The pipeline and Widom/BAR agree on this T trend in the toy (T5 slope -0.069 vs -0.058 meV/K), so the method does not flip it.",
+            f"4. Scan of dg = mu_H(ice) - G_H over {len(ok)} solid (P, T) states: PRESSURE decides: +530..+550 at 300 GPa, +100..+215 at 400 GPa (2000-5000 K),",
+            "    -86..-135 at 500 GPa and -325..-490 at 600 GPa from 2000 K up: dg = 0 near 460 GPa, nearly T independent below ~5000 K. T matters only close",
+            "    to melting (400 GPa: -207 at 6000 K, 500 GPa: -416 at 7000 K): the softening lattice takes up H. Pipeline and Widom/BAR agree on the T trend (T5).",
             "5. GRACE: dg -300..-600 meV at 5000-7000 K (favourable), dg/dP -1.5 meV/GPa (toy: about -3); its T slope is not resolved (+80 +- 26 per 1000 K",
             "    with all points, +16 +- 36 at 500 GPa only). The toy says the sign of the T trend should be negative; GRACE needs lower-T points to test it.",
             "## Caveats",
             "The fitted toy errs by 40 meV/atom and 1.5 eV/A: its dg values are not predictions for water, only the trends and the method checks carry over.",
             "Toy ice melts at a lower T than GRACE ice (400 GPa: between 6000 and 7000 K; 300 GPa: below 4000 K). 300 GPa and T < 4000 K are outside its fit data.",
-            "Missing: 500 GPa 2000/3000 K and 600 GPa (ghost placement in dense pure H, fixed; rerun pending)."])
+            "500 GPa 2000/3000 K and 600 GPa were rerun after a ghost-placement fix (dense pure H: the inserted H goes to the roomiest point tried)."])
         for f in figs.values():
             pdf.savefig(f)
     for n, f in figs.items():

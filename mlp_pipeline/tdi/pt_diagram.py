@@ -89,8 +89,11 @@ def toy(ax, label=True, ls="--"):
     b = brackets(sol, mel)
     if b:
         P, T, w = map(np.array, zip(*b)); ax.errorbar(P, T, w, fmt=ls, color=INK2, lw=2, capsize=3, label="toy H2O melting (1-ps melt check bracket)" if label else None)
-    z = crossings(dg)
-    if z: ax.plot(*zip(*z), ls, color=TAKES, lw=2.5, marker="o", label="toy dg = 0 (H uptake favourable above)" if label else None)
+    byT = {}
+    for P, s_ in dg.items():
+        for T, v in s_: byT.setdefault(T, []).append((P, v))
+    z = sorted([(P, T) for T, P in crossings(byT)] + crossings(dg), key=lambda pt: pt[1])   # sign changes along P at fixed T, and along T at fixed P
+    if z: ax.plot(*zip(*z), ls, color=TAKES, lw=2.5, marker="o", label="toy dg = 0 (H uptake favourable to the right / above)" if label else None)
     if label:
         ax.plot([], [], "D", color=REJECTS, ms=7, label="toy dg > 0 (ice rejects H)"); ax.plot([], [], "D", color=TAKES, ms=7, label="toy dg < 0 (ice takes up H)")
         ax.plot([], [], "x", color=INK2, ms=7, mew=1.5, label="toy ice melted")
