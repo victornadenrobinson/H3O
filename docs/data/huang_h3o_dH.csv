@@ -1,0 +1,9 @@
+# Huang et al. (H3O at high pressure): static (0 K) DFT enthalpy of formation of H3O from H2O (ice X) + 1/2 H2, meV/atom, read off their Fig. B (as shown to us, not tabulated: +-3 meV)
+P_GPa,dH_meV_atom
+300,57
+350,35
+400,17
+450,0
+500,-15
+550,-29
+600,-42
