@@ -8,6 +8,7 @@ Output: H per atom of everything; dH_f(x) = [H(H(2+n)O) - nO h(H2O) - n_extra h(
 difference H(P) - H(450 GPa) per cell next to the user's CASTEP values (docs/data/h3o_castep_enthalpy.csv): equal differences = the MLP reproduces
 the DFT equation of state of H3O (dH/dP = V), whatever the absolute energy reference.
 Caveat: the MLP was trained on hot superionic / fluid configurations, not on cold molecular or atomic H solids: the H reference is the weak link.
+These are STATIC enthalpies (no zero-point energy); Huang's published dH(P) curve includes ZPE, so compare with a static DFT calculation of the same references.
 usage (repo root, GPU node):  ~/grace-venv/bin/python mlp_pipeline/h3o_static.py [--model grace-ft:runs/grace/ft_m2] [--P 300 400 450 500 600 700 800] [--parallel 7] [-o runs/h3o_static]
 """
 import argparse, csv, os, sys, warnings
