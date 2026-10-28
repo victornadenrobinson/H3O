@@ -136,9 +136,11 @@ def apply_like(a):
     """--like <insertion stage0.json>: host (phase, size, H per O), volume, T, P, bulk modulus and model of an existing run_real.py insertion run (same host as the TDI)"""
     st = json.load(open(a.like)); g = st["args"]; hp = g.get("host_phase", "fcc")
     assert st.get("phase") == "insert", f"{a.like}: not an insertion stage0 json"
-    a.phase = "H" if hp == "H" else hp; a.vpa = st["vpa"]; a.T = st["T"]; a.P = st["P_target"]; a.bulk_gpa = st["B_GPa"]; a.hper = g.get("hper", 2.0)
+    a.phase = "H" if hp == "H" else hp; a.vpa = st["vpa"]; a.T = st["T"]; a.P = st["P_target"]; a.bulk_gpa = a.bulk_gpa or st.get("B_GPa", 0.0); a.hper = g.get("hper", 2.0)
     a.natoms = g.get("natoms") or 0; a.nrep = g.get("nrep") or {"bcc": 4, "H": 5}.get(hp, 3)
     if a.model == "toyice" and g.get("model"): a.model = g["model"]
+    if not a.bulk_gpa:
+        raise SystemExit(f"{a.like} has no B_GPa (run made before the pressure correction): give --bulk-gpa")
     print(f"--like {a.like}: {a.phase} host, nrep {a.nrep}, natoms {a.natoms}, H per O {a.hper:g}, vpa {a.vpa:.5f}, {a.T:g} K, {a.P:g} GPa, B {a.bulk_gpa:.0f} GPa, model {a.model}", flush=True)
 
 

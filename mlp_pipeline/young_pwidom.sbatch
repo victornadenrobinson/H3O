@@ -1,9 +1,9 @@
 #!/bin/bash -l
 # Proxy-guided Widom / deletion + BAR (tdi/pwidom.py, docs/MU_METHODS.md R1): mu_H in the H2O crystal and in the pure-H fluid at one (P, T) WITHOUT a lambda path,
 # on the same hosts and volumes as existing insertion TDI runs (--like <stage0.json>), then dg = mu_H(ice) - G_H to compare with the TDI value.
-# One GPU: free NVT MD of host and host + 1 H for both hosts (4 processes share the GPU), then batched single points with the fitted pair proxy and, for
+# One GPU: free NVT MD of host and host + 1 H for both hosts (the two hosts in parallel, 2 processes on the GPU), then batched single points with the fitted pair proxy and, for
 # comparison on the same frames, plain Widom (proxy none). New files only (runs/pwidom/); nothing in runs/tdi is touched.
-# Cost (estimate): MD 4 x (0.5 + PS ps) at ~0.5 s/step with 4 processes on one GPU = ~80 min for PS=4; single points ~4 x 2000 = ~10-20 min.
+# Cost (estimate): MD 2 x 2 x (0.5 + PS ps) at ~0.36 s/step with 2 processes on one GPU = ~110 min for PS=4; single points 4 x 2000 = ~10-20 min.
 # usage (repo root on Young):  sbatch mlp_pipeline/young_pwidom.sbatch                              (500 GPa 6000 K, the TDI runs in runs/tdi)
 #   ICE=runs/tdi_long/insert_500GPa_6000K_n1_stage0.json HFL=runs/tdi/insert_500GPa_6000K_n1_Hhost_stage0.json sbatch mlp_pipeline/young_pwidom.sbatch
 #   knobs: PS (4) K (4000) SEL (4) NDEL (4) BATCH (16) PROXY (docs/data/toyfit_t4.json) OUT (runs/pwidom) PY (~/grace-venv/bin/python)

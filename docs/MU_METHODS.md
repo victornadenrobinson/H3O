@@ -177,5 +177,64 @@ cheaper and exact.
 - **R12.** Gibbs-ensemble / grand-canonical moves had ~0 acceptance. With R1's Rosenbluth moves the acceptance becomes ~exp(-beta |w - mu|), comparable to R1's Kish
   fraction. At fixed V and mu_H = G_H(P) this samples x_eq directly, but each composition sits at a slightly different P, so iterate V 2-3 times.
 
-## R1 on the toy (CPU, sandbox)
-(in progress: smoke test at vpa 2.23, 20 frames: proxy-guided BAR 6548 +- 21 meV with an exact proxy, 6574 +- 53 with a deliberately poor one; plain Widom vs deletion disagree by 870 meV on the same frames. Full 4-ps comparison with the insertion TDI to follow.)
+## R1 on the toy (CPU, sandbox, 2026-10-28)
+
+Fitted toy potential (TOYICE_FIT=docs/data/toyfit_t4.json) as the "truth", 450 GPa, volumes from the toy EOS. Hosts:
+- fcc H2O ice, 32 O + 64 H
+- pure H, 128 atoms
+
+Settings: 4 ps of free NVT MD per system (host and host + 1 H), 200 frames, 4 insertions and 4 deletions per frame, K = 2000 candidates. That is 800 + 800
+trials, or 2000 real-model single points per host. The TDI reference is the production launcher via `tdi/toy_scan.sh` (10 Gauss-Legendre lambda x 2 ps,
+insertion of 1 H into ice and into pure H).
+
+**450 GPa, 5000 K** (meV; mu_H at P_target with the pressure correction; the BAR error is a 5-block error over frames):
+
+| proxy | std(dU - phi) | Kish frac. | ice: Widom / deletion / BAR mu_ex | ice mu_H | pure H: Widom / deletion / BAR mu_ex | pure-H mu_H | **dg** |
+|---|---|---|---|---|---|---|---|
+| exact (proxy = truth) | 0 | 0.92 | 6447 / 6433 / 6439 +- 9 | 4099 +- 10 | 6060 / 6086 / 6070 +- 19 | 4101 +- 19 | **-10 +- 22** |
+| poor (O-H x1.25, H-H x0.7) | 0.8 kT | 0.63 | 6451 / 6414 / 6440 +- 8 | 4100 +- 10 | 6049 / 6057 / 6056 +- 20 | 4086 +- 20 | **+6 +- 22** |
+| much worse (O-H x1.8, H-H x0.3, O-O x1.5) | 2.5 kT | 0.07 | 6362 / 6343 / 6418 +- 24 | 4078 +- 25 | -- | -- | -- |
+| none (plain Widom, same calls) | 16 kT | 0.08 | 6309 / 6068 / 6386 +- 68 | 4046 +- 69 | 6006 / 5511 / 5962 +- 69 | 3993 +- 69 | +45 +- 98 |
+| **insertion TDI** (10 lambda x 2 ps) | | | | **4122 +- 33** | | **4123 +- 35** | **-9 +- 39** |
+
+What the table shows:
+- **Proxy-guided BAR agrees with the TDI** in both hosts and in dg (-10 +- 22 vs -9 +- 39). The MD and the pressure correction are the same kind as the TDI's, and the
+  pressures agree (ice host / host + 1 H: 452.9 / 457.7 here, 453.6 / 458.0 in the TDI stage 0).
+- **Plain Widom on the same frames, with the same number of model calls, is wrong:** insertion and deletion disagree by 240 meV (ice) and 500 meV (pure H). This
+  is the 500-GPa Widom problem the proxy removes.
+- **Proxy quality:** below ~1 kT, all three estimators agree and the answer does not depend on the proxy. At 2.5 kT, BAR is still right (-21 +- 26) but Widom and deletion
+  are BOTH ~80-90 meV low while agreeing with each other, so their agreement alone is not a convergence proof. Use BAR. Require std(dU - phi) <~ 2 kT, or
+  improve the proxy.
+- Cost on 4 CPU cores: ~15 min of proxy work per host (dominated by the deletion candidates in the 5.6-A pure-H box, which needs 27 periodic images). In the GRACE boxes
+  (~9 A) one image suffices, so it is ~10x cheaper per atom.
+
+**450 GPa, 6000 K:**
+- Pure H: proxy BAR mu_H 3532 +- 16 vs TDI 3573 +- 35 (-41 +- 39).
+- The 32-O ice host MELTED after ~0.8 ps of the 4-ps free MD: O MSD 10 A^2, P 452 -> 483 GPa. Host + 1 H stayed solid, and the 1-ps EOS melt check missed it.
+- So 6000 K is not a valid toy solid at this size, and the toy-scan value there (-20 +- 99; the earlier -102) is not a solid-state number.
+- pwidom.py now reports the O MSD of both MD runs (relative to the O centre of mass) and flags `melted`; the same check matters on GRACE (D4).
+
+**What this validates and what it does not.** The estimator, the bookkeeping (same ideal term and pressure correction as the TDI) and the batching logic
+are validated. On the toy the "poor" proxies are scaled versions of the truth. Against GRACE the gap is many-body and unknown: it is the first number to read
+from the GRACE test below. If std(dU - phi) > ~2 kT, refit the proxy pairs to the first few hundred GRACE dU values (any proxy fixed before the production
+sampling keeps the estimator exact), or raise K.
+
+## GRACE test (Young, 500 GPa 6000 K)
+
+Same hosts and volumes as the existing insertion TDI runs (`--like` reads their stage0.json):
+```
+cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei
+ls runs/tdi*/insert_500GPa_6000K_n1*_stage0.json
+ICE=runs/tdi_long/insert_500GPa_6000K_n1_stage0.json HFL=runs/tdi/insert_500GPa_6000K_n1_Hhost_stage0.json sbatch mlp_pipeline/young_pwidom.sbatch
+```
+Use the ice and pure-H stage0 files that `ls` shows: the method-check run 115900 is `insert_500GPa_6000K_n1_Hhost`.
+- Output: `runs/slurm_pwidom_<id>.out`, plus `runs/pwidom/*.json` and logs.
+- Runtime: ~2-2.5 h of one A100 (estimate).
+- Read, in this order:
+  1. the GraceBatch self-check line
+  2. O MSD (solid?)
+  3. `proxy quality: std(dU - phi)` (want <~ 2 kT)
+  4. Widom / deletion / BAR (want agreement)
+  5. the two `dg =` lines (pair proxy vs plain Widom)
+- Compare with the TDI dg at 500/6000: -552 +- 35 meV (n -> 0, CURRENT_ISSUES P1b), but on the uncorrected basis. pwidom applies the pressure correction, so compare with the
+  P-corrected insertion rows of summarize.py, or remove pwidom's `dG_P_meV` from both jsons.

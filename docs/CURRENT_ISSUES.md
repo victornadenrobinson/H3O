@@ -1,6 +1,6 @@
 # Current issues (TDI free-energy pipeline)
 
-Last updated 2026-10-27. Living list of what is wrong, unverified or open, in priority order. Fixed items move to HANDOFF.md (dated sections) with their commit.
+Last updated 2026-10-28. Living list of what is wrong, unverified or open, in priority order. Fixed items move to HANDOFF.md (dated sections) with their commit.
 Code on branch `claude/eloquent-hopper-kfjdei` (PR #2 branch + review fixes). Nothing below has been re-run on Young with the fixed code yet.
 
 ## 1. Results that are invalid or need action on Young
@@ -78,6 +78,24 @@ Do not `git pull` while a launcher started with `bash` (interactive) is running:
 - `tdi/toy_checks.sh [P] [T]`: path independence (lambda = x^2 vs x^4), finite size (108 vs 32 O), insertion into H2.25O vs H2O and n = 8 (linearity of mu_H in x); all runs in parallel. `tdi/toy_scan.sh "P:T ..."` (PARALLEL=k): dg = mu_H(ice) - G_H per state with a melt check. Both run on CPU cores (Young node: PY=~/grace-venv/bin/python).
 - BUG FIXED: `run_real.py --phase insert` with HPER != 2 built an H2O host anyway (the tag got _h<x>o, the volume default was the H2O one). No production run affected (young_tdi_insert.sbatch never sets HPER; summarize labelled every insertion H2O). Now the host is H(HPER)O at its own volume; summarize labels it, and insertion_model / solid_hull / report keep _h<x>o insertion runs out of the dilute H2O fits.
 - Toy melt check: O MSD relative to the O centre of mass (the flowing H drags the whole O lattice, several A^2/ps, total centre of mass fixed: a real collective mode, not a thermostat artefact). Fitted toy H2O at ~450-500 GPa: solid 2000-6000 K (0.06-0.17 A^2 over 1 ps).
+
+## 2e. Routes to mu_H without the lambda path (2026-10-28, docs/MU_METHODS.md)
+- docs/MU_METHODS.md ranks 12 routes: what each computes, which TDI assumptions it shares, GRACE cost, error and failure modes. Order:
+  1. proxy-guided Widom / deletion + BAR (`tdi/pwidom.py`)
+  2. direct coexistence (+ umbrella on N_H(ice) for mu_H(x))
+  3. Hamiltonian replica exchange over the existing lambda grid (no extra model calls)
+
+  Rejected, with reasons in the doc:
+  - dual-box transfer: same cost as the two insertion runs, no noise cancellation, and the bookkeeping it cancels is already exact (T0)
+  - temperature reweighting of the lambda series: it is the fixed-V Gibbs-Helmholtz estimator, error ~ sigma_u sigma_U / sqrt(n)
+- **pwidom toy validation, 450 GPa / 5000 K: dg = -10 +- 22 meV (exact proxy), +6 +- 22 (poor proxy, 0.8 kT gap) vs insertion TDI -9 +- 39.** mu_H per host
+  agrees with the TDI (4099 +- 10 vs 4122 +- 33 ice; 4101 +- 19 vs 4123 +- 35 pure H). That is 4 ps of MD per system + 2000 single points.
+- Plain Widom on the same frames, with the same calls, is off by 240-500 meV (insertion vs deletion).
+- A 2.5-kT proxy gap still gives the right BAR, but Widom and deletion are both ~85 meV low while agreeing with each other: trust BAR, and keep the gap <~ 2 kT.
+- **Toy ice at 450 GPa / 6000 K melts in 4 ps of free NVT (32 O)**: O MSD 10 A^2 after ~0.8 ps; the 1-ps EOS check missed it. The toy 6000 K dg values (toy_scan -20 +- 99,
+  earlier -102) are not solid-state numbers. pwidom.py flags melting from the O MSD.
+- NEXT (Young): `mlp_pipeline/young_pwidom.sbatch` at 500 GPa / 6000 K on the hosts of the existing insertion runs (commands in MU_METHODS.md). The first number
+  to read is std(dU_GRACE - phi_pair) at the selected points.
 
 ## 3. Verified correct (do not re-check without a reason)
 Einstein crystal with fixed O centre of mass (N^{3/2}(2 pi kT/k)^{3(N-1)/2}, -kT ln V), ideal-gas H with ln N!, 3N kT ln Lambda, P V units, insertion reference kT ln((N_H+n)!/N_H!) - n kT ln V + 3 n kT ln Lambda (same counting as the crystal route), Gauss-Legendre in lambda = x^4 and the Gauss-Kronrod rule, insertion integral vs Widom on a toy LJ fluid (-9 +- 13 vs -1 +- 9 meV), pressure correction vs exact Legendre transform (0.2% at 20 GPa offsets), shell array decoding of every sbatch table.
