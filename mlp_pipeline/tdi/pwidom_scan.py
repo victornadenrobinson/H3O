@@ -140,7 +140,7 @@ def main():
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
     global PCORR; PCORR = a.pcorr
     if a.status:
-        for d in sorted(sum((glob.glob(x) for x in a.status), [])):
+        for d in sorted(d for d in sum((glob.glob(x) for x in a.status), []) if os.path.isdir(d)):   # folders only (runs/pwidom*.log files match the glob too)
             fr = sorted(glob.glob(os.path.join(d, "pw_*_frames.npz")))
             print(f"\n{d}: {len(fr)} hosts with MD frames")
             for f in fr:
