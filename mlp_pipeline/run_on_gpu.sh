@@ -26,7 +26,10 @@ while :; do
   n=0; echo "== status after $(( ($(date +%s) - t0) / 60 )) min ($(date +%H:%M))"
   for i in "${!pids[@]}"; do
     if kill -0 ${pids[$i]} 2>/dev/null; then n=$((n + 1)); st=running; else st=finished; fi
-    printf "   %-9s %-45s %s\n" $st "${logs[$i]}" "$(grep -v '^\s*$' "${logs[$i]}" | tail -n1 | cut -c1-150)"
+    hdr=$(grep -m1 -E '^ *t/ps ' "${logs[$i]}" 2>/dev/null)   # table logs (stability_npt): show the column header above the last line
+    printf "   %-9s %s\n" $st "${logs[$i]}"
+    [ -n "$hdr" ] && printf "      %s\n" "$(echo "$hdr" | cut -c1-${WIDTH:-220})"
+    printf "      %s\n" "$(grep -v -e '^\s*$' -e '_handle_getgr' "${logs[$i]}" | tail -n1 | cut -c1-${WIDTH:-220})"
   done
   nvidia-smi --query-gpu=memory.used,memory.total,utilization.gpu --format=csv,noheader 2>/dev/null | sed 's/^/   GPU: /'
   [ $n -eq 0 ] && break
