@@ -86,6 +86,7 @@ def main():
     ap.add_argument("--sel", type=int, default=8); ap.add_argument("--ndel", type=int, default=4); ap.add_argument("--proxy", default="docs/data/toyfit_t4.json")
     ap.add_argument("--no-h225", action="store_true"); ap.add_argument("--out", default="runs/pwidom_scan"); ap.add_argument("--device", default="cuda"); ap.add_argument("--model", default=None)
     ap.add_argument("--hpers", type=float, nargs="*", default=[], help="extra H2O-host compositions (H per O), volume interpolated per O between the H2O and H2.25O runs, e.g. 2.0556 2.1111 2.1667 (= 6, 12, 18 extra H in 108 O)")
+    ap.add_argument("--kextra", type=int, nargs="*", default=[], help="extra H per CELL (108 O for the usual host), e.g. 1 2 3 4 6 9 12 18: hosts H(2 + k/108)O")
     ap.add_argument("--maxpar", type=int, default=3, help="hosts running at once on the GPU (the GPU saturates at 4 MD processes)")
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
     if a.table: table(a.table); return
@@ -104,8 +105,10 @@ def main():
         if "ice" not in d or "H" not in d:
             print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K: SKIPPED (missing {'H2O host' if 'ice' not in d else ''} {'pure-H run' if 'H' not in d else ''})", flush=True); continue
         jobs = [("H2O", pw_args(d["ice"], "ice"))] + ([("H2.25O", pw_args(d["h225"], "fcc"))] if "h225" in d and not a.no_h225 else [])
-        for hp in a.hpers:   # intermediate compositions: volume per O interpolated between the H2O and H2.25O hosts of this (P, T)
+        nO = 4 * int(json.load(open(d["ice"]))["args"].get("nrep") or 3) ** 3   # fcc host: 4 O per conventional cell
+        for hp in list(a.hpers) + [2 + k / nO for k in a.kextra]:   # intermediate compositions: volume per O interpolated (beyond 0.25: extrapolated) between the H2O and H2.25O hosts
             if "h225" not in d: print(f"   H{hp:g}O: needs an H2.25O run at this (P, T) for the volume: skipped", flush=True); continue
+            if hp - 2 > 0.3: print(f"   H{hp:.4g}O: volume EXTRAPOLATED beyond H2.25O (check its MD pressure against {P:g} GPa)", flush=True)
             jobs.append((f"H{hp:.4g}O", interp_args(d["ice"], d["h225"], hp)))
         jobs.append(("pure H", pw_args(d["H"], "H")))
         print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K ({time.strftime('%H:%M:%S')}, scan {(time.time() - t_all) / 60:.1f} min): hosts " + ", ".join(n for n, _ in jobs)
