@@ -29,7 +29,7 @@ Order of importance for n*: shape of G(n) (x1.4-3) > model error of mu0 / s (x1.
 These are the cheapest decisive runs, and they bracket n* from both sides (n_add = 8: 0.074, 16: 0.148 vs n* ~ 0.11).
 
 ## 2. Ordered checklist for Young (section-0 order). Every block starts with the pull; paste outputs back
-Placeholders: `<TEMPLATE_DIR>` = a training VASP run directory with INCAR, KPOINTS, POTCAR and POSCAR (the one used for the GRACE training data; same for prep-fep); `<cpu partition>` = the CPU partition on which VASP modules work (as for `young_dft_check.sbatch`).
+Placeholders: `<TEMPLATE_DIR>` = a training VASP run directory with INCAR, KPOINTS, POTCAR and POSCAR (the one used for the GRACE training data; same for prep-fep); VASP runs on Young's SGE CPU nodes with `young_dft_check.sge` (templates on Young: `/lustre/scratch/mmm0037/dft_templates/{9.8,10.1}`, PAW_PBE H_h + O_h).
 Never commit DFT frames (the repo is public): only the small csv tables named below go to git.
 
 ### Step 0. State of the repo, the queue and the existing numbers (login node)
@@ -61,9 +61,9 @@ cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/e
 ```
 It prints each directory with its k-mesh (Gamma-centred, spacing 0.25 1/A, not the MD template mesh) and ends with the sbatch line; the settings are the template's (ENCUT, PREC, POTCAR) with ISMEAR = -1 and SIGMA = kB x 1000 K (`--tel`). Look at one INCAR and KPOINTS by eye before submitting:
 ```bash
-cd /lustre/scratch/mmm0037/H3O && cat runs/dft_check/static/static_H3O_400GPa_s1.000/INCAR runs/dft_check/static/static_H3O_400GPa_s1.000/KPOINTS && sbatch -p <cpu partition> --array=0-29%6 mlp_pipeline/young_dft_check.sbatch runs/dft_check/static
+cd /lustre/scratch/mmm0037/H3O && cat runs/dft_check/static/static_H3O_400GPa_s1.000/INCAR runs/dft_check/static/static_H3O_400GPa_s1.000/KPOINTS && qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-30 -tc 6 mlp_pipeline/young_dft_check.sge runs/dft_check/static
 ```
-(adjust 0-29 to `wc -l < runs/dft_check/static/dirs.txt` minus 1). When done, in an interactive GPU job:
+(adjust 1-30 to `wc -l < runs/dft_check/static/dirs.txt`; first run `dft_check.py prep-selftest --template <TEMPLATE_DIR> -o runs/dft_check/selftest` the same way to get the cost of one template-sized point; progress: `dft_check.py status <dir>`; Free queue: `-P Free -A UKCP_ED_P`). When done, in an interactive GPU job:
 ```bash
 cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei && ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze runs/dft_check/static 2>&1 | tee runs/dft_check/static_analysis_$(date +%F).txt | grep --line-buffered -v _handle_getgr && cp runs/dft_check/static/static_results.csv docs/data/static_dft_results.csv
 ```
@@ -73,7 +73,7 @@ Reading (printed at the end): VASP minus GRACE dH_f of H3O and of the partly fil
 ```bash
 cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei && ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py prep-fep runs/tdi_long/insert_500GPa_6000K_n1 --h-run runs/tdi_long/H_500GPa_6000K_N250 --template <TEMPLATE_DIR> --frames 10 -o runs/dft_check/fep
 ```
-then `sbatch -p <cpu partition> --array=0-39%8 mlp_pipeline/young_dft_check.sbatch runs/dft_check/fep` and the analyze line as above with `runs/dft_check/fep` (prints "DFT correction to mu_H - G_H").
+then `qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-40 -tc 8 mlp_pipeline/young_dft_check.sge runs/dft_check/fep` and the analyze line as above with `runs/dft_check/fep` (prints "DFT correction to mu_H - G_H").
 Feed the result back: `python3 mlp_pipeline/tdi/solubility_check.py --bias <delta> <err>` puts the measured shift in the delta column of table A3 (n* with the correction); a delta below -100 meV moves n* by more than 20 %.
 **(d)** If the correction is large and mu0 and s are affected differently: refit / fine-tune with these DFT frames (`grace_make_input.py --wE`, energies are nearly absent from the loss) and rerun mu0 and s.
 
