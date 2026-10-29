@@ -10,9 +10,25 @@ from tdi import analyze
 from tdi.gcalc import G_from_nodes
 from tdi.verdict import verdict
 from tdi.collapse import run_min_hh, COLLAPSE_A
+
+
+def cached_min_hh(d, tag, lam):
+    """collapse.run_min_hh (reads trajectories: the slow part of a full summarize) cached in <dir>/<tag>_minhh.json, redone when a trajectory is newer than the cache"""
+    import glob as _g
+    f = os.path.join(d, f"{tag}_minhh.json"); trajs = _g.glob(os.path.join(d, f"{tag}_node*_traj.extxyz"))
+    newest = max((os.path.getmtime(t) for t in trajs), default=0.0)
+    if os.path.exists(f) and os.path.getmtime(f) >= newest:
+        try: return float(json.load(open(f))["min_dHH_A"])
+        except Exception: pass
+    v = run_min_hh(d, tag, lam)
+    try: json.dump({"min_dHH_A": v}, open(f, "w"))
+    except OSError: pass
+    return v
+
 EV_A3_GPA = 160.21766
 
 ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="*"); ap.add_argument("-o", default=None)
+ap.add_argument("--no-hh", action="store_true", help="skip the H-H collapse check (reads trajectories; cached per run in <tag>_minhh.json after the first time)")
 ap.add_argument("--discard", type=float, default=0.0, help="discard this fraction of the start of every lambda series before integrating (e.g. 0.5 = use the second half only): a direct test of equilibration / convergence of every table below"); a = ap.parse_args()
 dirs = a.dirs or [d for d in sorted(glob.glob("runs/tdi*")) if os.path.isdir(d) and os.path.basename(d) != "tdi_test"]
 if not dirs:
@@ -67,7 +83,7 @@ for d in dirs:
                 pass
         rows.append(dict(dir=os.path.basename(d), tag=tag, phase=st["phase"], T_K=st["T"], P_target_GPa=st["P_target"], H_per_O=A.get("hper", 2.0) if st["nO"] else float("nan"), N=st["N"], nO=st["nO"], nH=st["nH"], nrep=A.get("nrep"),
                          nodes=A["nodes"], power=A["power"], dt_fs=A["dt"], ps_per_node=ps, ps_target=A["ps"], status=("done" if ps >= A["ps"] - 1e-6 else f"{100 * ps / A['ps']:.0f}%") + (f" (lambda {','.join(map(str, copied))} copied)" if copied else "") + (f" (Gauss {A['ngauss']} only: Kronrod extension pending)" if partial_gk else ""), quad_diff_meV=qd, rule=A.get("rule") or "gl",
-                         min_dHH_A=run_min_hh(d, tag, lam), G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], P_corr_meV=st.get("dG_P_eV", np.nan) / st["N"] * 1e3,
+                         min_dHH_A=(float("nan") if a.no_hh else cached_min_hh(d, tag, lam)), G_meV_atom=G, G_err_meV_atom=Ge, drift_meV=G - Gh, P_hi_GPa=P_hi, vpa_A3=st["vpa"], P_corr_meV=st.get("dG_P_eV", np.nan) / st["N"] * 1e3,
                          dG_P2_meV_atom=(np.nan if st["phase"] == "insert" else -st["V"] / st["N"] * (P_hi - st["P_target"]) ** 2 / (2 * st.get("B_GPa", np.nan)) / EV_A3_GPA * 1e3), git=st.get("meta", {}).get("git", "")[:8], date=st.get("meta", {}).get("date", "")))
 df = pd.DataFrame(rows)
 if df.empty:
