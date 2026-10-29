@@ -21,7 +21,7 @@ open("OUTCAR", "w").write(" running on   16 total cores\\n NBANDS=    600\\n ENC
 
 
 def sge(env_extra, d, tmp):
-    bind = tmp / "bin"; env = dict(ENV, PATH=f"{bind}:{os.environ['PATH']}", BASH_ENV=str(tmp / "env.sh"), NSLOTS="16", PE="smp", JOB_ID="7", HEARTBEAT="1", **env_extra)
+    bind = tmp / "bin"; env = dict(ENV, PATH=f"{bind}:{os.environ['PATH']}", BASH_ENV=str(tmp / "env.sh"), NSLOTS="16", PE="smp", JOB_ID="7", HEARTBEAT="1"); env.update(env_extra)
     return subprocess.run(["bash", "mlp_pipeline/young_dft_check.sge", d], cwd=ROOT, env=env, capture_output=True, text=True)
 
 
@@ -48,8 +48,13 @@ def test_sge_wrapper_and_modes(tmp_path):
     st = run("mlp_pipeline/tdi/dft_check.py", "status", wd); assert "done 14  running 0  failed 1  pending 0  of 15" in st, st[-400:]
     os.remove(os.path.join(wd, "f2_host", "FAIL")); r = sge(dict(), wd, tmp_path); assert r.returncode == 0 and "1 ran, 14 already done" in r.stdout, r.stdout[-600:]
     out = run("mlp_pipeline/tdi/dft_check.py", "analyze", wd, "--model", "toyice", "--device", "cpu"); assert "15 of 15 DFT single points finished" in out and "mlpmin" in out and "lowphi" in out, out[-900:]
-    sd = str(tmp_path / "selftest"); run("mlp_pipeline/tdi/dft_check.py", "prep-selftest", "--template", tpl, "-o", sd); assert sge(dict(), sd, tmp_path).returncode == 0
-    out = run("mlp_pipeline/tdi/dft_check.py", "analyze", sd, "--model", "toyice", "--device", "cpu"); assert "finished; 24 atoms on 16 ranks" in out and "MLP - DFT" in out, out[-600:]
+    open(os.path.join(tpl, "INCAR"), "a").write("NCORE = 16\n")
+    sd = str(tmp_path / "selftest"); out = run("mlp_pipeline/tdi/dft_check.py", "prep-selftest", "--template", tpl, "-o", sd); assert "2 single-point directories" in out and "selftest_small" in out, out[-700:]
+    r = sge(dict(NSLOTS="12"), sd, tmp_path); assert r.returncode == 0 and "NCORE 16 -> 12" in r.stdout, r.stdout[-900:]   # NCORE must divide the ranks
+    assert "NCORE = 12" in open(os.path.join(sd, "selftest_small", "INCAR")).read()
+    out = run("mlp_pipeline/tdi/dft_check.py", "analyze", sd, "--model", "toyice", "--device", "cpu"); assert "finished; 24 atoms on 16 ranks" in out and "finished; 12 atoms" in out and "MLP - DFT" in out, out[-900:]
+    nm = subprocess.run(["bash", "mlp_pipeline/young_dft_check.sge", sd], cwd=ROOT, env=dict(ENV, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", NSLOTS="16"), capture_output=True, text=True)   # no module command, not a login shell
+    assert nm.returncode == 2 and "module command not found" in nm.stdout, nm.stdout[-400:]
     g = str(tmp_path / "guard"); os.makedirs(g); ds = [os.path.join(wd, x) for x in ("f0_host", "f1_host")]
     for x in ds: os.remove(os.path.join(x, "OUTCAR"))
     open(os.path.join(g, "dirs.txt"), "w").write("\n".join(ds) + "\n")

@@ -5,8 +5,8 @@
 # usage (repo root; the project / budget / PE go on the command line; Free also needs -A):
 #   qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-<n> -tc 10 mlp_pipeline/young_dft_check.sge runs/dft_check/probe        (n = wc -l < runs/dft_check/probe/dirs.txt)
 #   CHUNK=4 qsub -V ... -t 1-<ceil(n/4)> ...        several little points per task (one queue wait for four calculations)
-#   interactive, inside the qrsh shell:   NP=$NSLOTS bash mlp_pipeline/young_dft_check.sge runs/dft_check/selftest
-# FIRST (on a CPU node use ~/grace-venv-cpu/bin/python, ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
+#   interactive, inside the qrsh shell:   NP=$NSLOTS bash -l mlp_pipeline/young_dft_check.sge runs/dft_check/selftest      (-l: a login shell has the 'module' command)
+# FIRST (on a CPU node:  source mlp_pipeline/young_cpu_env.sh  for python; ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
 # env (qsub -V): CHUNK (1), NP (ranks; default $NSLOTS, else nproc), LAUNCH (default: gerun when the PE is mpi, else 'mpirun -np $NP'), VASP_EXE (default vasp_gam for a Gamma-only KPOINTS, else vasp_std),
 #   VASP_MODULES (default: the UCL VASP 6.3.0 recipe, compilers/intel/2019/update5 + mpi/intel/2019/update5/intel + vasp/6.3.0-24Jan2022/intel-2019-update5), NO_MODULE=1 (modules already loaded),
 #   HEARTBEAT (seconds between progress lines, 60), MARGIN (seconds of the h_rt kept free before starting another directory, 600).
@@ -24,8 +24,13 @@ TOTAL=$(grep -c . $D/dirs.txt); CHUNK=${CHUNK:-1}; TID=${SGE_TASK_ID:-}; [ "$TID
 if [ -n "$TID" ]; then FIRST=$(( (TID - 1) * CHUNK + 1 )); LAST=$(( TID * CHUNK )); [ $LAST -gt $TOTAL ] && LAST=$TOTAL
 else FIRST=1; LAST=$TOTAL; fi
 if [ $FIRST -gt $TOTAL ]; then echo "task $TID: directories $FIRST.. beyond the $TOTAL in $D/dirs.txt: nothing to do"; exit 0; fi
+if ! type module >/dev/null 2>&1; then   # started as 'bash script' (not a login shell): load the module init like a login shell would
+  for f in /etc/profile.d/modules.sh /usr/share/Modules/init/bash /etc/profile; do [ -f $f ] && source $f >/dev/null 2>&1; type module >/dev/null 2>&1 && break; done
+  type module >/dev/null 2>&1 || { echo "module command not found: start with 'bash -l mlp_pipeline/young_dft_check.sge <dir>' (or qsub)"; exit 2; }
+fi
 if [ -z "$NO_MODULE" ]; then
-  module unload -f compilers mpi
+  module unload -f compilers mpi python3 python gcc-libs   # python3 / gcc-libs 10.2 from young_cpu_env.sh would clash: back to the default gcc-libs/4.9.2 the VASP chain was verified with
+  module load gcc-libs/4.9.2
   module load ${VASP_MODULES:-compilers/intel/2019/update5 mpi/intel/2019/update5/intel vasp/6.3.0-24Jan2022/intel-2019-update5} || { echo "module load failed: set VASP_MODULES (module avail vasp)"; exit 2; }
 fi
 export OMP_NUM_THREADS=1
@@ -47,6 +52,11 @@ run_one() {   # $1 = position in this task (1-based), $2 = directory
   fi
   command -v $exe >/dev/null || { echo "[$k/$NTASK] $d: $exe not found after module load (set VASP_EXE)"; NFAIL=$((NFAIL + 1)); return 2; }
   local nat=$(sed -n 7p $d/POSCAR | awk '{s=0; for(i=1;i<=NF;i++) s+=$i; print s}')
+  if grep -q "^ *NCORE *=" $d/INCAR 2>/dev/null; then   # NCORE must divide the number of ranks: lower it to the largest divisor of NP
+    local nc=$(sed -n 's/^ *NCORE *= *\([0-9]*\).*/\1/p' $d/INCAR | head -1) nc0
+    nc0=$nc; while [ "$nc" -gt 1 ] && [ $((NP % nc)) -ne 0 ]; do nc=$((nc - 1)); done
+    [ "$nc" != "$nc0" ] && { sed -i "s/^ *NCORE *=.*/NCORE = $nc/" $d/INCAR; echo "[$k/$NTASK] $d: NCORE $nc0 -> $nc (must divide the $NP ranks)"; }
+  fi
   echo "[$k/$NTASK] $d: $LAUNCH $exe, $nat atoms, started $(date +%H:%M:%S)"
   t0=$SECONDS
   ( cd $d && exec $LAUNCH $exe > vasp.out 2>&1 ) & pid=$!
