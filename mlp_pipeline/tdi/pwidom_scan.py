@@ -132,10 +132,21 @@ def main():
     ap.add_argument("--hpers", type=float, nargs="*", default=[], help="extra H2O-host compositions (H per O), volume interpolated per O between the H2O and H2.25O runs, e.g. 2.0556 2.1111 2.1667 (= 6, 12, 18 extra H in 108 O)")
     ap.add_argument("--kextra", type=int, nargs="*", default=[], help="extra H per CELL (108 O for the usual host), e.g. 1 2 3 4 6 9 12 18: hosts H(2 + k/108)O")
     ap.add_argument("--maxpar", type=int, default=3, help="hosts running at once on the GPU (the GPU saturates at 4 MD processes)")
+    ap.add_argument("--status", nargs="+", default=None, help="list hosts with MD frames but no result in these scan directories (globs ok, e.g. 'runs/pwidom*')")
     ap.add_argument("--rescore", default=None, help="rebuild <dir>/scan.jsonl from the result jsons in <dir> with the current pressure correction (old file kept as scan.jsonl.bak)")
     ap.add_argument("--pcorr", choices=["robust", "measured"], default="robust", help="pressure correction (see mu_P)")
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
     global PCORR; PCORR = a.pcorr
+    if a.status:
+        for d in sorted(sum((glob.glob(x) for x in a.status), [])):
+            fr = sorted(glob.glob(os.path.join(d, "pw_*_frames.npz")))
+            print(f"\n{d}: {len(fr)} hosts with MD frames")
+            for f in fr:
+                tag = os.path.basename(f)[:-len("_frames.npz")]; res = sorted(glob.glob(os.path.join(d, f"{tag}_*_K*.json")))
+                lg = os.path.join(d, f"{tag}.log"); last = [l.strip() for l in open(lg).read().splitlines() if l.strip() and not any(z in l for z in NOISE)][-1:] if os.path.exists(lg) else []
+                print(f"   {'done   ' if res else 'MISSING'} {tag:32s} " + (", ".join(os.path.basename(r).split('_K')[-1].replace('.json', '') for r in res) and "K " + ", ".join(os.path.basename(r).split('_K')[-1].replace('.json', '') for r in res) if res else f"last log line: {last[0][:110] if last else '-'}"))
+        print("\nrerun a scan command with the SAME --out, --ps and --K: finished hosts are skipped, missing ones reuse their MD frames")
+        return
     if a.rescore: rescore(a.rescore); return
     if a.table: table(a.table); return
     roots = a.roots or sorted(d for d in glob.glob("runs/tdi*") if os.path.isdir(d))

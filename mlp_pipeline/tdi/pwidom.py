@@ -174,15 +174,22 @@ def cmd_run(a):
     isH1 = np.r_[isH, True]; numbers1 = np.r_[host.numbers, 1]
     # ---- insertion: per host frame, a.sel selections from one set of K uniform candidates (each selection is an unbiased trial). The proxy work is done frame
     # by frame; the real-model structures of all frames are collected and evaluated together (batched calls)
-    sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []
-    for f in sfr:
+    sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []; t_last = time.time()
+    def tick(i, ntot, what):   # the proxy stage is CPU work of minutes with no other output: a line every 30 s
+        nonlocal t_last
+        if time.time() - t_last >= 30:
+            t_last = time.time(); el = t_last - t0; print(f"  proxy {what}: frame {i + 1}/{ntot}, {el / 60:.1f} min, ETA {el / (i + 1) * (ntot - i - 1) / 60:.1f} min for this part", flush=True)
+    for i_f, f in enumerate(sfr):
+        tick(i_f, len(sfr), "insertions")
         x = fh[f]; c = rng.random((K, 3)) @ cell; phi = proxy_energy(p, c, x, isH, cell)
         lnW = lse(-phi / kT) - np.log(K); pr = np.exp(-phi / kT - lse(-phi / kT)); s = rng.choice(K, a.sel, p=pr)
         S0.append(Atoms(numbers=host.numbers, positions=x, cell=cell, pbc=True))
         S1 += [Atoms(numbers=numbers1, positions=np.vstack([x, c[j]]), cell=cell, pbc=True) for j in s]; ins.append((phi[s], lnW))
     # ---- deletion: per full frame, a.ndel randomly chosen H (incl. the added one: all H are identical)
     iH1 = np.where(isH1)[0]; dfr = list(range(0, len(fp), a.stride)); D0, D1, dele = [], [], []
-    for f in dfr:
+    t0 = time.time()
+    for i_f, f in enumerate(dfr):
+        tick(i_f, len(dfr), "deletions")
         x = fp[f]; ts = rng.choice(iH1, min(a.ndel, len(iH1)), replace=False); D0.append(Atoms(numbers=numbers1, positions=x, cell=cell, pbc=True)); ws = []
         for t in ts:
             keep = np.ones(len(x), bool); keep[t] = False; xr = x[keep]; hr = isH1[keep]
