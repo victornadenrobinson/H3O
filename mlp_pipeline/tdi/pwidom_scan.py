@@ -17,7 +17,8 @@ from math import lgamma, log
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); KB = 8.617333262e-5
-NOISE = ("_handle_getgr", "I0000", "W0000", "E0000", "cuda_executor", "device_compiler", "cuDNN", "gpu_device", "tensorflow", "XLA", "absl", "ptxas")   # TensorFlow chatter, never a status
+NOISE = ("_handle_getgr", "I0000", "W0000", "E0000", "cuda_executor", "device_compiler", "cuDNN", "gpu_device", "tensorflow", "XLA", "absl", "ptxas",
+         "Warning", "warnings.warn", "using runs/grace")   # TensorFlow chatter, never a status
 
 
 def hosts(roots):
