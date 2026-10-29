@@ -14,6 +14,7 @@ usage (GPU session or node, repo root):  ~/grace-venv/bin/python mlp_pipeline/td
 writes <dir>/wk.csv; prints per (P, T, host): dg_q own / sys (meV per H) and the per-H rms force in each environment.
 """
 import argparse, glob, json, os, re, sys
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")   # TensorFlow start-up chatter
 import numpy as np
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, HERE)
@@ -33,12 +34,21 @@ def selftest():
         print(f"   self-test: hbar w / kT = {hw / kT:.2f}: exact {exact * 1e3:7.3f} meV, Wigner-Kirkwood {wk * 1e3:7.3f} meV ({100 * (wk - exact) / exact:+.1f} %)")
 
 
+_CALC = {}
+
+
 def forces(calc_spec, device, structs):
+    """forces of many structures; the calculator (and GraceBatch) is built once per model and reused for every host"""
     from importlib import import_module
-    calc = import_module("04_benchmark").get_calc_spec(calc_spec, device)
-    if type(calc).__name__ == "TPCalculator":
-        from tdi.batched import GraceBatch
-        gb = GraceBatch(calc); out = []
+    if calc_spec not in _CALC:
+        calc = import_module("04_benchmark").get_calc_spec(calc_spec, device); gb = None
+        if type(calc).__name__ == "TPCalculator":
+            from tdi.batched import GraceBatch
+            gb = GraceBatch(calc)
+        _CALC[calc_spec] = (calc, gb)
+    calc, gb = _CALC[calc_spec]
+    if gb is not None:
+        out = []
         for i in range(0, len(structs), 8): out += [r[1] for r in gb(None, [(structs[i:i + 8], False)])[0]]
         return out
     res = []
