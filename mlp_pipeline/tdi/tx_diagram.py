@@ -12,7 +12,7 @@ Second solid (eutectics): --compound HPERO:DG[:DS] adds a line compound H(HPERO)
   (H2O superionic solid + fluid H at the same P, T; NOT Huang's 0 K reference: theirs is vs H2O Pbcm + solid H, include your own entropy / reference shift).
   With it the hull can show solid + compound and compound + liquid fields; the temperatures where the hull's phase sequence changes (eutectic, peritectic,
   melting of a phase) are printed. Without a compound there is one solid only (pure H is fluid here) and no eutectic at these T.
-Planets: Uranus / Neptune bands from docs/data/ice_giant_profiles.csv (approximate T(P), see its header): at each panel's P a horizontal bar at the planet's T (range = slope range)
+Planets: Uranus / Neptune bands from docs/data/ice_giant_profiles.csv (approximate T(P), see its header) and docs/data/ice_giant_profiles_millot2019.csv (read off Millot 2019, hatched): at each panel's P a horizontal bar at the planet's T (range = slope range)
   over X = --planet-x (default 0.1-0.4): H mass fraction w in the water-rich layer -> n = 18.015 w / (1.008 (1 - w)) added H per O, X = n / (3 + n); w = 2 % -> X 0.11, 5 % -> 0.24,
   10 % -> 0.40 (three-layer models put roughly 5-15 wt% H/He into the inner envelope; He is not in our system). --no-planets to leave them out.
 usage: python3 mlp_pipeline/tdi/tx_diagram.py [--P 400 500 300] [--T 3500 8000] [--xmax 1] [--compound 3:-20:0.002] [-o docs/figures/tx_diagram]   -> <o>.png, <o>.csv
@@ -140,6 +140,11 @@ def main():
     ap.add_argument("--planet-x", type=float, nargs=2, default=[0.1, 0.4], help="X range of the Uranus / Neptune bars"); ap.add_argument("--no-planets", action="store_true")
     ap.add_argument("-o", default="docs/figures/tx_diagram"); a = ap.parse_args()
     planets = [] if a.no_planets else [r for r in csv.DictReader(l for l in open("docs/data/ice_giant_profiles.csv") if not l.startswith("#"))]
+    if not a.no_planets:   # tabulated profiles (read off figures): one entry per planet/profile, T(P) by linear interpolation
+        tab = {}
+        for r in csv.DictReader(l for l in open("docs/data/ice_giant_profiles_millot2019.csv") if not l.startswith("#")):
+            tab.setdefault((r["planet"], r["profile"]), []).append((float(r["P_GPa"]), float(r["T_K"])))
+        planets += [dict(planet=k[0], profile=k[1], table=sorted(v)) for k, v in tab.items()]
     comp = None
     if a.compound:
         f = [float(v) for v in a.compound.split(":")] + [0.0]; nc = f[0] - 2; comp = (nc / (3 + nc), f[1], f[2])
@@ -178,8 +183,16 @@ def main():
             ax.fill_betweenx(Ts, q(0, 16), q(0, 84), color="#1c5cab", alpha=0.18, lw=0); ax.fill_betweenx(Ts, q(1, 16), q(1, 84), color="#d55181", alpha=0.18, lw=0)
         Tm = Ts[np.argmax(~ok)] if (~ok).any() else np.nan
         for r in planets:
-            Ta = float(r["T_anchor_K"]); Pa = float(r["P_anchor_GPa"]); t = [Ta * (P / Pa) ** float(r[k]) for k in ("a_min", "a_max")]; T1, T2 = min(t), max(t)
+            if "table" in r:
+                Pt, Tt = zip(*r["table"]); Tc = float(np.interp(P, Pt, Tt)); T1, T2 = Tc - 150, Tc + 150; Ta, Pa = Tc, P   # +-150 K: read-off uncertainty
+            else:
+                Ta = float(r["T_anchor_K"]); Pa = float(r["P_anchor_GPa"]); t = [Ta * (P / Pa) ** float(r[k]) for k in ("a_min", "a_max")]; T1, T2 = min(t), max(t)
             cold = "cold" in r["profile"]; c = "#2a9d8f" if r["planet"] == "Uranus" else "#3a4fb8"
+            if "table" in r:
+                ax.add_patch(plt.Rectangle((a.planet_x[0], T1), a.planet_x[1] - a.planet_x[0], T2 - T1, fc="none", ec=c, lw=1.5, ls=":", hatch="///", label=f"{r['planet']}, {r['profile']} (read off)"))
+                ax.text(a.planet_x[1] + 0.005, Tc, f"{r['planet'][0]} M19", fontsize=7, color=c, va="center")
+                print(f"   {r['planet']:8s} {r['profile']:22s} at {P:.0f} GPa: T ~ {Tc:.0f} +- 150 K (read off the figure)")
+                continue
             ax.add_patch(plt.Rectangle((a.planet_x[0], T1 - 30), a.planet_x[1] - a.planet_x[0], T2 - T1 + 60, fc=c, alpha=0.25 if cold else 0.5, ec=c, lw=1.2, ls="--" if cold else "-",
                                        label=f"{r['planet']}, {r['profile']} (approx.)"))
             ax.text(a.planet_x[1] + 0.005, (T1 + T2) / 2, f"{r['planet'][0]} {'cold' if cold else 'R11'}", fontsize=7, color=c, va="center")
