@@ -6,12 +6,12 @@
 #   qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-<n> -tc 10 mlp_pipeline/young_dft_check.sge runs/dft_check/probe        (n = wc -l < runs/dft_check/probe/dirs.txt)
 #   CHUNK=4 qsub -V ... -t 1-<ceil(n/4)> ...        several little points per task (one queue wait for four calculations)
 #   interactive, inside the qrsh shell:   NP=$NSLOTS bash mlp_pipeline/young_dft_check.sge runs/dft_check/selftest
-# FIRST: python3 mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
+# FIRST (on a CPU node use ~/grace-venv-cpu/bin/python, ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
 # env (qsub -V): CHUNK (1), NP (ranks; default $NSLOTS, else nproc), LAUNCH (default: gerun when the PE is mpi, else 'mpirun -np $NP'), VASP_EXE (default vasp_gam for a Gamma-only KPOINTS, else vasp_std),
 #   VASP_MODULES (default: the UCL VASP 6.3.0 recipe, compilers/intel/2019/update5 + mpi/intel/2019/update5/intel + vasp/6.3.0-24Jan2022/intel-2019-update5), NO_MODULE=1 (modules already loaded),
 #   HEARTBEAT (seconds between progress lines, 60), MARGIN (seconds of the h_rt kept free before starting another directory, 600).
 # Output: <job>.o<jobid>.<task> in the submit directory: banner, per directory a start line, a progress line every HEARTBEAT s (SCF steps, last DAV/RMM line), a finish line (TOTEN, wall, SCF steps), an end summary.
-# Progress of the whole set:  python3 mlp_pipeline/tdi/dft_check.py status <dir>      Results:  ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze <dir>   (on a GPU node: it evaluates the MLP)
+# Progress of the whole set:  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py status <dir>      Results (analyze also evaluates the MLP; works on a CPU node):  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py analyze <dir>   (on a GPU node: it evaluates the MLP)
 #$ -N dftchk
 #$ -cwd
 #$ -j y

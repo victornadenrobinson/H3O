@@ -158,7 +158,7 @@ def finish(a, rows, dirs, meta):
     open(os.path.join(a.o, "dirs.txt"), "w").write("".join(d + "\n" for d in dirs))
     print(f"{len(dirs)} single-point directories in {a.o} (list: {a.o}/dirs.txt). Young CPU nodes (SGE), from the repo root, 16 ranks per directory, CHUNK directories per task:\n"
           f"  CHUNK=1 qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-{len(dirs)} -tc 10 mlp_pipeline/young_dft_check.sge {a.o}\n"
-          f"  progress:  python3 mlp_pipeline/tdi/dft_check.py status {a.o}")
+          f"  progress:  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py status {a.o}")
 
 
 def toten(d):
