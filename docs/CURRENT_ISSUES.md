@@ -1,7 +1,33 @@
 # Current issues (TDI free-energy pipeline)
 
-Last updated 2026-10-28. Living list of what is wrong, unverified or open, in priority order. Fixed items move to HANDOFF.md (dated sections) with their commit.
+Last updated 2026-10-29. Living list of what is wrong, unverified or open, in priority order. Fixed items move to HANDOFF.md (dated sections) with their commit.
 Code on branch `claude/eloquent-hopper-kfjdei` (PR #2 branch + review fixes). Nothing below has been re-run on Young with the fixed code yet.
+
+## 0. Start here (2026-10-29): goal = VALIDATE the solubility of H in superionic (fcc) H2O
+
+**Current GRACE answer (classical nuclei).** Regular-solution fit of the average dG per added H, mu0 + s n (docs/data/insertion_regsol_fit.csv): solubility **n* = -mu0 / (2 s)**
+(earlier notes used -mu0/s: those solubilities were 2x too high, fixed 2026-10-28 in huang_hull.py / tx_diagram.py) = H2.03O (300 GPa 5000 K), H2.04-2.08O (400 GPa 5000-6500 K),
+H2.10-2.13O (500 GPa 5000-7000 K); hull minimum only -2 to -10 meV/atom. T-x diagram (tdi/tx_diagram.py -> docs/figures/tx_diagram.png): solvus ~2-3 % extra H, wide solid + H-rich liquid
+field, pure-H2O melting 5500 / 6600 / 7200 K at 300 / 400 / 500 GPa (model), Uranus / Neptune bands (approximate profiles, docs/data/ice_giant_profiles*.csv).
+
+**What could make it wrong, largest first, and the test for each:**
+1. **Model (GRACE) error for extra H in ice.** Static H3O (h3o_static.py): GRACE dH_f is +90-100 meV/atom above Huang's static DFT at 300-500 GPa (+53 at 600) = ~0.4 eV per extra H, the
+   same size as mu0. H-reference-free check vs the user's CASTEP: partial volume of the extra H 12 % too large in GRACE (+18 meV/atom per 100 GPa). Bias proxy from DFT frames: GRACE mu_H - G_H
+   +40 +- 15 meV per H too high. Tests: (a) CASTEP H reference (Cs-IV / C2/c-24 / hcp H2) at the user's H3O settings -> own DFT dH(H3O), compare GRACE on the same structures;
+   (b) DFT single points of the h3o_static relaxed structures (now saved: runs/h3o_static/P*/ *_relaxed.extxyz; a dft_check.py prep-static mode is NOT written yet); (c) the decisive one:
+   FEP MLP -> DFT of mu_H - G_H at 1-2 state points (tdi/dft_check.py prep-fep; VASP CPU modules only on Young, ~tens-100 node-hours); (d) if the correction is large, refit / fine-tune.
+2. **The slope s (sets n* as much as mu0).** s comes from insertion n = 1, 2, 4 and the H2.25O / H2.5O crystals; the minimum lies at n ~ 0.05-0.13, between them. Direct crystal TDI of
+   H2.1O and H2.2O (and H2.05O) at 400 / 500 GPa would measure the hull minimum directly. Long NPT stability of H2.1O / H2.2O first: young_stability_npt.sbatch (flexible cell, 30 ps, verdict line;
+   code compile-checked only, not yet run on GPU).
+3. **Method / numerics:** finite size (108 vs 256 O insertion), quadrature (P3), pressure correction (P4, insp0 runs), pure-H reference (collapse / HHWALL wall test 117562/117563),
+   electronic entropy of metallic H (P1c, tdi/elec_entropy.py, not run).
+4. **Physics not in the model:** zero-point energy / NQE (+10-20 meV/atom against H uptake from Huang's ZPE vs static); He; other ices.
+5. **Phase-diagram side (not the solubility itself):** liquid points at n = 6, 12 and 4000-5000 K (liquidus at X > 0.5 is extrapolated); melting-line finite size (+-700 K);
+   the 400 GPa H2.25O model check is off by ~35 meV/atom near 6000 K; 300 GPa two-liquid region above 5500 K is a fit artefact (2 temperatures only); verify the U/N profiles against the papers.
+
+**Runs on Young to collect:** h3o_static H3O-only rerun with saved references (young_h3o_static.sbatch, PS="300 350 400 450 500 600 700 800" VARIANTS=3 REDO=1);
+young_stability_npt.sbatch (6 tasks); wall test 117562/117563; liq_rep3 117532; eosmap subset 117564; chk_path / chk_rev; melting liquids and crystals; fcc-bcc boundary 117500; 100 GPa vpa_fix reruns.
+**Waiting on the user:** CASTEP H reference enthalpies (and ice X / Pbcm above 400 GPa); their working VASP sbatch from another project (Young VASP modules are CPU builds).
 
 ## 1. Results that are invalid or need action on Young
 
