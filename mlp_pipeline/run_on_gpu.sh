@@ -3,6 +3,7 @@
 # Each item is <sbatch script>[:<array task>]; the script is run with bash and SLURM_ARRAY_TASK_ID set (all our young_*.sbatch read their table entry from it), so environment
 # settings (PS=, JOBS=, MODEL=, ...) given on this command line apply to every item. Processes share the GPU (TF_FORCE_GPU_ALLOW_GROWTH), starts are staggered, and a status
 # block (elapsed time + last line of each log) is printed every STATUS minutes until all have finished.
+# SEVERAL GPUs: with --gres=gpu:N the items are spread round-robin over the N GPUs (one each), so N TDI tasks can run at once.
 # MIND THE GPU MEMORY: a single-process task (stability_npt, h3o_static per pressure, eos points) takes ~3-5 GB; a TDI task (young_tdi*.sbatch) itself starts up to ~9 lambda
 # processes, so put at most one TDI task on a GPU. Interactive allocations end hard at their time limit: choose PS / tasks that fit (the logs say ms/step and ETA).
 # usage (repo root, inside e.g.  srun -p intergpu --gres=gpu:1 -c 4 --mem=60G --time=6:00:00 --pty bash):
@@ -11,14 +12,17 @@
 [ -d mlp_pipeline ] || { echo "run from the repo root"; exit 2; }
 [ $# -gt 0 ] || { sed -n 2,11p "$0"; exit 2; }
 export TF_FORCE_GPU_ALLOW_GROWTH=true
-mkdir -p runs/ongpu; pids=(); logs=(); t0=$(date +%s)
+mkdir -p runs/ongpu; pids=(); logs=(); t0=$(date +%s); j=0
+IFS=',' read -ra DEVS <<< "${CUDA_VISIBLE_DEVICES:-}"   # several GPUs allocated (e.g. --gres=gpu:3): items are spread round-robin, one GPU each
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/GPU: /'
 for item in "$@"; do
   s=${item%%:*}; k=0; [[ $item == *:* ]] && k=${item##*:}
   [ -f "$s" ] || { echo "no such script: $s"; continue; }
   log=runs/ongpu/$(basename "$s" .sbatch)_$k.log
-  SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" > "$log" 2>&1 &
-  pids+=($!); logs+=("$log"); echo "== started $s task $k (pid $!) -> $log  ($(date +%H:%M:%S))"
+  dev=""; [ ${#DEVS[@]} -gt 1 ] && dev=${DEVS[$((j % ${#DEVS[@]}))]}; j=$((j + 1))
+  if [ -n "$dev" ]; then CUDA_VISIBLE_DEVICES=$dev SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" > "$log" 2>&1 &
+  else SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" > "$log" 2>&1 & fi
+  pids+=($!); logs+=("$log"); echo "== started $s task $k (pid $!)${dev:+ on GPU $dev} -> $log  ($(date +%H:%M:%S))"
   [ "$item" != "${@: -1}" ] && sleep ${STAGGER:-20}   # model load + XLA compile of several processes at once can exceed the GPU memory
 done
 while :; do
