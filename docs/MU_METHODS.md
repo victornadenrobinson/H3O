@@ -221,6 +221,19 @@ sampling keeps the estimator exact), or raise K.
 
 ## GRACE test (Young, 500 GPa 6000 K)
 
+**First GRACE result (2026-10-29, PS=1 = 50 frames per host, K 4000, SEL 4, NDEL 4, interactive A100, ~40 min in total):**
+
+| host | proxy std(dU - phi) | Kish fraction | Widom / deletion / BAR mu_ex (meV) | mu_H fixed V / at 500 GPa (meV) |
+|---|---|---|---|---|
+| fcc H2O (ice) | 1.73 / 1.78 kT | 0.17 | 2969 +- 119 / 3035 +- 138 / 2982 +- 73 | 63.9 / 8.1 +- 88.1 (host at 509.6 GPa) |
+| pure H | 0.41 / 0.35 kT | 0.77 | 2991 +- 25 / 3004 +- 48 / 3010 +- 29 | 567.9 / 551.9 +- 29.2 |
+| plain Widom (no proxy), ice / pure H | 40 / 26 kT | 0.03 / 0.04 | Widom and deletion disagree by ~1 eV; BAR 2998 +- 170 / 3098 +- 78 | |
+
+- **dg = mu_H(ice) - G_H = -549 +- 93 meV** (pressure-corrected; fixed-V basis -510 +- 93). Insertion TDI at the same point: -552 +- 35 (n -> 0, uncorrected basis, P1b).
+  The two independent routes agree within the errors; the host stayed solid (O MSD flat at 0.15-0.18 A^2).
+- The error is set by the ice host (proxy 1.7 kT, Kish 0.17); pure H is excellent (0.4 kT). The proxy single points took ~17 min per host (CPU work for K = 4000 candidates x
+  200 trials), longer than the 8 min of MD. Next: PS=4 and SEL=16 (more insertions per frame are cheap) to reach +-30-45 meV; then hosts with extra H (--hper) for mu_H(n).
+
 Same hosts and volumes as the existing insertion TDI runs (`--like` reads their stage0.json):
 ```
 cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei
