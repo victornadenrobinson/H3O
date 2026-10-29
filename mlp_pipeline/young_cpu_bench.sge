@@ -18,7 +18,8 @@
 #$ -cwd
 #$ -j y
 [ -d mlp_pipeline ] || { echo "run from the repo root (qsub -cwd there)"; exit 2; }
-PY=${PY:-$HOME/grace-venv/bin/python}
+source mlp_pipeline/young_cpu_env.sh || exit 2   # python module + ~/grace-venv-cpu (RHEL 7 CPU nodes cannot run ~/grace-venv)
+PY=${PY:-$HOME/grace-venv-cpu/bin/python}
 echo "== cpubench job $JOB_ID on $(hostname) queue $QUEUE, $NSLOTS slots, label '${BENCH_LABEL:-}', started $(date)"
 qstat -j $JOB_ID 2>/dev/null | grep -E "submission_time|project|account" | sed 's/^/   /'
 lscpu 2>/dev/null | grep -E "Model name|^CPU\(s\)|Thread\(s\) per core|Socket|NUMA node\(s\)" | sed 's/^/   /'

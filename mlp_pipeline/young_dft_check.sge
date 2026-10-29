@@ -6,7 +6,7 @@
 #   qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-<n> -tc 10 mlp_pipeline/young_dft_check.sge runs/dft_check/probe        (n = wc -l < runs/dft_check/probe/dirs.txt)
 #   CHUNK=4 qsub -V ... -t 1-<ceil(n/4)> ...        several little points per task (one queue wait for four calculations)
 #   interactive, inside the qrsh shell:   NP=$NSLOTS bash mlp_pipeline/young_dft_check.sge runs/dft_check/selftest
-# FIRST (on a CPU node use ~/grace-venv-cpu/bin/python, ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
+# FIRST (on a CPU node:  source mlp_pipeline/young_cpu_env.sh  for python; ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
 # env (qsub -V): CHUNK (1), NP (ranks; default $NSLOTS, else nproc), LAUNCH (default: gerun when the PE is mpi, else 'mpirun -np $NP'), VASP_EXE (default vasp_gam for a Gamma-only KPOINTS, else vasp_std),
 #   VASP_MODULES (default: the UCL VASP 6.3.0 recipe, compilers/intel/2019/update5 + mpi/intel/2019/update5/intel + vasp/6.3.0-24Jan2022/intel-2019-update5), NO_MODULE=1 (modules already loaded),
 #   HEARTBEAT (seconds between progress lines, 60), MARGIN (seconds of the h_rt kept free before starting another directory, 600).
@@ -25,7 +25,8 @@ if [ -n "$TID" ]; then FIRST=$(( (TID - 1) * CHUNK + 1 )); LAST=$(( TID * CHUNK 
 else FIRST=1; LAST=$TOTAL; fi
 if [ $FIRST -gt $TOTAL ]; then echo "task $TID: directories $FIRST.. beyond the $TOTAL in $D/dirs.txt: nothing to do"; exit 0; fi
 if [ -z "$NO_MODULE" ]; then
-  module unload -f compilers mpi
+  module unload -f compilers mpi python3 python gcc-libs   # python3 / gcc-libs 10.2 from young_cpu_env.sh would clash: back to the default gcc-libs/4.9.2 the VASP chain was verified with
+  module load gcc-libs/4.9.2
   module load ${VASP_MODULES:-compilers/intel/2019/update5 mpi/intel/2019/update5/intel vasp/6.3.0-24Jan2022/intel-2019-update5} || { echo "module load failed: set VASP_MODULES (module avail vasp)"; exit 2; }
 fi
 export OMP_NUM_THREADS=1
