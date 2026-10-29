@@ -49,6 +49,11 @@ def main():
     print(f"{tag}: {nO} O + {nH} H = H{nH / nO:.3f}O, {N} atoms, start V/atom {vpa:.3f}, NPT (flexible cell) {a.ps} ps at {a.P} GPa, {a.T} K, dt {a.dt} fs, model {a.model}", flush=True)
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True, rng=np.random.default_rng(a.seed)); Stationary(at)   # seeded: the run is reproducible up to the barostat's own (deterministic) dynamics
     ck = os.path.join(d, "checkpoint.npz"); k0 = 0; rows = []; ckd = None
+    if not os.path.exists(ck) and os.path.exists(os.path.join(d, "stability.json")) and not a.fresh:   # a run from before checkpoints existed: never overwrite its results silently
+        sys.exit(f"{d} has results (stability.json) but no checkpoint.npz (run with an older version): it cannot be continued. Move it away, use another -o, or --fresh to overwrite.")
+    if a.fresh:
+        for f in ("checkpoint.npz", "traj.extxyz"):
+            if os.path.exists(os.path.join(d, f)): os.remove(os.path.join(d, f))   # traj is appended to: a fresh run must not add to the old one
     if os.path.exists(ck) and not a.fresh:   # resume: atoms (positions, momenta, cell) and the analysis state after the last finished block; the thermostat / barostat variables restart at 0
         ckd = np.load(ck); k0 = int(ckd["blocks"]); at.set_cell(ckd["cell"], scale_atoms=False); at.set_positions(ckd["pos"]); at.set_momenta(ckd["mom"])
         rows = json.load(open(os.path.join(d, "stability.json")))["blocks"][:k0]
