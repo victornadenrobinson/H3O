@@ -1,0 +1,26 @@
+#!/bin/bash -l
+# CPU benchmark of the MLP on one Young CPU node (SGE): mlp_pipeline/cpu_bench.py for the TDI cells (fcc H2O 324 atoms, pure H 250, insertion 325 atoms), several
+# processes x threads layouts each, VERBOSE (process 0 prints every model call; heartbeat every 30 s). Results are appended to runs/cpu_bench.jsonl with a label,
+# so Gold and Free runs (and different node types) can be compared:  python3 mlp_pipeline/cpu_bench.py --table runs/cpu_bench.jsonl
+# The project / budget / parallel environment go on the qsub line (not here), so one script serves both queues:
+#   cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei
+#   qsub -P Gold -A UKCP_ED_P -pe mpi 40 -v BENCH_LABEL=gold    mlp_pipeline/young_cpu_bench.sge
+#   qsub <Free-queue options from the MMM Hub docs> -pe mpi 40 -v BENCH_LABEL=free mlp_pipeline/young_cpu_bench.sge
+#   (if 'mpi' is not a valid parallel environment for one node: qconf -spl lists them; smp-type PEs are preferred for one node)
+# env (via -v): CELLS (default "insert H"), CALLS (20), LAYOUTS (default from the slot count), PY (~/grace-venv/bin/python)
+# Output: cpubench.o<jobid> in the repo root; the job records start / queue-wait information at the top.
+#$ -N cpubench
+#$ -l h_rt=2:00:00
+#$ -l mem=4G
+#$ -cwd
+#$ -j y
+[ -d mlp_pipeline ] || { echo "run from the repo root (qsub -cwd there)"; exit 2; }
+PY=${PY:-$HOME/grace-venv/bin/python}
+echo "== cpubench job $JOB_ID on $(hostname) queue $QUEUE, $NSLOTS slots, label '${BENCH_LABEL:-}', started $(date)"
+qstat -j $JOB_ID 2>/dev/null | grep -E "submission_time|project|account" | sed 's/^/   /'
+lscpu 2>/dev/null | grep -E "Model name|^CPU\(s\)|Thread\(s\) per core|Socket|NUMA node\(s\)" | sed 's/^/   /'
+for C in ${CELLS:-insert H}; do
+  echo; echo "######## cell $C ########"
+  $PY -u mlp_pipeline/cpu_bench.py --cell $C --calls ${CALLS:-20} ${LAYOUTS:+--layouts $LAYOUTS} --label "${BENCH_LABEL:-young}_$C"
+done
+echo; echo "== all results so far:"; $PY mlp_pipeline/cpu_bench.py --table runs/cpu_bench.jsonl; echo "== finished $(date)"

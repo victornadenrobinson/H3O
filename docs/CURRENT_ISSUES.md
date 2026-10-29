@@ -27,6 +27,16 @@ field, pure-H2O melting 5500 / 6600 / 7200 K at 300 / 400 / 500 GPa (model), Ura
 
 **Status 2026-10-29 (session 5, offline; details docs/SOLUBILITY_VALIDATION.md, software review + flow diagram docs/CODEBASE.md).** Arithmetic and closure of n* = -mu0/(2s) re-checked (reproduce: `python3 mlp_pipeline/tdi/solubility_check.py`). The two end points (mu0 from insertion n -> 0, s pinned by the n = 0.25 crystals) do NOT fix the shape of G(n): with G = mu0 n + c n^p, p = 1.5 ... 4, n* = 0.07-0.15 at 500 GPa, 0.05-0.14 at 400 GPa (quadratic: 0.081 at 400/5000, 0.107 / 0.097 / 0.114 at 500 GPa 5000 / 5500 / 6000 K). Four of nine (P, T) states have s_err 1200-1600 meV: n* undetermined there. Every known model error (bias proxy -40 meV; the static H3O offset read as a per-extra-H error or as a change of s) INCREASES n* (x1.1 ... 2): GRACE probably under-states the solubility; its sign (H soluble) survives any delta(mu0) below +250 ... +490 meV. Next, in order: insertion n = 8, 16, 27 and crystals n_add = 16, 22 (shape), `dft_check.py prep-static` + prep-fep (DFT), NPT stability, then the queued numerics. New tools: solubility_check.py (also refits from `summarize.py` output: `--mix`), dft_check.py prep-static, toy_solubility.sh (toy end-to-end test of launcher -> summarize -> report -> fit); fixed: stability_npt.py verdict / seed / import, report.py fit now excludes uncorrected insertion rows.
 
+**Codebase to-do: clearer, more frequent output (user request 2026-10-29).** Long runs often show one line every ~10 min (one per TDI chunk or stability block). Wanted for every
+long-running tool: a start banner with all settings and the run plan; a progress line at least every 1-2 min (what it is doing, steps done / total, ms/step, ETA, current
+T / P / key observable); column headers repeated every ~20 lines or in the status views; and a clear end summary. Candidates: run_real.py node logs (intra-chunk
+progress), young_tdi_par.sh / eta.py whole-job lines, stability_npt.py (intra-block lines), pwidom.py (MD and single-point phases), h3o_static.py, 17_eos_md.py.
+cpu_bench.py (2026-10-29) is the model: banner, every call of process 0 with running mean and ETA, 30 s heartbeat, summary.
+
+**CPU option on Young (SGE, not Slurm): benchmark first.** mlp_pipeline/young_cpu_bench.sge + cpu_bench.py (results appended to runs/cpu_bench.jsonl; Gold vs Free via
+the qsub line). If a 40-core node reaches >~0.3x an A100, write SGE versions of the TDI / pwidom jobs (--device cpu, lambda processes over the cores). Budget UKCP_ED_P
+(~153k Gold hours) or the Free queue.
+
 **Runs on Young to collect:** h3o_static H3O-only rerun with saved references (young_h3o_static.sbatch, PS="300 350 400 450 500 600 700 800" VARIANTS=3 REDO=1);
 young_stability_npt.sbatch (6 tasks); wall test 117562/117563; liq_rep3 117532; eosmap subset 117564; chk_path / chk_rev; melting liquids and crystals; fcc-bcc boundary 117500; 100 GPa vpa_fix reruns.
 **Waiting on the user:** CASTEP H reference enthalpies (and ice X / Pbcm above 400 GPa); their working VASP sbatch from another project (Young VASP modules are CPU builds).
