@@ -5,15 +5,20 @@ POTCAR, POSCAR for the species order) so the energies are those the model was tr
   python mlp_pipeline/tdi/dft_check.py prep-probe runs/tdi_long/insert_500GPa_6000K_n1 --template <dft run dir> [--frames 2 --dirs 2 --elements H] -o runs/dft_check/probe
   python mlp_pipeline/tdi/dft_check.py prep-fep   runs/tdi_long/insert_500GPa_6000K_n1 --h-run runs/tdi_long/H_500GPa_6000K_N250 --template <dir> [--frames 20] -o runs/dft_check/fep
   sbatch -p <cpu partition> --array=0-<n-1> mlp_pipeline/young_dft_check.sbatch runs/dft_check/probe      (n = lines of runs/dft_check/probe/dirs.txt; or run the dirs by hand)
-  ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze runs/dft_check/probe     (and .../fep): reads OUTCARs, evaluates the MLP on the same structures, prints the comparison
+  python mlp_pipeline/tdi/dft_check.py prep-static runs/h3o_static --template <dft run dir> --P 300 400 500 600 [--scales 0.98 1.0 1.02] [--tel 1000] [--kspacing 0.25] -o runs/dft_check/static
+  ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze runs/dft_check/probe     (and .../fep, .../static): reads OUTCARs, evaluates the MLP on the same structures, prints the comparison
 
 probe: per frame, the host alone plus an extra H at r = 0.5 ... 1.2 A from a host H (or O) along the direction that keeps every OTHER atom farthest away, so dE(r) = E(host + H) - E(host)
        measures the H-H (O-H) interaction: compare DFT and MLP curves (the MLP's flat H-H region at 0.6-1.0 A, docs/CURRENT_ISSUES.md P2).
+static: DFT (VASP, the user's template settings except smearing / k-points) of the RELAXED structures that mlp_pipeline/h3o_static.py saved (runs/h3o_static/P<P>/*_relaxed.extxyz: Huang's H3O and its
+       partly filled variants, ice X, the solid-H candidates), at --scales linear cell scalings (3 volumes -> E(V) fit -> enthalpy at the target pressure for DFT and for the MLP alike, so the volume
+       mismatch drops out), then the same formation enthalpy dH_f(H2+nO) = [H(cell) - nO H(ice X per H2O) - extra H(H reference)] / N as h3o_static.py, with DFT and with the MLP, next to Huang's static (SI) and
+       ZPE-included curves, plus the H-reference-free check against the user's CASTEP enthalpies. The cells are small (36-64 atoms): the k-mesh comes from --kspacing, not from the MD template.
 fep:   Delta = E_DFT - E_MLP per structure. F_DFT - F_MLP of an ensemble = -kT ln < exp(-Delta / kT) >_MLP (also its 1st and 2nd cumulant).
        mu_H:  host + n H frames (largest-lambda node) minus host frames (smallest-lambda node: the ghost is decoupled, the host unperturbed), per added H; also the paired estimate on the
        same geometries with the ghost removed (lower noise, first order). G_H: pure-H frames (largest-lambda node of the H run), per atom. Result: the DFT correction to mu_H - G_H.
        Per-element constant offsets between DFT and MLP cancel in mu_H - G_H (one H in both). The largest-lambda node is lambda ~0.95-0.99, not exactly 1 (stated in the output)."""
-import argparse, glob, json, os, re, shutil, sys
+import argparse, csv, glob, json, os, re, shutil, sys
 import numpy as np
 from ase import Atoms
 from ase.io import read, write
@@ -57,8 +62,15 @@ def template(tdir):
                 nbands=int(inc["NBANDS"]) if "NBANDS" in inc else None, nel=nel_t)
 
 
-def write_dft(d, atoms, T, tp, label):
-    """one single-point directory: atoms sorted to the POTCAR species order, INCAR = template minus MD tags plus single-point tags"""
+def kmesh_text(cell, spacing):
+    """Gamma-centred automatic mesh with n_i = ceil(2 pi |b_i| / spacing) (spacing in 1/A; |b_i| = reciprocal vector lengths without the 2 pi)"""
+    n = [max(1, int(np.ceil(2 * np.pi * np.linalg.norm(b) / spacing - 1e-9))) for b in np.asarray(cell.reciprocal())]
+    return f"static single point: Gamma-centred mesh, spacing {spacing} 1/A\n0\nGamma\n {n[0]} {n[1]} {n[2]}\n 0 0 0\n"
+
+
+def write_dft(d, atoms, T, tp, label, over=None):
+    """one single-point directory: atoms sorted to the POTCAR species order, INCAR = template minus MD tags plus single-point tags.
+    over (static mode): dict(ismear=-1, sigma=eV, kspacing=1/A) replaces the template smearing and k-points (the MD template is Gamma-only for 250-atom cells)"""
     os.makedirs(d, exist_ok=True)
     order = [i for s in tp["species"] for i in np.where(np.array(atoms.get_chemical_symbols()) == s)[0]]
     if len(order) != len(atoms):
@@ -68,13 +80,16 @@ def write_dft(d, atoms, T, tp, label):
     inc.update(IBRION="-1", NSW="0", ISYM="0", LWAVE=".FALSE.", LCHARG=".FALSE.")
     ismear = int(float(tp["incar"].get("ISMEAR", "1")))
     inc["SIGMA"] = f"{KB * T:.6f}" if ismear == -1 else tp["incar"].get("SIGMA", "0.2")   # Fermi smearing = electronic temperature of the MD (as in the training AIMD)
+    if over:
+        inc["ISMEAR"] = str(over["ismear"]); inc["SIGMA"] = f"{over['sigma']:.6f}"
+        for k in ("KSPACING", "KGAMMA"): inc.pop(k, None)   # KSPACING in the INCAR would override our KPOINTS file
     nel = sum(tp["zval"][s] for s in at.get_chemical_symbols())
     if tp["nbands"] and tp["nel"]:
         inc["NBANDS"] = str(int(np.ceil(tp["nbands"] * nel / tp["nel"] / 8) * 8))   # template bands per electron, rounded up to a multiple of 8
     with open(os.path.join(d, "INCAR"), "w") as fh:
         fh.write(f"# {label}: single point (template {os.path.basename(os.path.dirname(tp['potcar']))}, MD tags removed)\n" + "".join(f"{k} = {v}\n" for k, v in inc.items()))
     present = [s_ for s_ in tp["species"] if s_ in set(at.get_chemical_symbols())]   # POTCAR = blocks of the species present, in POSCAR order (pure H: H only)
-    open(os.path.join(d, "KPOINTS"), "w").write(tp["kpoints"]); open(os.path.join(d, "POTCAR"), "w").write("".join(tp["blocks"][s_] for s_ in present))
+    open(os.path.join(d, "KPOINTS"), "w").write(kmesh_text(at.cell, over["kspacing"]) if over else tp["kpoints"]); open(os.path.join(d, "POTCAR"), "w").write("".join(tp["blocks"][s_] for s_ in present))
     write(os.path.join(d, "structure.extxyz"), at)   # what the MLP is evaluated on (same order)
     return d
 
@@ -160,6 +175,8 @@ def fe_shift(D, T):
 
 def do_analyze(a):
     man = json.load(open(os.path.join(a.o, "manifest.json"))); rows = man["rows"]
+    if man["mode"] == "static":   # no TDI run behind it: structures of h3o_static.py
+        return analyze_static(a, man, rows)
     st = json.load(open(man["run"] + "_stage0.json")); model = a.model or st["args"]["model"]
     from importlib import import_module
     calc = import_module("04_benchmark").get_calc_spec(model, a.device)
@@ -197,6 +214,123 @@ def do_analyze(a):
     print("caveats: exponential averages are reliable only if Delta's sd is below ~2 kT per cell; compare the cumulant estimates; frames are from lambda < 1 (nearly the full MLP).")
 
 
+# ---------------------------------------------------------------- static (0 K) enthalpies of the h3o_static structures
+EV_A3_GPA = 160.21766
+
+
+def static_files(base, P):
+    """relaxed structures of pressure P written by h3o_static.py: <base>/P<P>/ (parallel mode) or <base>/ (single process). Returns [(kind, name, path)], kind in ice / href / h3o"""
+    out = []
+    for d in (os.path.join(base, f"P{P:.0f}"), base):
+        for f in sorted(glob.glob(os.path.join(d, f"*_{P:.0f}GPa_relaxed.extxyz"))):
+            b = os.path.basename(f)[:-len(f"_{P:.0f}GPa_relaxed.extxyz")]
+            kind = "ice" if b == "iceX" else "href" if b.startswith("Href_") else "h3o" if re.fullmatch(r"H\d(\.\d+)?O", b) else None
+            if kind and not any(o[2] == f for o in out) and not any(o[1] == b for o in out):
+                out.append((kind, b, f))
+    return out
+
+
+def prep_static(a):
+    tp = template(a.template); over = dict(ismear=-1, sigma=KB * a.tel, kspacing=a.kspacing); rows = []; dirs = []
+    for P in a.P:
+        files = static_files(a.base, P)
+        if not any(k == "ice" for k, _, _ in files) or not any(k == "h3o" for k, _, _ in files):
+            print(f"{P:.0f} GPa: no iceX / H3O relaxed structures in {a.base} (run h3o_static.py first, or the pressure is not among its --P): skipped"); continue
+        for kind, name, f in files:
+            if a.only and not any(o in name for o in a.only): continue
+            at = read(f)
+            for sc in a.scales:
+                b = at.copy(); b.set_cell(np.asarray(at.cell) * sc, scale_atoms=True)
+                d = write_dft(os.path.join(a.o, f"static_{name}_{P:.0f}GPa_s{sc:.3f}"), b, a.tel, tp, f"{name} {P:.0f} GPa, linear scale {sc}", over=over)
+                dirs.append(d); rows.append(dict(dir=d, kind=kind, name=name, P=float(P), scale=float(sc), N=len(b), V=float(b.get_volume()), nO=int((b.numbers == 8).sum()), nH=int((b.numbers == 1).sum())))
+                print(f"   {P:.0f} GPa {name:18s} {len(b):3d} atoms  scale {sc:.3f}  V/atom {b.get_volume() / len(b):.4f}  k-mesh {open(os.path.join(d, 'KPOINTS')).read().split()[-6:-3]}", flush=True)
+    if not dirs: raise SystemExit("nothing to prepare")
+    finish(a, rows, dirs, dict(mode="static", run=a.base, tel=a.tel, kspacing=a.kspacing, scales=a.scales, P=a.P, model_default=a.model))
+
+
+def outcar_pressure_GPa(d):
+    """external pressure of a finished single point (VASP prints kB), None if absent"""
+    f = os.path.join(d, "OUTCAR")
+    if not os.path.exists(f): return None
+    m = re.findall(r"external pressure =\s*(-?\d+\.\d+)\s*kB", open(f, errors="replace").read())
+    return float(m[-1]) / 10 if m else None
+
+
+def enthalpy_at(rows_g, P, which):
+    """enthalpy (eV, whole cell) at pressure P from E(V) of one structure: quadratic fit in V through >= 3 scalings (minimum of E + P V), else E + P V at the single volume.
+    which = 'E_dft' or 'E_mlp'. Returns (H, V_min, note)"""
+    p = P / EV_A3_GPA; g = [r for r in rows_g if r[which] is not None]
+    if not g: return None, None, "missing"
+    V = np.array([r["V"] for r in g]); E = np.array([r[which] for r in g])
+    if len(g) < 3:
+        k = int(np.argmin(abs(np.array([r["scale"] for r in g]) - 1.0))); return float(E[k] + p * V[k]), float(V[k]), "single volume (no E(V) fit)"
+    c = np.polyfit(V, E, 2)
+    if c[0] <= 0: return float(E.min() + p * V[np.argmin(E)]), float(V[np.argmin(E)]), "E(V) not convex: lowest point"
+    Vm = -(c[1] + p) / (2 * c[0]); note = "" if V.min() * 0.995 <= Vm <= V.max() * 1.005 else f"V* {Vm:.1f} outside the sampled {V.min():.1f}-{V.max():.1f}: extrapolated"
+    return float(np.polyval(c, Vm) + p * Vm), float(Vm), note
+
+
+def analyze_static(a, man, rows):
+    from importlib import import_module
+    calc = import_module("04_benchmark").get_calc_spec(a.model or man.get("model_default") or "grace-ft:runs/grace/ft_m2", a.device)
+    for r in rows:
+        r["E_dft"] = toten(r["dir"]); r["P_dft"] = outcar_pressure_GPa(r["dir"])
+        at = read(os.path.join(r["dir"], "structure.extxyz")); at.calc = calc; r["E_mlp"] = float(at.get_potential_energy()); r["P_mlp"] = float(-at.get_stress(voigt=True)[:3].mean() * EV_A3_GPA)
+    pr = lambda *x: print(*x, flush=True)
+    pr(f"{a.o}: {sum(r['E_dft'] is not None for r in rows)} of {len(rows)} DFT single points finished; MLP {a.model or man.get('model_default')}; electronic T {man['tel']:.0f} K, k spacing {man['kspacing']}")
+    H = {}   # (P, name) -> dict(mlp=, dft=, N, nO, nH, kind)
+    for P in sorted({r["P"] for r in rows}):
+        pr(f"\n=== {P:.0f} GPa: per structure (energies per atom, meV; H at the target pressure from E(V) over the scalings)")
+        pr("   structure            N   V_mlp/atom  E_dft-E_mlp   P_dft(GPa) at GRACE V   P_mlp    H_mlp(eV/atom)  H_dft(eV/atom)  V*_mlp  V*_dft  notes")
+        for name in dict.fromkeys(r["name"] for r in rows if r["P"] == P):
+            g = [r for r in rows if r["P"] == P and r["name"] == name]; r1 = min(g, key=lambda r: abs(r["scale"] - 1.0)); N = r1["N"]
+            hm, vm, nm = enthalpy_at(g, P, "E_mlp"); hd, vd, nd = enthalpy_at(g, P, "E_dft")
+            H[(P, name)] = dict(mlp=hm, dft=hd, N=N, nO=r1["nO"], nH=r1["nH"], kind=r1["kind"])
+            dE = None if r1["E_dft"] is None else (r1["E_dft"] - r1["E_mlp"]) / N * 1e3
+            sdE = "   n/a" if dE is None else f"{dE:9.1f}"; spd = "n/a" if r1["P_dft"] is None else f"{r1['P_dft']:8.1f}"; shd = "n/a" if hd is None else f"{hd / N:12.5f}"; svd = "n/a" if vd is None else f"{vd / N:6.3f}"
+            pr(f"   {name:18s} {N:3d}   {r1['V'] / N:8.4f}   {sdE}     {spd}      {r1['P_mlp']:8.1f}   {hm / N:12.5f}   {shd}   {vm / N:6.3f}  {svd}  {nm}{' | ' + nd if nd else ''}")
+    rd = lambda f: {float(r["P_GPa"]): float(r["dH_meV_atom"]) for r in csv.DictReader(l for l in open(f) if not l.startswith("#"))} if os.path.exists(f) else {}
+    st, zp = rd("docs/data/huang_h3o_dH_static_SI.csv"), rd("docs/data/huang_h3o_dH.csv"); itp = lambda d, P: float(np.interp(P, sorted(d), [d[k] for k in sorted(d)])) if d else float("nan")
+    pr("\n=== formation enthalpy dH_f = [H(H(2+n)O cell) - nO H(ice X) - extra H(H ref)] / N, meV/atom (static, no ZPE). 'ref' = lowest-enthalpy solid-H candidate OF THAT METHOD; 'GRACE ref' = DFT with the candidate GRACE picks")
+    pr("   P/GPa  structure    n_extra   GRACE   VASP(own ref)   VASP(GRACE ref)   VASP-GRACE   per extra H (meV)   | Huang static  Huang+ZPE (H3O only)   H ref GRACE / VASP")
+    out = []
+    for P in sorted({k[0] for k in H}):
+        ice = next((v for k, v in H.items() if k[0] == P and v["kind"] == "ice"), None)
+        refs_ = {k[1]: v for k, v in H.items() if k[0] == P and v["kind"] == "href"}
+        if ice is None or not refs_ or any(v["mlp"] is None for v in refs_.values()): pr(f"   {P:.0f} GPa: ice X / H references missing"); continue
+        bm = min(refs_, key=lambda n: refs_[n]["mlp"] / refs_[n]["N"]); okd = {n: v for n, v in refs_.items() if v["dft"] is not None}; bd = min(okd, key=lambda n: okd[n]["dft"] / okd[n]["N"]) if okd else None
+        for k, v in sorted(((k, v) for k, v in H.items() if k[0] == P and v["kind"] == "h3o"), key=lambda kv: kv[1]["nH"] / kv[1]["nO"]):
+            ex = v["nH"] - 2 * v["nO"]; hice = lambda m: ice[m] / ice["N"]; hH = lambda n, m: refs_[n][m] / refs_[n]["N"]
+            dm = (v["mlp"] - v["nO"] * 3 * hice("mlp") - ex * hH(bm, "mlp")) / v["N"] * 1e3
+            dd = None if (v["dft"] is None or ice["dft"] is None or bd is None) else (v["dft"] - v["nO"] * 3 * hice("dft") - ex * hH(bd, "dft")) / v["N"] * 1e3
+            dg = None if (v["dft"] is None or ice["dft"] is None or refs_[bm]["dft"] is None) else (v["dft"] - v["nO"] * 3 * hice("dft") - ex * hH(bm, "dft")) / v["N"] * 1e3
+            pe = None if dd is None else (dd - dm) * v["N"] / ex
+            h3 = abs(v["nH"] / v["nO"] - 3) < 1e-9; f1 = lambda x: "   n/a" if x is None else f"{x:7.1f}"
+            pr(f"   {P:5.0f}  {k[1]:10s}  {ex:4d}    {dm:7.1f}  {f1(dd)}         {f1(dg)}        {f1(None if dd is None else dd - dm)}     {f1(pe)}          | {itp(st, P) if h3 else float('nan'):7.1f}      {itp(zp, P) if h3 else float('nan'):7.1f}            {bm} / {bd}")
+            out.append(dict(P_GPa=P, structure=k[1], extra_H=ex, dH_grace=dm, dH_vasp=dd, dH_vasp_graceref=dg, vasp_minus_grace_per_extraH=pe))
+    pr("\n=== H-reference-free check, per extra H relative to the lowest pressure: e(P) = [H(H3O) - nO H(ice X per H2O)] / n_extra (eV). Slope = partial volume of the extra H; VASP vs GRACE vs your CASTEP")
+    cast = {float(r["P_GPa"]): float(r["H_eV_cell"]) for r in csv.DictReader(l for l in open("docs/data/h3o_castep_enthalpy.csv") if not l.startswith("#"))} if os.path.exists("docs/data/h3o_castep_enthalpy.csv") else {}
+    ix = {float(r["P_GPa"]): float(r["H_eV_cell"]) / 2 for r in csv.DictReader(l for l in open("docs/data/icex_castep_enthalpy.csv") if not l.startswith("#"))} if os.path.exists("docs/data/icex_castep_enthalpy.csv") else {}
+    ps = sorted({k[0] for k, v in H.items() if v["kind"] == "h3o" and abs(v["nH"] / v["nO"] - 3) < 1e-9}); e = {}
+    for P in ps:
+        v = next(v for k, v in H.items() if k[0] == P and v["kind"] == "h3o" and abs(v["nH"] / v["nO"] - 3) < 1e-9); ice = next((v for k, v in H.items() if k[0] == P and v["kind"] == "ice"), None)
+        if ice is None: continue
+        ex = v["nH"] - 2 * v["nO"]
+        e[P] = dict(mlp=(v["mlp"] - v["nO"] * 3 * ice["mlp"] / ice["N"]) / ex, dft=None if (v["dft"] is None or ice["dft"] is None) else (v["dft"] - v["nO"] * 3 * ice["dft"] / ice["N"]) / ex,
+                    cas=((cast[P] - v["nO"] * ix[P]) / ex) if P in cast and P in ix else None)
+    if len(e) > 1:
+        P0 = min(e); pr("   P/GPa    GRACE      VASP       CASTEP     VASP-GRACE   CASTEP-GRACE (eV per extra H, relative to %.0f GPa)" % P0)
+        for P in sorted(e):
+            d = lambda m: None if (e[P][m] is None or e[P0][m] is None) else e[P][m] - e[P0][m]; g, v_, c_ = d("mlp"), d("dft"), d("cas"); f4 = lambda x: "   n/a  " if x is None else f"{x:8.4f}"
+            pr(f"   {P:5.0f}  {f4(g)}  {f4(v_)}  {f4(c_)}  {f4(None if v_ is None else v_ - g)}   {f4(None if c_ is None else c_ - g)}")
+    pr("\nreading: dH_f(VASP) - dH_f(GRACE) at the SAME structures is the model error of the extra-H enthalpy at 0 K (x N / n_extra for the cost per extra H); the free-energy corrections to mu0 and s need the FEP (prep-fep) on hot frames."
+       " A VASP number that agrees with Huang's static curve but not with GRACE confirms the +90-100 meV/atom GRACE offset; if VASP also sits above Huang the PAW/PBE settings differ (check ENCUT, POTCAR, smearing, k-mesh).")
+    if out:
+        with open(os.path.join(a.o, "static_results.csv"), "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(out[0]), restval=""); w.writeheader(); w.writerows(out)
+        pr("wrote", os.path.join(a.o, "static_results.csv"))
+
+
 ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest="cmd", required=True)
 for name in ("prep-probe", "prep-fep"):
     p = sp.add_parser(name); p.add_argument("run"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
@@ -205,6 +339,11 @@ for name in ("prep-probe", "prep-fep"):
         p.add_argument("--dirs", type=int, default=2); p.add_argument("--elements", nargs="*", default=["H"]); p.add_argument("--r", type=float, nargs="*", default=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2])
     else:
         p.add_argument("--h-run", default=None, help="pure-H run (<dir>/<tag>) for the G_H correction")
+p = sp.add_parser("prep-static"); p.add_argument("base", help="h3o_static.py output directory (contains P<P>/ or the *_relaxed.extxyz files)"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
+p.add_argument("--P", type=float, nargs="+", required=True, help="pressures (GPa) as run by h3o_static.py"); p.add_argument("--scales", type=float, nargs="+", default=[1.0], help="linear cell scalings (e.g. 0.98 1.0 1.02: three volumes, E(V) fit, enthalpy at the target P)")
+p.add_argument("--tel", type=float, default=1000.0, help="electronic temperature (K) of the Fermi smearing, ISMEAR=-1: a nearly cold static calculation (the MD template's SIGMA = kB T of 5000 K+ is NOT used)")
+p.add_argument("--kspacing", type=float, default=0.25, help="k-mesh spacing in 1/A (Gamma-centred; the MD template mesh is for 250-atom cells)"); p.add_argument("--only", nargs="*", default=None, help="only structures whose name contains one of these (iceX, Href, H3O, H2.5O ...)")
+p.add_argument("--model", default=None, help="MLP for analyze (default grace-ft:runs/grace/ft_m2)"); p.add_argument("-o", required=True)
 p = sp.add_parser("analyze"); p.add_argument("o"); p.add_argument("--model", default=None); p.add_argument("--device", default="cuda")
 a = ap.parse_args()
-{"prep-probe": prep_probe, "prep-fep": prep_fep, "analyze": do_analyze}[a.cmd](a)
+{"prep-probe": prep_probe, "prep-fep": prep_fep, "prep-static": prep_static, "analyze": do_analyze}[a.cmd](a)

@@ -146,14 +146,14 @@ for _, m in df[(df.nO > 0) & df.phase.isin(["fcc", "bcc"]) & (df.H_per_O > 2.0)]
         w, hh = pick(w, m.dt_fs, m.nodes), pick(hh, m.dt_fs, m.nodes); n = m.nH - 2 * m.nO
         dG = (m.N * m.G_meV_atom - w.N * w.G_meV_atom - n * hh.G_meV_atom) / n
         err = ((m.N * m.G_err_meV_atom) ** 2 + (w.N * w.G_err_meV_atom) ** 2 + (n * hh.G_err_meV_atom) ** 2) ** .5 / n
-        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), dG_per_added_H_meV=dG, err=err,
+        solid.append(dict(phase=m.phase, P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=m.H_per_O, n_added=int(n), nO=int(m.nO), tag=m.tag, dG_per_added_H_meV=dG, err=err,
                           P2_corr_per_H_meV=(m.N * m.dG_P2_meV_atom - w.N * w.dG_P2_meV_atom - n * hh.dG_P2_meV_atom) / n, kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=w.dt_fs, dt_H=hh.dt_fs, ps_mix=m.ps_per_node, ps_H2O=w.ps_per_node, ps_H=hh.ps_per_node, nodes_mix=m.nodes, nodes_H2O=w.nodes, nodes_H=hh.nodes, N_H=int(hh.N),
                           note=("DIFFERENT dt " if not (m.dt_fs == w.dt_fs == hh.dt_fs) else "") + ("DIFFERENT lambda grid " if not (m.nodes == w.nodes == hh.nodes) else "") + "; ".join(x for x in (nvt_flag(m.phase, m.H_per_O, m.P_target_GPa, m.T_K), nvt_flag(m.phase, 2.0, m.P_target_GPa, m.T_K)) if x)))
 for _, m in df[df.phase == "insert"].iterrows():
     hh = df[(df.phase == "H") & (df.P_target_GPa == m.P_target_GPa) & (df.T_K == m.T_K)]
     if len(hh):
         hh = pick(hh, m.dt_fs)
-        solid.append(dict(phase=("insert into pure H (METHOD CHECK: should be ~0)" if "_Hhost" in m.tag else f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H{m.H_per_O:g}O" + (", dilute)" if m.H_per_O == 2.0 else " host)")), P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=(2.0 if "_Hhost" in m.tag else m.H_per_O), n_added=int(m.N), dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
+        solid.append(dict(phase=("insert into pure H (METHOD CHECK: should be ~0)" if "_Hhost" in m.tag else f"insert ({'bcc' if '_bcc' in m.tag else 'fcc'} H{m.H_per_O:g}O" + (", dilute)" if m.H_per_O == 2.0 else " host)")), P_GPa=m.P_target_GPa, T_K=m.T_K, H_per_O=(2.0 if "_Hhost" in m.tag else m.H_per_O), n_added=int(m.N), nO=int(m.nO), tag=m.tag, dG_per_added_H_meV=m.G_meV_atom - hh.G_meV_atom, err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5,
                           kT_meV=8.617333e-2 * m.T_K, dt_mix=m.dt_fs, dt_H2O=float("nan"), dt_H=hh.dt_fs, N_H=int(hh.N), note=("" if m.dt_fs == hh.dt_fs else "DIFFERENT dt ")
                           + ("" if np.isfinite(m.P_corr_meV) else "NO PRESSURE CORRECTION (stage 0 older than the fix: rerun stage 0 of this run) ") + ("" if "_Hhost" in m.tag else nvt_flag("bcc" if "_bcc" in m.tag else "fcc", 2.0, m.P_target_GPa, m.T_K))))
 if solid:
