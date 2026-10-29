@@ -1,4 +1,5 @@
 #!/bin/bash -l
+# NOTE (2026-10-29): Young's CPU nodes are SGE (qsub), not Slurm: use mlp_pipeline/young_dft_check.sge there (module recipe, chunking, h_rt guard, progress lines). This Slurm version only suits a Slurm machine with the VASP modules.
 # VASP single points prepared by tdi/dft_check.py (prep-probe / prep-fep): array task i runs the i-th directory of <dir>/dirs.txt; finished directories are skipped (rerun-safe).
 # usage (login node, repo root):   sbatch -p <cpu partition> --array=0-<n-1>%10 mlp_pipeline/young_dft_check.sbatch runs/dft_check/probe      (n = wc -l < runs/dft_check/probe/dirs.txt)
 #        interactive (any allocation with MPI ranks):   NP=8 bash mlp_pipeline/young_dft_check.sbatch runs/dft_check/probe     (runs every directory in turn)

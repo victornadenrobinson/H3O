@@ -5,7 +5,10 @@
 # The project / budget / parallel environment go on the qsub line (not here), so one script serves both queues:
 #   cd /lustre/scratch/mmm0037/H3O && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei
 #   qsub -P Gold -A UKCP_ED_P -pe mpi 40 -v BENCH_LABEL=gold    mlp_pipeline/young_cpu_bench.sge
-#   qsub <Free-queue options from the MMM Hub docs> -pe mpi 40 -v BENCH_LABEL=free mlp_pipeline/young_cpu_bench.sge
+#   Free needs the project too (verified 2026-10-29: -P Free alone is 'Rejected by policyjsv: unable to verify membership'):
+#   BENCH_LABEL=free qsub -V -P Free -A UKCP_ED_P -pe smp 40 -l h_rt=1:30:00 mlp_pipeline/young_cpu_bench.sge     (check gbalance -u $USER afterwards: Free should not be charged)
+#   CPU nodes are RHEL 7 (glibc 2.17): ~/grace-venv (built on the GPU side, RHEL 9) does not run there. Use ~/grace-venv-cpu (module python/3.11.4-gnu-10.2.0, TF 2.20, tensorpotential 0.6.1):
+#   export PY=$HOME/grace-venv-cpu/bin/python TF_USE_LEGACY_KERAS=1 CELLS="H insert" CALLS=10 LAYOUTS="40x1 20x2 10x4"; qsub -V ...
 #   (if 'mpi' is not a valid parallel environment for one node: qconf -spl lists them; smp-type PEs are preferred for one node)
 # env (via -v): CELLS (default "insert H"), CALLS (20), LAYOUTS (default from the slot count), PY (~/grace-venv/bin/python)
 # Output: cpubench.o<jobid> in the repo root; the job records start / queue-wait information at the top.

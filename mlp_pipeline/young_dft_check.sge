@@ -1,0 +1,79 @@
+#!/bin/bash -l
+# VASP single points prepared by tdi/dft_check.py (prep-selftest / prep-probe / prep-fep / prep-static / prep-widom) on Young's SGE CPU nodes. The Slurm twin (young_dft_check.sbatch) cannot reach the CPU nodes.
+# Task t of an SGE array runs directories (t-1)*CHUNK+1 ... t*CHUNK of <dir>/dirs.txt, one after another, each with NP MPI ranks; finished directories are skipped, so resubmitting the same command is safe.
+# Without an array (plain qsub, or inside qrsh with bash young_dft_check.sge <dir>) every directory is run in turn.
+# usage (repo root; the project / budget / PE go on the command line; Free also needs -A):
+#   qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-<n> -tc 10 mlp_pipeline/young_dft_check.sge runs/dft_check/probe        (n = wc -l < runs/dft_check/probe/dirs.txt)
+#   CHUNK=4 qsub -V ... -t 1-<ceil(n/4)> ...        several little points per task (one queue wait for four calculations)
+#   interactive, inside the qrsh shell:   NP=$NSLOTS bash mlp_pipeline/young_dft_check.sge runs/dft_check/selftest
+# FIRST (on a CPU node use ~/grace-venv-cpu/bin/python, ~/grace-venv is RHEL 9 only): python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest, run it, analyze it: one template-sized point = the cost basis for everything else.
+# env (qsub -V): CHUNK (1), NP (ranks; default $NSLOTS, else nproc), LAUNCH (default: gerun when the PE is mpi, else 'mpirun -np $NP'), VASP_EXE (default vasp_gam for a Gamma-only KPOINTS, else vasp_std),
+#   VASP_MODULES (default: the UCL VASP 6.3.0 recipe, compilers/intel/2019/update5 + mpi/intel/2019/update5/intel + vasp/6.3.0-24Jan2022/intel-2019-update5), NO_MODULE=1 (modules already loaded),
+#   HEARTBEAT (seconds between progress lines, 60), MARGIN (seconds of the h_rt kept free before starting another directory, 600).
+# Output: <job>.o<jobid>.<task> in the submit directory: banner, per directory a start line, a progress line every HEARTBEAT s (SCF steps, last DAV/RMM line), a finish line (TOTEN, wall, SCF steps), an end summary.
+# Progress of the whole set:  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py status <dir>      Results (analyze also evaluates the MLP; works on a CPU node):  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py analyze <dir>   (on a GPU node: it evaluates the MLP)
+#$ -N dftchk
+#$ -cwd
+#$ -j y
+#$ -l h_rt=6:00:00
+#$ -l mem=4G
+[ -d mlp_pipeline ] || { echo "run from the repo root (qsub -cwd there)"; exit 2; }
+D=${1:?usage: young_dft_check.sge <prepared dir, e.g. runs/dft_check/probe>}
+[ -f $D/dirs.txt ] || { echo "no $D/dirs.txt: run tdi/dft_check.py prep-* first"; exit 2; }
+TOTAL=$(grep -c . $D/dirs.txt); CHUNK=${CHUNK:-1}; TID=${SGE_TASK_ID:-}; [ "$TID" = undefined ] && TID=
+if [ -n "$TID" ]; then FIRST=$(( (TID - 1) * CHUNK + 1 )); LAST=$(( TID * CHUNK )); [ $LAST -gt $TOTAL ] && LAST=$TOTAL
+else FIRST=1; LAST=$TOTAL; fi
+if [ $FIRST -gt $TOTAL ]; then echo "task $TID: directories $FIRST.. beyond the $TOTAL in $D/dirs.txt: nothing to do"; exit 0; fi
+if [ -z "$NO_MODULE" ]; then
+  module unload -f compilers mpi
+  module load ${VASP_MODULES:-compilers/intel/2019/update5 mpi/intel/2019/update5/intel vasp/6.3.0-24Jan2022/intel-2019-update5} || { echo "module load failed: set VASP_MODULES (module avail vasp)"; exit 2; }
+fi
+export OMP_NUM_THREADS=1
+NP=${NP:-${NSLOTS:-$(nproc)}}; HEARTBEAT=${HEARTBEAT:-60}; MARGIN=${MARGIN:-600}
+if [ -z "$LAUNCH" ]; then
+  if [ "$PE" = mpi ] && command -v gerun >/dev/null; then LAUNCH=gerun; else LAUNCH="mpirun -np $NP"; fi
+fi
+HRT=$(qstat -j ${JOB_ID:-0} 2>/dev/null | sed -n 's/.*h_rt=\([0-9]*\).*/\1/p' | head -1)
+echo "== dftchk job ${JOB_ID:--} task ${TID:--} on $(hostname) queue ${QUEUE:--} PE ${PE:--}, $NP ranks (NSLOTS ${NSLOTS:--}), started $(date)"
+echo "   set $D: $TOTAL single points; this task runs $FIRST..$LAST (CHUNK $CHUNK); launcher '$LAUNCH'; h_rt ${HRT:-unknown} s, margin $MARGIN s, heartbeat $HEARTBEAT s"
+echo "   modules: $(module list 2>&1 | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-400)"
+echo "   vasp_std: $(command -v vasp_std || echo 'NOT FOUND')   vasp_gam: $(command -v vasp_gam || echo 'NOT FOUND')"
+T_START=$SECONDS; NDONE=0; NSKIP=0; NFAIL=0; LONGEST=0; SUMT=0
+run_one() {   # $1 = position in this task (1-based), $2 = directory
+  local k=$1 d=$2 exe=$VASP_EXE t0 el pid
+  if [ -f $d/OUTCAR ] && grep -q "General timing" $d/OUTCAR; then echo "[$k/$NTASK] $d: done already"; NSKIP=$((NSKIP + 1)); return 0; fi
+  if [ -z "$exe" ]; then   # Gamma-only automatic mesh ("Gamma" + "1 1 1") -> the gamma-point build
+    if sed -n 3p $d/KPOINTS | grep -qi "^ *g" && sed -n 4p $d/KPOINTS | grep -Eq "^ *1 +1 +1 *$"; then exe=vasp_gam; else exe=vasp_std; fi
+  fi
+  command -v $exe >/dev/null || { echo "[$k/$NTASK] $d: $exe not found after module load (set VASP_EXE)"; NFAIL=$((NFAIL + 1)); return 2; }
+  local nat=$(sed -n 7p $d/POSCAR | awk '{s=0; for(i=1;i<=NF;i++) s+=$i; print s}')
+  echo "[$k/$NTASK] $d: $LAUNCH $exe, $nat atoms, started $(date +%H:%M:%S)"
+  t0=$SECONDS
+  ( cd $d && exec $LAUNCH $exe > vasp.out 2>&1 ) & pid=$!
+  while kill -0 $pid 2>/dev/null; do
+    for _ in $(seq 1 $HEARTBEAT); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+    kill -0 $pid 2>/dev/null || break
+    local nscf=$(grep -c -E "^(DAV|RMM|CGA|EDDAV)" $d/vasp.out 2>/dev/null); local last=$(grep -E "^(DAV|RMM)" $d/vasp.out 2>/dev/null | tail -n1 | cut -c1-70)
+    echo "   .. $d: $((SECONDS - t0)) s, $nscf SCF iterations so far; last: ${last:-none yet}"
+  done
+  wait $pid; el=$((SECONDS - t0))
+  if grep -q "General timing" $d/OUTCAR 2>/dev/null; then
+    echo "   finished $(date +%H:%M:%S) in $el s: $(grep 'free  energy   TOTEN' $d/OUTCAR | tail -n1)   ($(grep -c 'LOOP:' $d/OUTCAR) SCF steps)"
+    NDONE=$((NDONE + 1)); SUMT=$((SUMT + el)); [ $el -gt $LONGEST ] && LONGEST=$el
+  else
+    echo "   FAILED after $el s: tail of $d/vasp.out:"; tail -n 6 $d/vasp.out 2>/dev/null | sed 's/^/      /'; NFAIL=$((NFAIL + 1))
+  fi
+}
+NTASK=$((LAST - FIRST + 1)); k=0
+while read -r d; do
+  k=$((k + 1))
+  if [ -n "$HRT" ]; then   # do not start a point that cannot finish: keep MARGIN seconds and 1.2 x the longest point so far
+    left=$((HRT - (SECONDS - T_START)))
+    need=$MARGIN; [ $((LONGEST * 12 / 10)) -gt $need ] && need=$((LONGEST * 12 / 10))
+    if [ $left -lt $need ] && [ ! -f $d/OUTCAR ]; then echo "[$k/$NTASK] $d: only $left s left of h_rt (need $need): stopping; resubmit the same command (finished points are skipped)"; STOPPED=1; break; fi
+  fi
+  run_one $k $d
+  if [ $NDONE -gt 0 ] && [ $k -lt $NTASK ]; then echo "   progress: $NDONE done, $NSKIP skipped, $NFAIL failed of $NTASK; mean $((SUMT / NDONE)) s per point, ETA about $(( SUMT / NDONE * (NTASK - k) / 60 )) min for the rest of this task"; fi
+done < <(sed -n "${FIRST},${LAST}p" $D/dirs.txt)
+echo; echo "== finished $(date): $NDONE ran, $NSKIP already done, $NFAIL failed of $NTASK in this task; wall $(( (SECONDS - T_START) / 60 )) min${STOPPED:+; STOPPED EARLY (h_rt)}"
+[ $NFAIL -eq 0 ] || exit 1
