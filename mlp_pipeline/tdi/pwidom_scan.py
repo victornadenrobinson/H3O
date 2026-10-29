@@ -123,6 +123,7 @@ def rescore(out, gh_csv=None):
         if "mu_fixedV_meV" not in r: continue
         res[(r["P_target"], r["T"], "pure H" if r["phase"] == "H" else f"H{float(r.get('hper', 2.0)):.4g}O", r["K"])] = r
     GH = tdi_gh(gh_csv) if gh_csv else {}
+    if gh_csv and not GH: print(f"no usable pure-H rows in {gh_csv} (columns / status?): hybrid dg not computed")
     if gh_csv: print("TDI G_H used: " + ", ".join(f"{P:.0f}/{T:.0f} {g:.1f} +- {e:.1f} ({s_})" for (P, T), (g, e, s_) in sorted(GH.items())))
     old = os.path.join(out, "scan.jsonl")
     if os.path.exists(old): os.replace(old, old + ".bak")
@@ -137,11 +138,11 @@ def rescore(out, gh_csv=None):
                    proxy_kT=max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]), kish=w["kish_frac_ins"], msd=(w["msd_O_host"] or [np.nan])[-1], min_dHH=np.nan,
                    widom=w["mu_ex_widom_meV"], deletion=w["mu_ex_delete_meV"], bar=w["mu_ex_bar_meV"], flags=",".join(flags) or "ok", ps=np.nan, K=K, sel=w["sel"],
                    dg_measuredP=gm_, err_measuredP=em_, pcorr=PCORR, mu_fixedV_host=w["mu_fixedV_meV"], P_host=w["P_host_GPa"], P_full=w["P_full_GPa"])
-        with open(old, "a") as fh: fh.write(json.dumps(row, default=float) + "\n")
-        n += 1
         if gh_csv is not None and (P, T) in GH:   # hybrid: pwidom's host mu_H against the TDI G_H (the reference the crystal and insertion TDIs use)
             G, Ge, src = GH[(P, T)]; mw, ew = mu_P(w); row.update(dg_tdiGH=mw - G, err_tdiGH=float(np.hypot(ew, Ge)), GH_tdi=G, GH_src=src,
                                                                 pureH_offset=(mu_P(h)[0] - (KB * T * 1e3 * (log(h["N_H"] + 1) - lgamma(h["N_H"] + 1) / h["N_H"] - 1))) - G)
+        with open(old, "a") as fh: fh.write(json.dumps(row, default=float) + "\n")   # after the hybrid columns are added
+        n += 1
         print(f"{P:5.0f} GPa {T:5.0f} K {host:9s} K {K:5d}: dg {g_:7.0f} +- {e_:4.0f} meV ({PCORR})   [measured-jump correction: {gm_:7.0f} +- {em_:4.0f}]  {row['flags']}"
               + (f"   | with TDI G_H: {row['dg_tdiGH']:7.0f} (pwidom pure-H mu - G_H(TDI) = {row['pureH_offset']:+.0f})" if "dg_tdiGH" in row else ""))
     print(f"rewrote {old} ({n} rows; previous file kept as scan.jsonl.bak)")

@@ -10,7 +10,7 @@ PY=${PY:-$HOME/grace-venv/bin/python}
 echo "== 1. status"; $PY mlp_pipeline/tdi/pwidom_scan.py --status 'runs/pwidom*' | grep -E "^runs|MISSING" || true
 echo; echo "== 2. pure-H G_H of the TDI runs (summarize, H-H check cached) and rescore (robust pressure correction; hybrid dg with the TDI G_H)"
 $PY mlp_pipeline/tdi/summarize.py runs/tdi runs/tdi_prep runs/tdi_long -o runs/summary_all.csv > runs/summary_all.txt 2>&1 || echo "   summarize failed: see runs/summary_all.txt"
-for d in runs/pwidom*/; do [ -n "$(ls $d/pw_*_K*.json 2>/dev/null)" ] && $PY mlp_pipeline/tdi/pwidom_scan.py --rescore ${d%/} $( [ -f runs/summary_all.csv ] && echo --gh-csv runs/summary_all.csv ) | tail -n 1; done
+for d in runs/pwidom*/; do [ -n "$(ls $d/pw_*_K*.json 2>/dev/null)" ] && $PY mlp_pipeline/tdi/pwidom_scan.py --rescore ${d%/} $( [ -f runs/summary_all.csv ] && echo --gh-csv runs/summary_all.csv ) | grep -E "^TDI G_H used|^no usable|^rewrote"; done
 [ -f runs/summary_all.csv ] && $PY - <<'PYEOF'
 import glob, json
 print("   pure-H check: pwidom pure-H mu (minus the finite-size term) - TDI G_H, meV, per scan and (P, T):")
