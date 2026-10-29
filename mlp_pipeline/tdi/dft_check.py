@@ -6,7 +6,7 @@ POTCAR, POSCAR for the species order) so the energies are those the model was tr
   python mlp_pipeline/tdi/dft_check.py prep-fep   runs/tdi_long/insert_500GPa_6000K_n1 --h-run runs/tdi_long/H_500GPa_6000K_N250 --template <dir> [--frames 20] -o runs/dft_check/fep
   sbatch -p <cpu partition> --array=0-<n-1> mlp_pipeline/young_dft_check.sbatch runs/dft_check/probe      (n = lines of runs/dft_check/probe/dirs.txt; or run the dirs by hand)
   python mlp_pipeline/tdi/dft_check.py prep-static runs/h3o_static --template <dft run dir> --P 300 400 500 600 [--scales 0.98 1.0 1.02] [--tel 1000] [--kspacing 0.25] -o runs/dft_check/static
-  python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest        (the template geometry as one single point: does the VASP chain work on Young CPUs, what does a 250-atom cell cost?)
+  python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest        (a 12-atom cell and the template geometry as single points: does the VASP chain work on Young CPUs, what does a real-size cell cost? --size small|template|both)
   python mlp_pipeline/tdi/dft_check.py prep-widom runs/pwidom/pw_fcc_450GPa_6000K_frames.npz --template <dir> --proxy docs/data/toyfit_t4.json [--model <mlp> --top 50] -o runs/dft_check/widom
   python mlp_pipeline/tdi/dft_check.py status runs/dft_check/probe       (any prepared directory: pending / running / done / failed per single point, SCF progress, mean time, ETA)
   ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze runs/dft_check/probe     (and .../fep, .../static, .../selftest, .../widom): reads OUTCARs, evaluates the MLP on the same structures, prints the comparison
@@ -241,12 +241,19 @@ def outcar_info(d):
 
 
 def prep_selftest(a):
-    tp = template(a.template); f = next(os.path.join(a.template, n) for n in ("POSCAR", "CONTCAR") if os.path.exists(os.path.join(a.template, n)))
-    at = read(f, format="vasp"); T = a.T or float(tp["incar"].get("TEBEG", 5000)); d = write_dft(os.path.join(a.o, "selftest_template"), at, T, tp, "selftest: template geometry")
-    nel = sum(tp["zval"][s_] for s_ in at.get_chemical_symbols()); inc = open(os.path.join(d, "INCAR")).read()
-    print(f"selftest: {len(at)} atoms ({dict(zip(*np.unique(at.get_chemical_symbols(), return_counts=True)))}), {nel:.0f} valence electrons, electronic T {T:.0f} K, species {tp['species']}")
-    print("   INCAR written:\n" + "".join("      " + l for l in inc.splitlines(True)))
-    finish(a, [dict(dir=d, kind="selftest", N=len(at), T=T)], [d], dict(mode="selftest", template=a.template, T=T, model_default=a.model))
+    tp = template(a.template); T = a.T or float(tp["incar"].get("TEBEG", 5000)); sets = []
+    if a.size in ("small", "both"):   # 12-atom fcc H2O cell: seconds to minutes, checks modules / POTCAR / INCAR / launcher before the real-size point
+        from importlib import import_module
+        sets.append(("selftest_small", import_module("17_eos_md").build("fcc", a.vpa, 1, 0, 2.0), f"selftest: small fcc H2O cell, {a.vpa} A^3/atom"))
+    if a.size in ("template", "both"):
+        f = next(os.path.join(a.template, n) for n in ("POSCAR", "CONTCAR") if os.path.exists(os.path.join(a.template, n)))
+        sets.append(("selftest_template", read(f, format="vasp"), "selftest: template geometry"))
+    rows = []; dirs = []
+    for name, at, label in sets:
+        d = write_dft(os.path.join(a.o, name), at, T, tp, label); nel = sum(tp["zval"][s_] for s_ in at.get_chemical_symbols()); dirs.append(d); rows.append(dict(dir=d, kind="selftest", N=len(at), T=T))
+        print(f"selftest {name}: {len(at)} atoms ({dict(zip(*np.unique(at.get_chemical_symbols(), return_counts=True)))}), {nel:.0f} valence electrons, electronic T {T:.0f} K, species {tp['species']}")
+    print("   INCAR written (last set):\n" + "".join("      " + l for l in open(os.path.join(dirs[-1], "INCAR")).readlines()))
+    finish(a, rows, dirs, dict(mode="selftest", template=a.template, T=T, model_default=a.model))
 
 
 def prep_widom(a):
@@ -466,7 +473,7 @@ p.add_argument("--P", type=float, nargs="+", required=True, help="pressures (GPa
 p.add_argument("--tel", type=float, default=1000.0, help="electronic temperature (K) of the Fermi smearing, ISMEAR=-1: a nearly cold static calculation (the MD template's SIGMA = kB T of 5000 K+ is NOT used)")
 p.add_argument("--kspacing", type=float, default=0.25, help="k-mesh spacing in 1/A (Gamma-centred; the MD template mesh is for 250-atom cells)"); p.add_argument("--only", nargs="*", default=None, help="only structures whose name contains one of these (iceX, Href, H3O, H2.5O ...)")
 p.add_argument("--model", default=None, help="MLP for analyze (default grace-ft:runs/grace/ft_m2)"); p.add_argument("-o", required=True)
-p = sp.add_parser("prep-selftest"); p.add_argument("--template", required=True); p.add_argument("-o", required=True); p.add_argument("--T", type=float, default=0.0, help="electronic temperature (K) if the template has ISMEAR=-1 (default: its TEBEG)")
+p = sp.add_parser("prep-selftest"); p.add_argument("--template", required=True); p.add_argument("-o", required=True); p.add_argument("--size", choices=["small", "template", "both"], default="both", help="small = 12-atom fcc H2O cell (fast chain check), template = the template's own cell (cost basis; 100s of atoms with hard PAW: hours on 8 ranks)"); p.add_argument("--vpa", type=float, default=2.2, help="A^3/atom of the small cell"); p.add_argument("--T", type=float, default=0.0, help="electronic temperature (K) if the template has ISMEAR=-1 (default: its TEBEG)")
 p.add_argument("--model", default=None)
 p = sp.add_parser("prep-widom"); p.add_argument("frames", help="pwidom.py frames file <out>/<tag>_frames.npz"); p.add_argument("--template", required=True); p.add_argument("-o", required=True)
 p.add_argument("--proxy", default="none", help="as pwidom.py: a toy_fit.py json, 'toyice' or 'none'"); p.add_argument("--K", type=int, default=2000); p.add_argument("--sel", type=int, default=3, help="Rosenbluth-sampled sites per frame")
