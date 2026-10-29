@@ -73,9 +73,11 @@ def main():
         if len([g for g in allp if g[0] > 0]) >= 2 and len([g for g in good if g[0] > 0]) < len([g for g in allp if g[0] > 0]):   # incl. unconverged points: dashed, open
             x = np.array([g[0] for g in allp]); y = np.array([g[1] for g in allp]); cum = np.r_[0, np.cumsum(np.diff(x) * (y[1:] + y[:-1]) / 2)]
             bot.plot(x, cum / (3 + x), "s--", color=C_PW, mfc="white", ms=6, lw=1.2, alpha=0.8, label="pwidom integral incl. unconverged points")
+            top.plot(x[1:], cum[1:] / x[1:], "--", color=C_PW, lw=1.0, alpha=0.6, label="pwidom-implied AVERAGE 0 -> n (compare with the blue triangles)")
         if len([g for g in good if g[0] > 0]) >= 2:   # at least two pwidom compositions above 0 (an n-scan): one point would only give a straight line from mu0, which can be badly off
             x = np.array([g[0] for g in good]); y = np.array([g[1] for g in good]); cum = np.r_[0, np.cumsum(np.diff(x) * (y[1:] + y[:-1]) / 2)]
             bot.plot(x, cum / (3 + x), "s-", color=C_PW, ms=7, lw=1.5, label="pwidom: integral of the next-H cost (from insertion mu0)")
+            top.plot(x[1:], cum[1:] / x[1:], "-", color=C_PW, lw=1.2, alpha=0.7, label="pwidom-implied AVERAGE 0 -> n (compare with the blue triangles)")
         top.axhline(0, color="k", lw=0.8); bot.axhline(0, color="k", lw=0.8)
         sec = top.secondary_xaxis("top", functions=(lambda x: x * 108, lambda k: k / 108)); sec.set_xticks([0, 6, 12, 18, 27, 36, 54]); sec.tick_params(labelsize=7)
         if j == 0: sec.set_xlabel("extra H per 108-O cell", fontsize=8)
