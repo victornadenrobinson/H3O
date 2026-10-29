@@ -115,3 +115,8 @@ Cheap pre-check for 4: a PIMD-free estimate is not available here; the Huang sta
 * Bookkeeping of the method: validated (toy T0 exact, insertion vs Widom/BAR, pure-H insertion check, closure of the fit on its crystal anchors).
 * GRACE answer: n* ~ 0.08-0.11 at 400-500 GPa for the quadratic shape, 0.05-0.15 for plausible shapes; direction of every known model error: larger n*.
 * NOT validated: the shape of G(n) (Step 2a, cheap), the DFT accuracy of mu0 and s (Step 1b-c), the stability of H2.1-2.2O as one phase (Step 2c), quantum nuclei.
+
+## 4. Toy test of the whole chain (2026-10-29, `bash mlp_pipeline/tdi/toy_solubility.sh 450 5000`, 8 lambda x 1.5 ps, 4 cores, ~20 min)
+Launcher -> `summarize.py` -> `report.py` -> `solubility_check.py --solid` ran on 9 toy runs (fitted toy potential, 32-O host). Results: insertion n_add = 2, 4, 8 and direct crystals n_add = 4, 8, 16 give average dG per added H of +34 / +52 / +50 meV (insertion) and -206 +- 141 / -43 +- 73 / +29 +- 37 meV (crystals); at the two compositions measured by both routes the routes differ by 1.8 and 1.2 sigma (short runs: agreement within errors, not a precision test).
+The toy has mu0 > 0 (H insoluble), so the fit correctly reports no minimum (n* = nan for the linear fit) and the report's QA correctly excluded the n_add = 16 insertion (host + 16 H sits at 552 GPa vs 450 target). This exercises the mechanics (file formats, caveat / pressure-correction handling, both fits, the bracketing flag); the quantitative checks of the free energies remain the toy T0-T5 tests in CURRENT_ISSUES section 2b.
+Do not edit `toy_solubility.sh` while it runs (bash reads scripts incrementally; an edit during this session killed the first attempt).
