@@ -162,7 +162,7 @@ def main():
         print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K ({time.strftime('%H:%M:%S')}, scan {(time.time() - t_all) / 60:.1f} min): hosts " + ", ".join(n for n, _ in jobs)
               + f"; at most {a.maxpar} at once", flush=True)
         procs = []; cmds = {}; queue = []
-        env = dict(os.environ, TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2")
+        env = dict(os.environ, TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2", PW_GPU_LOCK=os.path.abspath(os.path.join(a.out, ".gpu_singlepoints.lock")))
         for name, args in jobs:
             tag = f"pw_{name.replace(' ', '').replace('.', 'p')}_{P:g}GPa_{T:.0f}K"; log_ = os.path.join(a.out, f"{tag}.log")
             old = sorted(glob.glob(os.path.join(a.out, f"{tag}_*_K{a.K}.json")))

@@ -195,7 +195,17 @@ def cmd_run(a):
             ws.append((phi_t, lse(-phik / kT) - np.log(K)))
         dele.append(ws)
     print(f"proxy {a.proxy} K {K}: {len(S1)} insertion and {len(D1)} deletion trials prepared ({(time.time() - t0) / 60:.1f} min); real-model single points: {len(S0) + len(S1) + len(D0) + len(D1)}", flush=True)
+    lk = os.environ.get("PW_GPU_LOCK")   # several pwidom processes on one GPU (pwidom_scan): only one at a time in the memory-hungry batched single-point stage
+    if lk:
+        import fcntl
+        fh_lock = open(lk, "a"); t_w = time.time()
+        try:
+            fcntl.flock(fh_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print(f"waiting for the single-point GPU lock ({lk}): another host is in its single points", flush=True); fcntl.flock(fh_lock, fcntl.LOCK_EX)
+            print(f"got the GPU lock after {(time.time() - t_w) / 60:.1f} min", flush=True)
     E = model.energies(S0 + S1 + D0 + D1); n0, n1, m0 = len(S0), len(S1), len(D0)
+    if lk: fcntl.flock(fh_lock, fcntl.LOCK_UN); fh_lock.close()
     e0, e1, f0, f1 = E[:n0], E[n0:n0 + n1].reshape(n0, a.sel), E[n0 + n1:n0 + n1 + m0], E[n0 + n1 + m0:]
     wf_frame, gap_ins = [], []
     for k, (phis, lnW) in enumerate(ins):
