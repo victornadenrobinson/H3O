@@ -68,11 +68,18 @@ def main():
         good = [(nn, v["dg"]) for nn, v in mine if v["flag"] == "ok"]
         if f and good and not any(nn == 0 for nn, _ in good): good = [(0.0, f["mu0"])] + good   # dilute end from the insertion TDI
         good = sorted(good)
+        allp = sorted([(nn, v["dg"]) for nn, v in mine if v["flag"] != "melted"])
+        if f and allp and not any(nn == 0 for nn, _ in allp): allp = [(0.0, f["mu0"])] + allp
+        if len([g for g in allp if g[0] > 0]) >= 2 and len([g for g in good if g[0] > 0]) < len([g for g in allp if g[0] > 0]):   # incl. unconverged points: dashed, open
+            x = np.array([g[0] for g in allp]); y = np.array([g[1] for g in allp]); cum = np.r_[0, np.cumsum(np.diff(x) * (y[1:] + y[:-1]) / 2)]
+            bot.plot(x, cum / (3 + x), "s--", color=C_PW, mfc="white", ms=6, lw=1.2, alpha=0.8, label="pwidom integral incl. unconverged points")
         if len([g for g in good if g[0] > 0]) >= 2:   # at least two pwidom compositions above 0 (an n-scan): one point would only give a straight line from mu0, which can be badly off
             x = np.array([g[0] for g in good]); y = np.array([g[1] for g in good]); cum = np.r_[0, np.cumsum(np.diff(x) * (y[1:] + y[:-1]) / 2)]
             bot.plot(x, cum / (3 + x), "s-", color=C_PW, ms=7, lw=1.5, label="pwidom: integral of the next-H cost (from insertion mu0)")
         top.axhline(0, color="k", lw=0.8); bot.axhline(0, color="k", lw=0.8)
-        top.set(title=f"{P:.0f} GPa, {T:.0f} K", ylim=(-1200, 1000)); bot.set(xlabel="n = extra H per O  (H(2+n)O)", ylim=(-25, 90))
+        sec = top.secondary_xaxis("top", functions=(lambda x: x * 108, lambda k: k / 108)); sec.set_xticks([0, 6, 12, 18, 27, 36, 54]); sec.tick_params(labelsize=7)
+        if j == 0: sec.set_xlabel("extra H per 108-O cell", fontsize=8)
+        top.set(title=f"{P:.0f} GPa, {T:.0f} K", ylim=(-1200, 1000)); top.title.set_position((0.5, 1.12)); bot.set(xlabel="n = extra H per O  (H(2+n)O)", ylim=(-25, 90))
         top.grid(alpha=0.3); bot.grid(alpha=0.3)
         if j == 0:
             top.set_ylabel("mu_H - G_H(pure H)  (meV per H)"); bot.set_ylabel("formation free energy  (meV/atom)\nH2O + n H(fluid) -> H(2+n)O")

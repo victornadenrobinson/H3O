@@ -33,6 +33,7 @@ def hosts(roots):
             if d.get("ice_src") != "insert": d.update(ice=f, ice_src="insert")
         elif ph == "fcc" and abs(h - 2) < 1e-9 and "ice" not in d: d.update(ice=f, ice_src="fcc crystal")
         elif ph == "fcc" and abs(h - 2.25) < 1e-9 and "h225" not in d: d["h225"] = f
+        elif ph == "fcc" and abs(h - 2.5) < 1e-9 and "h25" not in d: d["h25"] = f   # for hosts beyond H2.25O: interpolate H2.25O -> H2.5O instead of extrapolating
         elif ph == "H" and "H" not in d and not g.get("hhwall"): d["H"] = f
         elif ph == "insert" and g.get("host_phase") == "H" and "H" not in d: d["H"] = f
     return pts
@@ -48,10 +49,11 @@ def pw_args(f, kind):
             "--bulk-gpa", repr(st["B_GPa"]), "--model", g["model"]]
 
 
-def interp_args(f0, f25, hp):
-    """host H(hp)O: volume per O linear in n between the H2O host (json f0) and the H2.25O crystal (json f25) at the same (P, T); bulk modulus and model of the H2O host"""
+def interp_args(f0, f25, hp, n0=0.0, n1=0.25):
+    """host H(hp)O: volume per O linear in n between two hosts at the same (P, T) (default the H2O host f0 and the H2.25O crystal f25; or H2.25O -> H2.5O with n0, n1);
+    bulk modulus and model of the first"""
     s0, s1 = json.load(open(f0)), json.load(open(f25)); g = s0["args"]; n = hp - 2
-    vO0, vO1 = s0["vpa"] * 3, s1["vpa"] * 3.25; vpa = (vO0 + n / 0.25 * (vO1 - vO0)) / (3 + n)
+    vO0, vO1 = s0["vpa"] * (3 + n0), s1["vpa"] * (3 + n1); vpa = (vO0 + (n - n0) / (n1 - n0) * (vO1 - vO0)) / (3 + n)
     return ["--phase", "fcc", "--nrep", str(g.get("nrep") or 3), "--hper", repr(hp), "--vpa", repr(vpa), "--T", repr(s0["T"]), "--P", repr(s0["P_target"]),
             "--bulk-gpa", repr(s0["B_GPa"]), "--model", g["model"]]
 
@@ -167,7 +169,9 @@ def main():
         nO = 4 * int(json.load(open(d["ice"]))["args"].get("nrep") or 3) ** 3   # fcc host: 4 O per conventional cell
         for hp in list(a.hpers) + [2 + k / nO for k in a.kextra]:   # intermediate compositions: volume per O interpolated (beyond 0.25: extrapolated) between the H2O and H2.25O hosts
             if "h225" not in d: print(f"   H{hp:g}O: needs an H2.25O run at this (P, T) for the volume: skipped", flush=True); continue
-            if hp - 2 > 0.3: print(f"   H{hp:.4g}O: volume EXTRAPOLATED beyond H2.25O (check its MD pressure against {P:g} GPa)", flush=True)
+            if hp - 2 > 0.25 and "h25" in d and hp - 2 <= 0.5:
+                jobs.append((f"H{hp:.4g}O", interp_args(d["h225"], d["h25"], hp, 0.25, 0.5))); continue
+            if hp - 2 > 0.3: print(f"   H{hp:.4g}O: volume EXTRAPOLATED beyond H2.25O (no H2.5O run here; check its MD pressure against {P:g} GPa)", flush=True)
             jobs.append((f"H{hp:.4g}O", interp_args(d["ice"], d["h225"], hp)))
         jobs.append(("pure H", pw_args(d["H"], "H")))
         print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K ({time.strftime('%H:%M:%S')}, scan {(time.time() - t_all) / 60:.1f} min): hosts " + ", ".join(n for n, _ in jobs)
