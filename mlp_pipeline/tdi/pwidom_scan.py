@@ -98,7 +98,23 @@ def table(out):
     return rows
 
 
-def rescore(out):
+def tdi_gh(csvf):
+    """pure-H G_H (meV/atom) per (P, T) from a summarize.py -o csv: phase H runs that are done; collapsed runs (min_dHH < 0.25 A) and the known collapsed tags
+    are skipped; preference tdi_prep > tdi_long > tdi > others, then the longest run. Returns {(P, T): (G, err, 'dir/tag')}"""
+    import pandas as pd
+    df = pd.read_csv(csvf); df = df[(df.phase == "H") & (df.status.astype(str).str.startswith("done"))]
+    bad = {"H_500GPa_5000K_N250", "H_500GPa_6000K_N250"}   # H-H collapse in runs/tdi (CURRENT_ISSUES)
+    rank = {"tdi_prep": 0, "tdi_long": 1, "tdi": 2}; out = {}
+    for (P, T), g in df.groupby(["P_target_GPa", "T_K"]):
+        g = g[~((g["dir"] == "tdi") & g.tag.isin(bad))]
+        if "min_dHH_A" in g: g = g[~(g.min_dHH_A < 0.25)]
+        if not len(g): continue
+        g = g.assign(r=g["dir"].map(lambda d: rank.get(d, 3))).sort_values(["r", "ps_per_node"], ascending=[True, False])
+        x = g.iloc[0]; out[(float(P), float(T))] = (float(x.G_meV_atom), float(x.G_err_meV_atom), f"{x['dir']}/{x.tag}")
+    return out
+
+
+def rescore(out, gh_csv=None):
     """recompute every row of <out>/scan.jsonl from the pwidom result jsons (all hosts and the pure-H reservoir of each (P, T)) with the current pressure correction"""
     res = {}
     for f in sorted(glob.glob(os.path.join(out, "pw_*_K*.json")), key=os.path.getmtime):
@@ -106,6 +122,8 @@ def rescore(out):
         except Exception: continue
         if "mu_fixedV_meV" not in r: continue
         res[(r["P_target"], r["T"], "pure H" if r["phase"] == "H" else f"H{float(r.get('hper', 2.0)):.4g}O", r["K"])] = r
+    GH = tdi_gh(gh_csv) if gh_csv else {}
+    if gh_csv: print("TDI G_H used: " + ", ".join(f"{P:.0f}/{T:.0f} {g:.1f} +- {e:.1f} ({s_})" for (P, T), (g, e, s_) in sorted(GH.items())))
     old = os.path.join(out, "scan.jsonl")
     if os.path.exists(old): os.replace(old, old + ".bak")
     n = 0
@@ -121,7 +139,11 @@ def rescore(out):
                    dg_measuredP=gm_, err_measuredP=em_, pcorr=PCORR, mu_fixedV_host=w["mu_fixedV_meV"], P_host=w["P_host_GPa"], P_full=w["P_full_GPa"])
         with open(old, "a") as fh: fh.write(json.dumps(row, default=float) + "\n")
         n += 1
-        print(f"{P:5.0f} GPa {T:5.0f} K {host:9s} K {K:5d}: dg {g_:7.0f} +- {e_:4.0f} meV ({PCORR})   [measured-jump correction: {gm_:7.0f} +- {em_:4.0f}]  {row['flags']}")
+        if gh_csv is not None and (P, T) in GH:   # hybrid: pwidom's host mu_H against the TDI G_H (the reference the crystal and insertion TDIs use)
+            G, Ge, src = GH[(P, T)]; mw, ew = mu_P(w); row.update(dg_tdiGH=mw - G, err_tdiGH=float(np.hypot(ew, Ge)), GH_tdi=G, GH_src=src,
+                                                                pureH_offset=(mu_P(h)[0] - (KB * T * 1e3 * (log(h["N_H"] + 1) - lgamma(h["N_H"] + 1) / h["N_H"] - 1))) - G)
+        print(f"{P:5.0f} GPa {T:5.0f} K {host:9s} K {K:5d}: dg {g_:7.0f} +- {e_:4.0f} meV ({PCORR})   [measured-jump correction: {gm_:7.0f} +- {em_:4.0f}]  {row['flags']}"
+              + (f"   | with TDI G_H: {row['dg_tdiGH']:7.0f} (pwidom pure-H mu - G_H(TDI) = {row['pureH_offset']:+.0f})" if "dg_tdiGH" in row else ""))
     print(f"rewrote {old} ({n} rows; previous file kept as scan.jsonl.bak)")
 
 
@@ -137,6 +159,7 @@ def main():
     ap.add_argument("--maxpar", type=int, default=3, help="hosts running at once on the GPU (the GPU saturates at 4 MD processes)")
     ap.add_argument("--status", nargs="+", default=None, help="list hosts with MD frames but no result in these scan directories (globs ok, e.g. 'runs/pwidom*')")
     ap.add_argument("--rescore", default=None, help="rebuild <dir>/scan.jsonl from the result jsons in <dir> with the current pressure correction (old file kept as scan.jsonl.bak)")
+    ap.add_argument("--gh-csv", default=None, help="with --rescore: summarize.py -o csv; adds dg with the TDI pure-H G_H as the reference (hybrid) and the pure-H offset")
     ap.add_argument("--pcorr", choices=["robust", "measured"], default="robust", help="pressure correction (see mu_P)")
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
     global PCORR; PCORR = a.pcorr
@@ -150,7 +173,7 @@ def main():
                 print(f"   {'done   ' if res else 'MISSING'} {tag:32s} " + (", ".join(os.path.basename(r).split('_K')[-1].replace('.json', '') for r in res) and "K " + ", ".join(os.path.basename(r).split('_K')[-1].replace('.json', '') for r in res) if res else f"last log line: {last[0][:110] if last else '-'}"))
         print("\nrerun a scan command with the SAME --out, --ps and --K: finished hosts are skipped, missing ones reuse their MD frames")
         return
-    if a.rescore: rescore(a.rescore); return
+    if a.rescore: rescore(a.rescore, a.gh_csv); return
     if a.table: table(a.table); return
     roots = a.roots or sorted(d for d in glob.glob("runs/tdi*") if os.path.isdir(d))
     pts = hosts(roots)

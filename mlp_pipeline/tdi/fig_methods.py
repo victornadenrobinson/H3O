@@ -26,9 +26,12 @@ def rows(f):
     return [r for r in csv.DictReader(l for l in open(f) if not l.startswith("#"))]
 
 
+HYBRID = False   # --hybrid: pwidom host mu_H against the TDI pure-H G_H (rows rescored with pwidom_scan.py --rescore DIR --gh-csv summary.csv)
+
+
 def pwidom_points():
     pts = {}
-    for f in sorted(glob.glob("docs/data/pwidom_scan_*.csv")):
+    for f in ([] if HYBRID else sorted(glob.glob("docs/data/pwidom_scan_*.csv"))):
         for r in rows(f):
             pts[(float(r["P_GPa"]), float(r["T_K"]), round(float(r["n"]), 4))] = dict(dg=float(r["dg_meV"]), err=float(r["err_meV"]), flag=r["flag"])
     for f in sorted(glob.glob("runs/pwidom*/scan.jsonl"), key=os.path.getmtime):   # Young: newer scans override
@@ -36,12 +39,17 @@ def pwidom_points():
             r = json.loads(l); n = r.get("n"); h = r["host"]
             if n is None: n = 0.25 if "2.25" in h else (0.0 if h == "H2O" else float(h[1:-1]) - 2)
             fl = r["flags"]; flag = "melted" if "MELTED" in fl else ("unconverged" if ("UNCONVERGED" in fl or "few effective" in fl) else "ok")
+            if HYBRID:
+                if "dg_tdiGH" not in r: continue
+                pts[(float(r["P"]), float(r["T"]), round(float(n), 4))] = dict(dg=r["dg_tdiGH"], err=r["err_tdiGH"], flag=flag); continue
             pts[(float(r["P"]), float(r["T"]), round(float(n), 4))] = dict(dg=r["dg"], err=r["err"], flag=flag)
     return pts
 
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("-o", default="docs/figures/mu_hull_methods.png"); ap.add_argument("--points", default=None); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("-o", default="docs/figures/mu_hull_methods.png"); ap.add_argument("--points", default=None)
+    ap.add_argument("--hybrid", action="store_true", help="pwidom points with the TDI pure-H G_H as reference (needs pwidom_scan --rescore --gh-csv)"); a = ap.parse_args()
+    global HYBRID; HYBRID = a.hybrid
     fit = {(float(r["P_GPa"]), float(r["T_K"])): {k: float(v) for k, v in r.items()} for r in rows("docs/data/insertion_regsol_fit.csv")}
     pw = pwidom_points()
     allpt = sorted({(P, T) for P, T, _ in pw} | {(float(p), float(t)) for p, t, *_ in CRYSTAL if (float(p), float(t)) in fit or any(k[:2] == (p, t) for k in pw)})

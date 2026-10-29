@@ -8,8 +8,19 @@
 [ -d mlp_pipeline ] || { echo "run from the repo root"; exit 2; }
 PY=${PY:-$HOME/grace-venv/bin/python}
 echo "== 1. status"; $PY mlp_pipeline/tdi/pwidom_scan.py --status 'runs/pwidom*' | grep -E "^runs|MISSING" || true
-echo; echo "== 2. rescore (robust pressure correction)"
-for d in runs/pwidom*/; do [ -n "$(ls $d/pw_*_K*.json 2>/dev/null)" ] && $PY mlp_pipeline/tdi/pwidom_scan.py --rescore ${d%/} | tail -n 1; done
+echo; echo "== 2. pure-H G_H of the TDI runs (summarize, H-H check cached) and rescore (robust pressure correction; hybrid dg with the TDI G_H)"
+$PY mlp_pipeline/tdi/summarize.py runs/tdi runs/tdi_prep runs/tdi_long -o runs/summary_all.csv > runs/summary_all.txt 2>&1 || echo "   summarize failed: see runs/summary_all.txt"
+for d in runs/pwidom*/; do [ -n "$(ls $d/pw_*_K*.json 2>/dev/null)" ] && $PY mlp_pipeline/tdi/pwidom_scan.py --rescore ${d%/} $( [ -f runs/summary_all.csv ] && echo --gh-csv runs/summary_all.csv ) | tail -n 1; done
+[ -f runs/summary_all.csv ] && $PY - <<'PYEOF'
+import glob, json
+print("   pure-H check: pwidom pure-H mu (minus the finite-size term) - TDI G_H, meV, per scan and (P, T):")
+seen = set()
+for f in sorted(glob.glob("runs/pwidom*/scan.jsonl")):
+    for l in open(f):
+        r = json.loads(l)
+        if "pureH_offset" in r and (f, r["P"], r["T"]) not in seen:
+            seen.add((f, r["P"], r["T"])); print(f"      {f.split('/')[1]:18s} {r['P']:5.0f} GPa {r['T']:5.0f} K: {r['pureH_offset']:+7.0f}   (TDI G_H {r['GH_tdi']:.1f} from {r['GH_src']})")
+PYEOF
 echo; echo "== 3. merged table -> docs/data/pwidom_scan_latest.csv"
 $PY - <<'PYEOF'
 import glob, json, os
@@ -33,7 +44,8 @@ for PT in sorted({k[:2] for k in rows}):
     print(f"   {PT[0]:5.0f} GPa {PT[1]:5.0f} K: " + "  ".join(f"n={n:.3f} {r['dg_meV']:+.0f}{'' if r['flag'] == 'ok' else '*'}" for n, r in pts))
 print("   (* = unconverged or melted)")
 PYEOF
-echo; echo "== 4. figure"; $PY mlp_pipeline/tdi/fig_methods.py -o runs/mu_hull_methods.png
+echo; echo "== 4. figures"; $PY mlp_pipeline/tdi/fig_methods.py -o runs/mu_hull_methods.png
+$PY mlp_pipeline/tdi/fig_methods.py --hybrid -o runs/mu_hull_methods_tdiGH.png   # pwidom against the TDI pure-H reference
 if [ -n "$COMMIT" ]; then
   cp runs/mu_hull_methods.png docs/figures/mu_hull_methods.png
   git add docs/data/pwidom_scan_latest.csv docs/figures/mu_hull_methods.png && git commit -m "pwidom scan results and mu / hull figure updated ($(date +%F))" && git pull --no-rebase --no-edit origin claude/eloquent-hopper-kfjdei && git push origin HEAD:claude/eloquent-hopper-kfjdei
