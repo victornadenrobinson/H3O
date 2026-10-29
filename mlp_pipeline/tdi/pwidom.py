@@ -185,7 +185,8 @@ def cmd_run(a):
         np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
-    melted = any(m and m[-1] > 1.0 for m in msd.values())   # solid O: < ~0.3 A^2 at 3000-6000 K; a melted crystal diffuses several A^2 per ps
+    melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
+    # over the second half (> 0.25 A^2: H2.5O at 600 GPa 5000 K went 0.32 -> 0.71 / 0.23 -> 0.89 A^2 in 0.8 ps, a slow melt the old 1 A^2 threshold missed)
     if msd["host"]:
         print(f"O MSD (A^2, relative to the O centre of mass) over the host run: {' '.join(f'{x:.2f}' for x in msd['host'])}; host + 1 H: {' '.join(f'{x:.2f}' for x in msd['full'])}"
               + ("  MELTED: the O lattice diffuses, this is not the crystal (results are written but flagged)" if melted else "  (solid)"), flush=True)

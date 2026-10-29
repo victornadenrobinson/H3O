@@ -50,6 +50,14 @@ def pw_args(f, kind):
             "--bulk-gpa", repr(st["B_GPa"]), "--model", g["model"]]
 
 
+def o_growing(w):
+    """O sublattice still diffusing: the O MSD (relative to the O centre of mass) grows by > 0.25 A^2 over the second half of the host or host + 1 H run"""
+    for k in ("msd_O_host", "msd_O_full"):
+        m = w.get(k) or []
+        if len(m) >= 4 and (m[-1] > 1.0 or m[-1] - m[len(m) // 2] > 0.25): return True
+    return False
+
+
 def interp_args(f0, f25, hp, n0=0.0, n1=0.25):
     """host H(hp)O: volume per O linear in n between two hosts at the same (P, T) (default the H2O host f0 and the H2.25O crystal f25; or H2.25O -> H2.5O with n0, n1);
     bulk modulus and model of the first"""
@@ -131,7 +139,7 @@ def rescore(out, gh_csv=None):
     for (P, T, host, K), w in sorted(res.items()):
         if host == "pure H" or (P, T, "pure H", K) not in res: continue
         h = res[(P, T, "pure H", K)]; g_, e_ = dg(w, h); gm_, em_ = dg(w, h, "measured"); wd = w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]; flags = []
-        if w.get("melted"): flags.append("HOST MELTED")
+        if w.get("melted") or o_growing(w): flags.append("HOST MELTED")
         if abs(wd) > max(200.0, 3 * e_): flags.append(f"UNCONVERGED (deletion - Widom {wd:+.0f} meV)")
         if w["kish_frac_ins"] < 0.05: flags.append(f"few effective insertions (Kish {w['kish_frac_ins']:.2f})")
         row = dict(P=P, T=T, host=host.replace("H2O", "H2O"), n=float(w.get("hper", 2.0)) - 2, dg=g_, err=e_, mu_host=mu_P(w)[0], mu_H=mu_P(h)[0],
@@ -243,7 +251,7 @@ def main():
         h = out["pure H"]; hh = min_hh(os.path.join(a.out, f"{[t for n, *_, t in procs if n == 'pure H'][0]}_frames.npz"))
         for name in [n for n, _ in jobs if n != "pure H" and n in out]:
             w = out[name]; g_, e_ = dg(w, h); gm_, em_ = dg(w, h, "measured"); flags = []
-            if w.get("melted"): flags.append("HOST MELTED")
+            if w.get("melted") or o_growing(w): flags.append("HOST MELTED")
             if hh < 0.25: flags.append(f"PURE-H COLLAPSE (min dHH {hh:.2f} A)")
             if max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]) > 3: flags.append("proxy poor (>3 kT)")
             wd = w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]
