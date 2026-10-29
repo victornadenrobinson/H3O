@@ -182,7 +182,7 @@ def cmd_run(a):
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers)
+        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and m[-1] > 1.0 for m in msd.values())   # solid O: < ~0.3 A^2 at 3000-6000 K; a melted crystal diffuses several A^2 per ps
