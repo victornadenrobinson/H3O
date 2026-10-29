@@ -64,18 +64,62 @@ def min_hh(npz):
     return best
 
 
-def dg(w, h):
+EV_A3_GPA = 160.21766
+VH_ICE, VH_ICE_ERR = 1.0, 0.2   # partial volume of an added H in the ice hosts (A^3): pooled insertion stage-0 values with n >= 2 (0.9-1.3 A^3, pcorr_audit 2026-10-29)
+PCORR = "robust"                 # 'robust': v_H fixed (ice 1.0 +- 0.2, pure H V/N exact); 'measured': from P_full - P_host of the short free MD (noisy: +-50-150 meV in light runs)
+
+
+def mu_P(w, mode=None):
+    """mu_H at P_target (meV) and its error from a pwidom result json. robust: dG_P = -v (P_host - P_t) - v^2 B / (2 V), i.e. the stage-0 formula with
+    P_full = P_host + v B / V from a known partial volume v instead of the measured pressure jump of one added H (a difference of two short-run pressures)"""
+    if (mode or PCORR) == "measured": return w["mu_P_meV"], w["mu_P_err_meV"]
+    isH = w["phase"] == "H"; v = w["V"] / w["natoms"] if isH else VH_ICE; ev = 0.0 if isH else VH_ICE_ERR
+    dP = w["P_host_GPa"] - w["P_target"]; B = w["B_GPa"]
+    dG = (-v * dP - v * v * B / (2 * w["V"])) / EV_A3_GPA * 1e3
+    e = float(np.hypot(ev * abs(dP), v * w.get("P_host_err_GPa", 0.0))) / EV_A3_GPA * 1e3
+    return w["mu_fixedV_meV"] + dG, float(np.hypot(w["mu_ex_bar_err_meV"], e))
+
+
+def dg(w, h, mode=None):
     kT = KB * w["T"] * 1e3; N = h["N_H"]; fs = kT * (log(N + 1) - lgamma(N + 1) / N - 1)
-    return w["mu_P_meV"] - (h["mu_P_meV"] - fs), float(np.hypot(w["mu_P_err_meV"], h["mu_P_err_meV"]))
+    (mw, ew), (mh, eh) = mu_P(w, mode), mu_P(h, mode)
+    return mw - (mh - fs), float(np.hypot(ew, eh))
 
 
 def table(out):
     rows = [json.loads(l) for l in open(os.path.join(out, "scan.jsonl"))] if os.path.exists(os.path.join(out, "scan.jsonl")) else []
-    print(f"\n{'P/GPa':>6s} {'T/K':>6s} {'host':>7s} {'dg/meV':>8s} {'+-':>6s} {'mu_P host':>9s} {'mu_P H':>8s} {'del-Wid':>7s} {'proxy kT':>8s} {'kish':>5s} {'O MSD':>6s}  flags")
+    print(f"\n{'P/GPa':>6s} {'T/K':>6s} {'host':>7s} {'dg/meV':>8s} {'+-':>6s} {'mu_P host':>9s} {'mu_P H':>8s} {'del-Wid':>7s} {'dg(meas.P)':>10s} {'proxy kT':>8s} {'kish':>5s} {'O MSD':>6s}  flags")
     rows = list({(r["P"], r["T"], r["host"], r.get("ps"), r.get("K")): r for r in rows}.values())   # a rerun appends the finished hosts again: keep the last of each
     for r in sorted(rows, key=lambda r: (r["P"], r["T"], r.get("n", 0.25 if "2.25" in r["host"] else 0.0), r["host"])):
-        print(f"{r['P']:6.0f} {r['T']:6.0f} {r['host']:>7s} {r['dg']:8.0f} {r['err']:6.0f} {r['mu_host']:9.0f} {r['mu_H']:8.0f} {r.get('deletion', 0) - r.get('widom', 0):7.0f} {r['proxy_kT']:8.2f} {r['kish']:5.2f} {r['msd']:6.2f}  {r['flags']}")
+        print(f"{r['P']:6.0f} {r['T']:6.0f} {r['host']:>7s} {r['dg']:8.0f} {r['err']:6.0f} {r['mu_host']:9.0f} {r['mu_H']:8.0f} {r.get('deletion', 0) - r.get('widom', 0):7.0f} {r.get('dg_measuredP', float('nan')):10.0f} {r['proxy_kT']:8.2f} {r['kish']:5.2f} {r['msd']:6.2f}  {r['flags']}")
     return rows
+
+
+def rescore(out):
+    """recompute every row of <out>/scan.jsonl from the pwidom result jsons (all hosts and the pure-H reservoir of each (P, T)) with the current pressure correction"""
+    res = {}
+    for f in sorted(glob.glob(os.path.join(out, "pw_*_K*.json")), key=os.path.getmtime):
+        try: r = json.load(open(f))
+        except Exception: continue
+        if "mu_fixedV_meV" not in r: continue
+        res[(r["P_target"], r["T"], "pure H" if r["phase"] == "H" else f"H{float(r.get('hper', 2.0)):.4g}O", r["K"])] = r
+    old = os.path.join(out, "scan.jsonl")
+    if os.path.exists(old): os.replace(old, old + ".bak")
+    n = 0
+    for (P, T, host, K), w in sorted(res.items()):
+        if host == "pure H" or (P, T, "pure H", K) not in res: continue
+        h = res[(P, T, "pure H", K)]; g_, e_ = dg(w, h); gm_, em_ = dg(w, h, "measured"); wd = w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]; flags = []
+        if w.get("melted"): flags.append("HOST MELTED")
+        if abs(wd) > max(200.0, 3 * e_): flags.append(f"UNCONVERGED (deletion - Widom {wd:+.0f} meV)")
+        if w["kish_frac_ins"] < 0.05: flags.append(f"few effective insertions (Kish {w['kish_frac_ins']:.2f})")
+        row = dict(P=P, T=T, host=host.replace("H2O", "H2O"), n=float(w.get("hper", 2.0)) - 2, dg=g_, err=e_, mu_host=mu_P(w)[0], mu_H=mu_P(h)[0],
+                   proxy_kT=max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]), kish=w["kish_frac_ins"], msd=(w["msd_O_host"] or [np.nan])[-1], min_dHH=np.nan,
+                   widom=w["mu_ex_widom_meV"], deletion=w["mu_ex_delete_meV"], bar=w["mu_ex_bar_meV"], flags=",".join(flags) or "ok", ps=np.nan, K=K, sel=w["sel"],
+                   dg_measuredP=gm_, err_measuredP=em_, pcorr=PCORR, mu_fixedV_host=w["mu_fixedV_meV"], P_host=w["P_host_GPa"], P_full=w["P_full_GPa"])
+        with open(old, "a") as fh: fh.write(json.dumps(row, default=float) + "\n")
+        n += 1
+        print(f"{P:5.0f} GPa {T:5.0f} K {host:9s} K {K:5d}: dg {g_:7.0f} +- {e_:4.0f} meV ({PCORR})   [measured-jump correction: {gm_:7.0f} +- {em_:4.0f}]  {row['flags']}")
+    print(f"rewrote {old} ({n} rows; previous file kept as scan.jsonl.bak)")
 
 
 def main():
@@ -88,7 +132,11 @@ def main():
     ap.add_argument("--hpers", type=float, nargs="*", default=[], help="extra H2O-host compositions (H per O), volume interpolated per O between the H2O and H2.25O runs, e.g. 2.0556 2.1111 2.1667 (= 6, 12, 18 extra H in 108 O)")
     ap.add_argument("--kextra", type=int, nargs="*", default=[], help="extra H per CELL (108 O for the usual host), e.g. 1 2 3 4 6 9 12 18: hosts H(2 + k/108)O")
     ap.add_argument("--maxpar", type=int, default=3, help="hosts running at once on the GPU (the GPU saturates at 4 MD processes)")
+    ap.add_argument("--rescore", default=None, help="rebuild <dir>/scan.jsonl from the result jsons in <dir> with the current pressure correction (old file kept as scan.jsonl.bak)")
+    ap.add_argument("--pcorr", choices=["robust", "measured"], default="robust", help="pressure correction (see mu_P)")
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
+    global PCORR; PCORR = a.pcorr
+    if a.rescore: rescore(a.rescore); return
     if a.table: table(a.table); return
     roots = a.roots or sorted(d for d in glob.glob("runs/tdi*") if os.path.isdir(d))
     pts = hosts(roots)
@@ -154,16 +202,17 @@ def main():
         if "pure H" not in out: continue
         h = out["pure H"]; hh = min_hh(os.path.join(a.out, f"{[t for n, *_, t in procs if n == 'pure H'][0]}_frames.npz"))
         for name in [n for n, _ in jobs if n != "pure H" and n in out]:
-            w = out[name]; g_, e_ = dg(w, h); flags = []
+            w = out[name]; g_, e_ = dg(w, h); gm_, em_ = dg(w, h, "measured"); flags = []
             if w.get("melted"): flags.append("HOST MELTED")
             if hh < 0.25: flags.append(f"PURE-H COLLAPSE (min dHH {hh:.2f} A)")
             if max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]) > 3: flags.append("proxy poor (>3 kT)")
             wd = w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]
             if abs(wd) > max(200.0, 3 * e_): flags.append(f"UNCONVERGED (deletion - Widom {wd:+.0f} meV)")   # insertion and deletion bracket the answer: far apart = too few effective samples
             if w["kish_frac_ins"] < 0.05: flags.append(f"few effective insertions (Kish {w['kish_frac_ins']:.2f})")
-            row = dict(P=P, T=T, host=name, n=float(w.get("hper", 2.0)) - 2, dg=g_, err=e_, mu_host=w["mu_P_meV"], mu_H=h["mu_P_meV"],
+            row = dict(P=P, T=T, host=name, n=float(w.get("hper", 2.0)) - 2, dg=g_, err=e_, mu_host=mu_P(w)[0], mu_H=mu_P(h)[0],
                        proxy_kT=max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]), kish=w["kish_frac_ins"], msd=(w["msd_O_host"] or [np.nan])[-1], min_dHH=hh,
-                       widom=w["mu_ex_widom_meV"], deletion=w["mu_ex_delete_meV"], bar=w["mu_ex_bar_meV"], flags=",".join(flags) or "ok", ps=a.ps, K=a.K, sel=a.sel)
+                       widom=w["mu_ex_widom_meV"], deletion=w["mu_ex_delete_meV"], bar=w["mu_ex_bar_meV"], flags=",".join(flags) or "ok", ps=a.ps, K=a.K, sel=a.sel,
+                       dg_measuredP=gm_, err_measuredP=em_, pcorr=PCORR, mu_fixedV_host=w["mu_fixedV_meV"], P_host=w["P_host_GPa"], P_full=w["P_full_GPa"])
             with open(os.path.join(a.out, "scan.jsonl"), "a") as fh: fh.write(json.dumps(row, default=float) + "\n")
             print(f"   == {name:6s}: dg = {g_:7.0f} +- {e_:4.0f} meV  (mu_ex Widom {w['mu_ex_widom_meV']:.0f} / deletion {w['mu_ex_delete_meV']:.0f} / BAR {w['mu_ex_bar_meV']:.0f}; "
                   f"proxy {row['proxy_kT']:.2f} kT, Kish {row['kish']:.2f}; O MSD {row['msd']:.2f} A^2)  {row['flags']}", flush=True)

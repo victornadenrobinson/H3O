@@ -3,7 +3,7 @@
       average cost per added H  mu0 + s n (dotted), next-H cost (differential) mu0 + 2 s n (dashed); hull g = (mu0 n + s n^2) / (3 + n)
   crystal TDI (whole H(2+n)O crystals): AVERAGE cost per added H over 0 -> n (open triangles, huang_hull.CRYSTAL); hull points n * avg / (3 + n)
   pwidom (proxy Widom / deletion + BAR, no lambda path): DIFFERENTIAL cost of one more H in an H2O or H(2+n)O host (squares; open = unconverged, x = host melted);
-      docs/data/pwidom_scan_*.csv and, on Young, runs/pwidom_scan*/scan.jsonl; hull: trapezoid integral of the differential points from n = 0 (dilute mu0 from the
+      docs/data/pwidom_scan_*.csv and, on Young, runs/pwidom*/scan.jsonl (run pwidom_scan.py --rescore <dir> first: robust pressure correction); hull: trapezoid integral of the differential points from n = 0 (dilute mu0 from the
       insertion TDI where the pwidom H2O host is unconverged), so  g(n) = int_0^n mu dn' / (3 + n); drawn only with >= 2 pwidom compositions above n = 0
       (pwidom_scan.py --hpers), since a straight line from mu0 to one point can be far off (400 GPa 5000 K: mu(n) must rise steeply at small n, see the crystal average)
 All in meV, relative to H2O (superionic fcc) + n H (pure fluid H) at the same P, T; pwidom pressure-corrected, the fits as in report.py. Classical nuclei, GRACE ft_m2.
@@ -31,7 +31,7 @@ def pwidom_points():
     for f in sorted(glob.glob("docs/data/pwidom_scan_*.csv")):
         for r in rows(f):
             pts[(float(r["P_GPa"]), float(r["T_K"]), round(float(r["n"]), 4))] = dict(dg=float(r["dg_meV"]), err=float(r["err_meV"]), flag=r["flag"])
-    for f in sorted(glob.glob("runs/pwidom_scan*/scan.jsonl"), key=os.path.getmtime):   # Young: newer scans override
+    for f in sorted(glob.glob("runs/pwidom*/scan.jsonl"), key=os.path.getmtime):   # Young: newer scans override
         for l in open(f):
             r = json.loads(l); n = r.get("n"); h = r["host"]
             if n is None: n = 0.25 if "2.25" in h else (0.0 if h == "H2O" else float(h[1:-1]) - 2)

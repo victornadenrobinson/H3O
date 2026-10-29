@@ -15,8 +15,12 @@ usage (repo root, Young):  python3 mlp_pipeline/tdi/pcorr_audit.py [--points "40
 """
 import argparse, glob, json, os
 import numpy as np
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pwidom_scan import mu_P   # robust pwidom pressure correction (v_H fixed)
 
 EV_A3_GPA = 160.21766
+VH = 1.0   # pooled partial volume of an added H in the ice hosts (A^3, insertion n >= 2), as pwidom_scan.VH_ICE
 
 
 def stage0s(roots):
@@ -40,6 +44,8 @@ def main():
             n = int(st["N"]); V = st["V"]; B = st.get("B_GPa", np.nan); Ph, Pf = st.get("P_host_GPa", np.nan), st.get("P_full_GPa", np.nan)
             vH = V * (Pf - Ph) / (n * B) if np.isfinite(Pf) else np.nan
             first = -vH * ((Ph + Pf) / 2 - key[0]) / EV_A3_GPA * 1e3 if np.isfinite(vH) else np.nan
+            vn = VH * n; robust = (-vn * (Ph - key[0]) - vn * vn * B / (2 * V)) / n / EV_A3_GPA * 1e3 if np.isfinite(Ph) else np.nan   # v_H fixed at the pooled value
+            first = (first, robust)
             ins.setdefault(key, []).append((tag, os.path.dirname(f), n, Ph, Pf, B, vH, st.get("dG_P_eV", np.nan) / n * 1e3 if "dG_P_eV" in st else np.nan, first))
         else:
             P = st.get("P_mlp", np.nan); N = st.get("N", np.nan); B = st.get("B_GPa", np.nan)
@@ -52,7 +58,7 @@ def main():
         if "dG_P_meV" not in r: continue
         key = (float(r["P_target"]), float(r["T"]))
         if want and key not in want: continue
-        pw.setdefault(key, []).append((os.path.basename(os.path.dirname(f)) + "/" + os.path.basename(f), r["phase"], r.get("hper", 2.0), r["P_host_GPa"], r["P_full_GPa"], r["B_GPa"], r["mu_fixedV_meV"], r["dG_P_meV"]))
+        pw.setdefault(key, []).append((os.path.basename(os.path.dirname(f)) + "/" + os.path.basename(f), r["phase"], r.get("hper", 2.0), r["P_host_GPa"], r["P_full_GPa"], r["B_GPa"], r["mu_fixedV_meV"], r["dG_P_meV"], r))
     for key in sorted(set(ins) | set(whole) | set(pw)):
         P, T = key; print(f"\n=========== {P:.0f} GPa {T:.0f} K ===========")
         if key in whole:
@@ -63,15 +69,16 @@ def main():
             print("  insertion TDI (fixed V; stage-0 correction, FIRST order): per added H, meV.  applied = dG_P in the json (nan = run on the uncorrected basis)")
             for tag, d, n, Ph, Pf, B, vH, dGP, first in ins[key]:
                 print(f"     {os.path.basename(d) + '/' + tag:45s} n {n:2d}  P_host {Ph:7.1f} P_full {Pf:7.1f} (P_mid miss {(Ph + Pf) / 2 - P:+6.1f})  B {B:6.0f}  v_H {vH:5.2f} A^3  "
-                      f"dG_P applied {dGP:7.1f}  (first-order estimate {first:7.1f})")
+                      f"dG_P applied {dGP:7.1f}  (first order {first[0]:7.1f}; robust, v_H = {VH} A^3: {first[1]:7.1f})")
         if key in pw:
             print("  pwidom (fixed V -> P_t, always applied): host and pure-H corrections and the net shift of dg, meV per H")
             hs = [r for r in pw[key] if r[1] == "H"]
-            for f, ph, h, Ph, Pf, B, muV, dGP in pw[key]:
-                print(f"     {f:60s} {'pure H' if ph == 'H' else 'H' + format(h if h is not None else 2.0, '.4g') + 'O':9s} P_host {Ph:7.1f} P_+1H {Pf:7.1f}  B {B:6.0f}  mu fixed V {muV:8.1f}  dG_P {dGP:7.1f}")
-            for f, ph, h, Ph, Pf, B, muV, dGP in [r for r in pw[key] if r[1] != "H"]:
-                for hf, *_r, hdGP in hs[:1]:
-                    print(f"     net shift of dg for {os.path.basename(f)} (host dG_P - pure-H dG_P): {dGP - hdGP:+7.1f} meV per H")
+            for f, ph, h, Ph, Pf, B, muV, dGP, r in pw[key]:
+                rob = mu_P(r)[0] - muV
+                print(f"     {f:60s} {'pure H' if ph == 'H' else 'H' + format(h if h is not None else 2.0, '.4g') + 'O':9s} P_host {Ph:7.1f} P_+1H {Pf:7.1f}  B {B:6.0f}  mu fixed V {muV:8.1f}  dG_P measured {dGP:7.1f}  robust {rob:7.1f}")
+            for f, ph, h, Ph, Pf, B, muV, dGP, r in [x for x in pw[key] if x[1] != "H"]:
+                for hx in hs[:1]:
+                    hr = hx[-1]; print(f"     net shift of dg for {os.path.basename(f)} (host - pure H): measured {dGP - hx[7]:+7.1f}   robust {(mu_P(r)[0] - r['mu_fixedV_meV']) - (mu_P(hr)[0] - hr['mu_fixedV_meV']):+7.1f} meV per H")
     print("\nReading: an insertion row with 'dG_P applied nan' is on the uncorrected basis; its mu is high by about -(first-order estimate). Crystal mixing values are"
           " corrected to first order; their residual is the dG_P2 column combined per added H (summarize P2_corr_per_H). pwidom dg already includes the net shift.")
 
