@@ -1,0 +1,13 @@
+# Huang H3O structure (docs/data/h3o_huang.cell, 16 O + 48 H), CASTEP BFGS relaxation at each pressure: final enthalpy of the cell (eV), our own calculation (ARCHER)
+P_GPa,H_eV_cell
+300,-7451.13727
+350,-7410.38966
+400,-7371.49717
+450,-7334.16193
+500,-7298.16141
+550,-7263.32762
+600,-7229.53082
+650,-7196.66720
+700,-7164.65131
+750,-7133.41093
+800,-7102.88454

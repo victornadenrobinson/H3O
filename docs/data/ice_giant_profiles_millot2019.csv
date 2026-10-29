@@ -1,0 +1,13 @@
+# Uranus and Neptune interior T(P) as drawn in Millot et al., Nature 569, 251 (2019) (superionic ice XVIII), phase-diagram figure: one model per planet.
+# READ OFF THE FIGURE BY EYE (linear P axis 100-500 GPa, T axis 1000-8000 K): about +-150 K, +-10 GPa. Shape only from this figure; check the original model papers before publication.
+planet,profile,P_GPa,T_K
+Uranus,Millot 2019 fig.,100,4330
+Uranus,Millot 2019 fig.,200,5180
+Uranus,Millot 2019 fig.,300,5540
+Uranus,Millot 2019 fig.,400,5900
+Uranus,Millot 2019 fig.,500,6085
+Neptune,Millot 2019 fig.,100,3480
+Neptune,Millot 2019 fig.,200,3960
+Neptune,Millot 2019 fig.,300,4210
+Neptune,Millot 2019 fig.,400,4510
+Neptune,Millot 2019 fig.,500,4810

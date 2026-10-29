@@ -1,0 +1,12 @@
+# Huang et al., SI Fig. S5A: enthalpy of formation of Cmca-H3O relative to H2O + H2, 0.3-2 TPa, meV/atom, read off the figure (+-3 meV).
+# No zero-point energy in the caption; 10-20 meV/atom below the main-text curve that includes ZPE (docs/data/huang_h3o_dH.csv): taken as the STATIC curve.
+P_GPa,dH_meV_atom
+300,47
+400,4
+500,-33
+600,-62
+700,-87
+800,-110
+900,-115
+1000,-121
+2000,-129

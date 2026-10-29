@@ -1,0 +1,11 @@
+# Approximate Uranus / Neptune interior temperatures for the T-x and P-T figures. ONLY anchor points are literature numbers; T between them is an ESTIMATE:
+# T(P) = T_anchor (P / P_anchor)^a with a = 0.28 (the isentrope slope dlnT/dlnP quoted for the Redmer et al. 2011 profiles by the 2025 ApJ paper below; their own colder water adiabats are
+# flatter, a < 0.28, so a range a_min-a_max is carried). Anchors: temperature at the bottom of the water-rich layer (top of the core / C-N-H layer, "T3") and its pressure, from
+# "Ab initio entropy calculations of water predict the interiors of Uranus and Neptune to be 15-30% colder than previous models", ApJ (2025), doi:10.3847/1538-4357/adef48 (arXiv:2508.16754),
+# for their own profile ("cold") and for the Redmer et al. 2011 (Icarus 211, 798) profiles ("R11", warm). Read from search-result abstracts, not the paper's tables: CHECK before publication.
+# Composition (H in the water-rich layer) is NOT in this file: planet bands in tx_diagram.py span --planet-x (default X 0.1-0.4 = 2-10 wt% H in water, see the docstring there).
+planet,profile,P_anchor_GPa,T_anchor_K,a_min,a_max
+Uranus,R11 (warm),630,6040,0.28,0.28
+Neptune,R11 (warm),940,6100,0.28,0.28
+Uranus,ab initio 2025 (cold),620,4360,0.18,0.28
+Neptune,ab initio 2025 (cold),820,4120,0.18,0.28

@@ -1,0 +1,7 @@
+# tdi/toy_checks.sh 450 5000 on Young 2026-10-28 (toy pair potential toyfit_t4.json; 10 lambda x 2 ps; host 32 O unless noted): mu_H per added H, meV
+run,mu_meV,err_meV,what
+ref,4083.3,28.4,insertion of 1 H into H2O (lambda = x^4)
+path,4053.4,27.3,same with lambda = x^2
+size,4075.1,31.8,same in a 108-O host
+rev,4166.3,32.8,insertion of 1 H into H2.25O at its own volume
+ins8,4141.2,13.1,insertion of 8 H into H2O (average per added H)

@@ -1,2 +1,6 @@
+runs/
 __pycache__/
+*.pyc
 .pytest_cache/
+docs/papers/*.pdf
+H3O_bundle_*.tar.gz

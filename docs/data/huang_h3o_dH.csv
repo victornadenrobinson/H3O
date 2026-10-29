@@ -1,0 +1,10 @@
+# Huang et al. (H3O at high pressure): enthalpy of formation of H3O from H2O (ice X) + 1/2 H2 INCLUDING ZERO-POINT ENERGY (their caption; the axis says dH), meV/atom,
+# read off their Fig. B (+-3 meV). Not comparable with static (no-ZPE) or classical-nuclei numbers: H-rich ZPE corrections are tens of meV/atom
+P_GPa,dH_meV_atom
+300,57
+350,35
+400,17
+450,0
+500,-15
+550,-29
+600,-42

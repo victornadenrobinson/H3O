@@ -1,0 +1,790 @@
+"""Thermodynamic integration for crystalline H2O (O on bcc/fcc sites, mobile protons) with a GRACE model: one phase, one volume per job.
+
+Path ('direct', Wilson et al. 2013 type):  U(lam) = (1-lam) E_Einstein(O) + lam U_MLP,   reference = Einstein crystal for O + ideal gas for H.
+  F = F_ref + int_0^1 <U_MLP - E_Einstein>_lam dlam      (+ kinetic terms; classical nuclei)       G = F + P_target V
+Modes:  (default) all in one process: lambda=1 run, then all nodes in chunks, G printed vs simulation time;
+        --stage0   only the lambda=1 run (Einstein constant, MLP pressure, structure, reference free energy) -> <outdir>/<tag>_stage0.json
+        --node K   only node K (reads stage0 json): many of these can share one GPU (see young_tdi_par.sh); tdi/collect.py integrates them and prints G(t).
+Steps: (1) lam=1 run: equilibration check, Einstein constant k = 3 kT / <|u|^2> of the O atoms, MLP pressure and O-structure label at this volume;
+(2) the lambda nodes (Gauss-Legendre in lam^power) advance in chunks of --chunk-ps; every chunk prints G (meV/atom) and writes <outdir>/tdi_<tag>.json.
+G uses P_target*V (not the MLP pressure at V): this is the Gibbs energy at P_target to second order in (P_MLP - P_target); the MLP pressure is printed as a check.
+usage (GPU, repo root):  GRACE_UQ=1 python mlp_pipeline/tdi/run_real.py grace-ft:runs/grace/ft_m2 --phase bcc --P 400 --T 3000 --from-dft inventory_binned.csv
+"""
+import os as _os; _os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")   # several processes can share one GPU (TensorFlow otherwise takes nearly all of its memory in the first one)
+import argparse, json, os, sys, time
+from importlib import import_module
+from math import lgamma
+import numpy as np
+import pandas as pd
+from ase import units
+from ase.geometry import find_mic
+from ase.md.langevin import Langevin
+from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+from tdi import refs, engine, analyze
+from tdi.progress import StepProgress
+from tdi.gcalc import stats, G_total_eV, G_from_nodes   # noqa: F401 (collect.py and live.py import these from here)
+
+EV_A3_GPA = 160.21766
+
+
+class Unstable(RuntimeError):
+    pass
+
+
+class LambdaRun:
+    def __init__(self, atoms0, components, lam, T, idxO, dt, tau, seed, every, equil_steps):
+        self.lam, self.T, self.every, self.equil, self.series, self.tk, self.snaps = lam, T, every, equil_steps, [], [], []
+        self.eful, self.espr, self.thermo, self.pfn, self.dt = [], [], [], None, dt
+        self.calc = engine.TDICalculator(components, {"E": 1 - lam, "full": lam}, needed=("full", "E"))
+        self.at = atoms0.copy(); self.at.calc = self.calc; self.idxO = idxO
+        self.sites0 = atoms0.positions[idxO].copy() if len(idxO) else atoms0.positions.copy()   # no O: displacement of every H from its start (liquid check)
+        if len(idxO):
+            self.at.set_constraint(engine.FixGroupCom(idxO))
+        rng = np.random.default_rng(seed)
+        MaxwellBoltzmannDistribution(self.at, temperature_K=T, rng=rng)
+        self.at.set_momenta(self.at.get_momenta(), apply_constraint=True)
+        self.dyn = Langevin(self.at, dt * units.fs, temperature_K=T, friction=1.0 / (tau * units.fs), fixcm=False, rng=rng); self.hot, self._tau, self._rng = None, tau, rng
+        self.ndof = self.at.get_number_of_degrees_of_freedom(); self.started = False; self.steps = 0; self.t0 = time.time()
+
+    def _rec(self):
+        self.at.get_forces()
+        p = self.calc.parts
+        self.series.append(p["full"] - p["E"]); self.eful.append(p["full"]); self.espr.append(p["E"])
+        self.tk.append(2 * self.at.get_kinetic_energy() / (self.ndof * units.kB))
+        if not np.isfinite(self.tk[-1]) or self.tk[-1] > 20 * self.T:   # runaway (e.g. a hard collision at too large a time step): stop at once
+            raise Unstable(f"T_kin {self.tk[-1]:.0f} K (target {self.T:.0f} K) after {len(self.series)} recorded samples")
+        if len(self.series) % 20 == 0:
+            self.snaps.append(self.at.get_positions().copy())
+            self.thermo.append(self._thermo_row())
+
+    def _thermo_row(self):
+        """one row of the thermo log (every 20 recorded samples): temperature, energies, MLP virial pressure, O (or H) displacement from the start"""
+        at = self.at; N = len(at); T = 2 * at.get_kinetic_energy() / (self.ndof * units.kB)
+        if len(self.idxO):
+            u = find_mic(at.positions[self.idxO] - self.sites0, at.cell, True)[0]; u = u - u.mean(0)
+        else:
+            u = at.positions - self.sites0
+        P = float("nan")
+        if self.pfn is not None:
+            P = self.pfn(at, T)
+        return dict(t_ps=len(self.series) * self.every * self.dt / 1000, T_inst_K=T, U_MLP_eV=self.eful[-1], E_spring_eV=self.espr[-1], dUdl_eV=self.series[-1], P_MLP_GPa=P, u_rms_A=float(np.sqrt((u ** 2).sum(-1).mean())), u_max_A=float(np.linalg.norm(u, axis=1).max()))
+
+    def start(self):
+        """equilibration (nothing recorded), then attach the recorder"""
+        if self.hot:   # liquid at low T: heat to hot_T for hot_steps so that the lattice start melts (superheated crystal otherwise), then equilibrate at T as usual
+            Langevin(self.at, self.dt * units.fs, temperature_K=self.hot[0], friction=1.0 / (self._tau * units.fs), fixcm=False, rng=self._rng).run(self.hot[1])
+        self.dyn.run(self.equil); self.dyn.attach(self._rec, interval=self.every); self.started = True
+
+    def advance(self, n):
+        if not self.started:
+            self.start()
+        self.dyn.run(n); self.steps += n
+
+    def diag(self, last=None):
+        """one-line health report over the last `last` samples (default all): temperatures, energies per atom, closest H-H / H-O contacts, O displacement"""
+        sl = slice(-last, None) if last else slice(None)
+        if not self.series:   # nothing recorded yet (right after equilibration)
+            self.series, self.tk, self.eful, self.espr = [float("nan")], [2 * self.at.get_kinetic_energy() / (self.ndof * units.kB)], [float("nan")], [float("nan")]
+            txt = self.diag(); self.series, self.tk, self.eful, self.espr = [], [], [], []
+            return txt
+        at = self.at; N = len(at); H = at.numbers == 1
+        from ase.neighborlist import neighbor_list
+        i, j, d = neighbor_list("ijd", at, 1.2)
+        hh = d[H[i] & H[j]].min() if (H[i] & H[j]).any() else float("nan"); ho = d[(H[i] != H[j])].min() if (H[i] != H[j]).any() else float("nan")
+        if len(self.idxO):
+            u = find_mic(at.positions[self.idxO] - self.sites0, at.cell, True)[0]; u -= u.mean(0)
+        else:
+            u = at.positions - self.sites0
+        return (f"T_kin {np.mean(self.tk[sl]):6.0f} K  <dU/dl> {np.mean(self.series[sl]):10.3f} eV  U_MLP/atom {np.mean(self.eful[sl]) / N:8.4f} eV  "
+                f"E_spring/atom {np.mean(self.espr[sl]) / N * 1e3:7.2f} meV  min d(H-H) {hh:.2f} d(H-O) {ho:.2f} A  |u| now rms {np.sqrt((u ** 2).sum(-1).mean()):.3f} max {np.linalg.norm(u, axis=1).max():.3f} A")
+
+
+BARS = "▁▂▃▄▅▆▇█"
+
+
+def trace(series, n_per, maxn=20):
+    """sparkline of the per-chunk means of the integrand (time evolution of this lambda)"""
+    b = [float(np.mean(series[i * n_per:(i + 1) * n_per])) for i in range(len(series) // n_per)][-maxn:]
+    if not b:
+        return ""
+    lo, hi = min(b), max(b)
+    return "".join(BARS[int(round((v - lo) / (hi - lo + 1e-12) * 7))] for v in b)
+
+
+def meta():
+    """provenance written into every stage0 json"""
+    import platform, subprocess, ase
+    try:
+        git = os.environ.get("H3O_GIT") or subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    except Exception:
+        git = "unknown"
+    return dict(git=git, grace_mode=os.environ.get("GRACE_MODE", ""), hhwall=os.environ.get("HHWALL", ""), host=platform.node(), date=time.strftime("%Y-%m-%d %H:%M:%S"), python=platform.python_version(), ase=ase.__version__, numpy=np.__version__)
+
+
+def write_json(path, d):
+    """atomic json write (a reader or a kill mid-write never sees a truncated file)"""
+    with open(path + ".tmp", "w") as fh:
+        json.dump(d, fh, indent=1)
+    os.replace(path + ".tmp", path)
+
+
+def stage0_path(c):
+    return os.path.join(c["a"].outdir, f"{c['tag']}_stage0.json")
+
+
+def check_stage0_compatible(c, kE):
+    """refuse to rewrite <tag>_stage0.json with settings that would mix samples: when node files of this tag exist, the old json must have the same sample-defining settings
+    (dt, chunk, sampling interval, model, cell, composition, T, P, V, Einstein k) and lambda values that the new ones only extend (Gauss -> Gauss-Kronrod keeps the old values first).
+    kE None = k is measured by this stage 0 (not compared). --fresh skips the check (its files are deleted anyway)."""
+    a = c["a"]; f = stage0_path(c)
+    if a.fresh or not os.path.exists(f):
+        return
+    import glob
+    if not glob.glob(os.path.join(a.outdir, f"{c['tag']}_node*.npy")) and not glob.glob(os.path.join(a.outdir, f"{c['tag']}_node*_state.npz")):
+        return
+    old = json.load(open(f)); A, now = old.get("args", {}), vars(a)
+    def differ(x, y):
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)) and not isinstance(x, bool):
+            return abs(float(x) - float(y)) > 1e-9 * max(1.0, abs(float(y)))
+        return x != y
+    bad = [f"{k} {A[k]!r} -> {now[k]!r}" for k in ("dt", "every", "chunk_ps", "model", "hper", "nghost", "natoms", "nrep", "tau") if k in A and differ(A[k], now[k])]
+    bad += [f"{k} {old[k]!r} -> {v!r}" for k, v in (("T", a.T), ("P_target", a.P), ("V", c["V"])) if k in old and differ(old[k], v)]
+    if kE is not None and "kE" in old and differ(old["kE"], kE):
+        bad.append(f"Einstein k {old['kE']!r} -> {kE!r}")
+    try:
+        lam_old = analyze.rule_nodes(A)[0]
+        if len(c["lam"]) < len(lam_old) or not np.allclose(c["lam"][:len(lam_old)], lam_old, rtol=1e-12, atol=0):
+            bad.append(f"lambda values ({A.get('rule') or 'gl'} {A.get('nodes')} -> {a.rule} {a.nodes}: the old values must come first)")
+    except (KeyError, AssertionError):
+        pass
+    if bad:
+        raise SystemExit(f"{f}: node files of {c['tag']} exist and were made with other settings ({'; '.join(bad)}). Not overwriting the json (the samples would be integrated with the wrong settings). "
+                         f"Use the original settings (tdi/extend.py prints them), another OUTDIR, or FRESH=1 to start over.")
+
+
+def mlp_pressure_fn(calc):
+    """f(atoms, T) = MLP virial pressure (GPa) incl. the ideal-gas term N kB T / V, as in the EOS runs"""
+    def pfn(at, T):
+        b = at.copy(); b.calc = calc; sg = b.get_stress(voigt=True)
+        return float(-sg[:3].mean() * EV_A3_GPA + len(at) * units.kB * T / at.get_volume() * EV_A3_GPA)
+    return pfn
+
+
+def free_md_pressure(c, atoms0, seed, label):
+    """mean MLP pressure (GPa) and its 5-block error over a free full-MLP Langevin run of atoms0 at T (no springs, no fixed centre of mass): --equil-ps, then --ps1 of production
+    (one pressure every 20 recorded samples, as in the thermo log)"""
+    a = c["a"]; t0 = time.time()
+    zero = lambda at: (0.0, np.zeros((len(at), 3)))
+    r = LambdaRun(atoms0, {"full": c["full"], "E": zero}, 1.0, a.T, np.array([], dtype=int), a.dt, a.tau, seed, a.every, c["steps"](a.equil_ps))
+    r.pfn = mlp_pressure_fn(c["calc"]); tot = c["steps"](a.ps1); blk = max(1, c["steps"](0.25)); done = 0
+    r.dyn.attach(StepProgress(r.dyn, c["steps"](a.equil_ps) + tot, label=label, print_s=60), interval=1)   # a line every minute, also during the equilibration (reads the clock only)
+    print(f"free NVT of {label} ({len(atoms0)} atoms): {a.equil_ps} ps equilibration + {a.ps1} ps production, progress every 0.25 ps", flush=True)
+    while done < tot:   # in pieces, with a progress line (the run was silent for minutes)
+        nstep = min(blk, tot - done); r.advance(nstep); done += nstep
+        pp = [x["P_MLP_GPa"] for x in r.thermo]
+        print(f"  {label}: {done * a.dt / 1000:.2f} / {a.ps1} ps  P so far {np.mean(pp) if pp else float('nan'):.1f} GPa  {(time.time() - t0) / 60:.1f} min", flush=True)
+    p = [x["P_MLP_GPa"] for x in r.thermo]; m, e = stats(p)
+    if not np.isfinite(e):
+        raise SystemExit(f"{label}: only {len(p)} pressure samples in --ps1 {a.ps1} ps (need 25): increase --ps1")
+    print(f"MLP pressure of {label} ({len(atoms0)} atoms; free NVT {a.equil_ps} + {a.ps1} ps): {m:.2f} +- {e:.2f} GPa (target {a.P:g})  {r.diag()}  {(time.time() - t0) / 60:.1f} min", flush=True)
+    return m, e
+
+
+def bulk_modulus(a, eps=0.03):
+    """isothermal bulk modulus B = -V dP/dV (GPa) at (T, P) of the same DFT EOS that gave the volume (central difference of V(P) over P(1 -+ eps)); --bulk-gpa overrides it
+    (and is the only source with --vpa). nan when unavailable (P too close to the edge of the EOS data)."""
+    if a.bulk_gpa:
+        return float(a.bulk_gpa)
+    if a.vpa:
+        return float("nan")
+    v1, v2 = vpa_at(a, a.P * (1 - eps)), vpa_at(a, a.P * (1 + eps))
+    B = -0.5 * (v1 + v2) * 2 * eps * a.P / (v2 - v1) if v2 != v1 else float("nan")
+    return float(B) if np.isfinite(B) and B > 0 else float("nan")
+
+
+def E_component(c, kE):
+    """Einstein springs on the O atoms; for pure hydrogen (no O) the reference potential is zero"""
+    if c.get("host_idx") is not None:   # insertion: the reference potential is the MLP of the host atoms alone
+        return engine.subset_component(c["calc"], c["host_idx"])
+    if c["nO"] == 0:
+        return lambda atoms: (0.0, np.zeros((len(atoms), 3)))
+    return engine.einstein_component(c["sitesO"], c["iO"], kE)
+
+
+def prog(t_start, done, total, t_last=None, n_last=None):
+    """' | 123 ms/step | 40% | ETA 13:42 (in 25 min)' from wall time since t_start; the speed is over the last piece if t_last/n_last are given"""
+    now = time.time(); el = now - t_start
+    sp = (now - t_last) / n_last if t_last and n_last else el / max(done, 1)
+    rem = (total - done) * sp
+    return f" | {sp * 1000:.0f} ms/step | {100 * done / total:.0f}% | ETA {time.strftime('%H:%M', time.localtime(now + rem))} (in {rem / 60:.0f} min)"
+
+
+def banner(c):
+    a = c["a"]; lam, w = c["lam"], c["w"]; L = c["at0"].cell.lengths()
+    mode = "stage 0 only" if a.stage0 else (f"lambda {a.node} only" if a.node is not None else "all in one process")
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nprod = int(round(a.ps / a.chunk_ps)) * per
+    if a.phase == "insert":
+        print("\n".join(["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
+            f"system      : {c['host_label']} host ({c['nO_real']} O + {c['nH_host']} H) + {a.nghost} added H (ghosts), cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 (host volume from the DFT EOS at {a.T:.0f} K, {a.P:.0f} GPa)",
+            f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT at the host volume",
+            f"potential   : {a.model}",
+            "path        : U(lam) = (1-lam) U_MLP(host atoms only) + lam U_MLP(all atoms); ghosts are an ideal gas at lam = 0; dU/dlam = U_full - U_host (the interaction energy of the added H)",
+            "result      : mu_H(in fcc H2O) = <integral> + kT[ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln Lambda_H, per added H (no P V term); compare with G per atom of pure H at the same P, T",
+            f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, no constraints; each lambda {a.equil_ps} ps equilibration + {a.ps} ps production",
+            f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values", "   index  lambda      weight"]
+            + [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]), flush=True); return
+    if a.phase in ("H", "liquid"):
+        nOr = c.get("nO_real", 0)
+        lines = ["=" * 100, f"TDI PLAN  {c['tag']}   ({mode})", "=" * 100,
+                 f"system      : {nOr} O + {c['nH']} H = {c['N']} atoms, {'liquid H%gO' % a.hper if a.phase == 'liquid' else 'pure hydrogen fluid'}, start lattice that should melt (check the displacement column); cubic cell {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom",
+                 f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT, target pressure {a.P:.0f} GPa -> G = F + P_target V (per H atom below)",
+                 f"potential   : {a.model} (classical nuclei)",
+                 "path        : U(lam) = lam U_MLP ; reference (lam=0) = ideal gas of N indistinguishable H atoms: F_ref = -kT N ln V + kinetic terms + kT ln N! (analytic); F = F_ref + integral_0^1 <U_MLP>_lam dlam",
+                 f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs; no centre-of-mass constraint",
+                 f"each lambda : {a.equil_ps} ps equilibration + {a.ps} ps production, reports every {a.chunk_ps} ps; the 'rms |u|' in the logs is the displacement of H from its start (liquid if it grows beyond the lattice spacing)",
+                 f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values", "   index  lambda      weight"]
+        lines += [f"   {k:4d}   {l:.3e}   {ww:.3e}" for k, (l, ww) in enumerate(zip(lam, w))] + ["=" * 100]
+        print("\n".join(lines), flush=True); return
+    lines = [
+        "=" * 100,
+        f"TDI PLAN  {c['tag']}   ({mode})",
+        "=" * 100,
+        f"system      : {c['nO']} O + {c['nH']} H = {c['N']} atoms (H{a.hper:g}O), {a.phase} O sublattice ({a.nrep}^3 conventional cells), protons start on random O-O bond midpoints",
+        f"cell        : cubic {L[0]:.3f} A, V = {c['V']:.1f} A^3 = {c['vpa']:.4f} A^3/atom (from the DFT {a.phase} EOS at {a.P:.0f} GPa, {a.T:.0f} K); periodic",
+        f"conditions  : T = {a.T:.0f} K (kT = {c['kt'] * 1e3:.1f} meV), NVT; target pressure {a.P:.0f} GPa -> G = F + P_target V",
+        f"potential   : {a.model} (fine-tuned GRACE; classical nuclei, no quantum corrections)",
+        "path        : direct coupling-constant integration  U(lam) = (1-lam) E_Einstein(O) + lam U_MLP",
+        "              E_Einstein = k/2 sum_O |u_i|^2 (u = displacement from the ideal lattice site, minimum image), O centre of mass held fixed (FixGroupCom)",
+        "              reference system (lam=0): O on springs + H ideal gas;   F(lam=1) = F_ref + integral_0^1 <U_MLP - E_Einstein>_lam dlam",
+        "              F_ref = F_Einstein(O, COM fixed) + F_ideal(H) + kinetic terms - kT ln V (translation invariance), all analytic (tdi/refs.py)",
+        f"Einstein k  : {('%.3f eV/A^2 (given: skips the lambda=1 run)' % a.k) if a.k else 'measured from a lambda=1 run (k = 3 kT / <|u|^2>), also gives MLP pressure and O structure'}",
+        f"dynamics    : Langevin, friction 1/{a.tau:.0f} fs, dt {a.dt} fs, forces/energies from the same MLP calls (one GPU evaluation per step per lambda)",
+        f"each lambda : {a.equil_ps} ps equilibration (not used) + {a.ps} ps production = {neq + nprod} steps; sampling every {a.every} steps; reports every {a.chunk_ps} ps",
+        f"quadrature  : Gauss-Legendre in x on (0,1), lambda = x^{a.power:g}, {a.nodes} lambda values, weight_i = w_i {a.power:g} x_i^{a.power - 1:g}",
+        "   index  lambda      weight     steps   what it samples",
+    ]
+    for k, (l, ww) in enumerate(zip(lam, w)):
+        what = "H nearly ideal gas, O on springs" if l < 1e-2 else ("mixed" if l < 0.3 else "mostly the full MLP")
+        lines.append(f"   {k:4d}   {l:.3e}   {ww:.3e}   {neq + nprod:6d}   {what}")
+    lines += [f"   sum of weights = {w.sum():.6f} (must be 1)",
+              f"total cost  : {a.nodes} lambda values x {neq + nprod} steps = {a.nodes * (neq + nprod)} MD steps; at about 150-175 ms/step (384 atoms) that is {a.nodes * (neq + nprod) * 0.16 / 3600:.1f} GPU-hours of work (divided by the number of processes sharing the GPU)",
+              f"outputs     : {a.outdir}/{c['tag']}_stage0.json, {c['tag']}_node<k>.npy / .log, tdi_{c['tag']}.json (from tdi/collect.py)",
+              "=" * 100]
+    print("\n".join(lines), flush=True)
+
+
+def h_vpa(inv, T, P):
+    """pure-H V/atom at (T, P) from the DFT inventory: lives in 17_eos_md.py (shared with the EOS scan)"""
+    return import_module("17_eos_md").h_vpa(inv, T, P)
+
+
+def hull_vpa(csv_path, hper, T, P):
+    """V/atom (A^3) of the fluid H(2+n)O at P, T from the EOS columns of data-h3o-convex-hull.csv (tabulated at 5000, 7000, 9000 K; V per O for mixtures).
+    Other temperatures between 5000 and 9000 K: linear interpolation in T between the two neighbouring columns (approximate)."""
+    d = pd.read_csv(csv_path)
+    comp = {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(float(hper))
+    if comp is None:   # composition without a column (H2.5O, H4O): V/atom interpolated linearly in H per O between the neighbouring columns (approximate)
+        known = [2.0, 2.25, 3.0, 5.0, 7.0]; lo = max((k for k in known if k < hper), default=None); hi = min((k for k in known if k > hper), default=None)
+        if lo is None or hi is None:
+            raise SystemExit(f"no hull EOS column for {hper} H per O and no neighbouring columns: give --vpa")
+        vl, vh = hull_vpa(csv_path, lo, T, P), hull_vpa(csv_path, hi, T, P)
+        print(f"NOTE: no hull EOS column for H{hper:g}O: V/atom interpolated linearly in H per O between H{lo:g}O ({vl:.4f}) and H{hi:g}O ({vh:.4f})", flush=True)
+        return vl + (vh - vl) * (hper - lo) / (hi - lo)
+
+    def at(Tc):
+        p, v = d[f"P {int(Tc)}K {comp}"], d[f"V {int(Tc)}K {comp} norm"]; m = p.notna() & v.notna(); p, v = p[m].values, v[m].values; o = np.argsort(p)
+        if not p.min() <= P <= p.max():
+            print(f"WARNING: {P:g} GPa is outside the hull EOS range {p.min():.0f}-{p.max():.0f} GPa for {comp} at {Tc} K")
+            return float("nan")
+        return float(np.interp(P, p[o], v[o])) / (1 + hper)
+    Ts = [5000, 7000, 9000]
+    if T in Ts:
+        return at(T)
+    if not Ts[0] <= T <= Ts[-1]:
+        raise SystemExit(f"hull EOS only covers {Ts[0]}-{Ts[-1]} K: give --vpa")
+    lo = max(t for t in Ts if t <= T); hi = min(t for t in Ts if t >= T)
+    print(f"NOTE: volume at {T} K interpolated between the {lo} K and {hi} K hull columns")
+    return at(lo) + (at(hi) - at(lo)) * (T - lo) / (hi - lo)
+
+
+def vpa_at(a, P):
+    """V/atom (A^3) of this run's system at pressure P from the DFT data: the volume source of setup(), also used for the bulk modulus. nan if P is outside the EOS data."""
+    if a.phase == "H":
+        return h_vpa(a.from_dft, a.T, P)
+    if a.phase == "insert" and getattr(a, "host_phase", "fcc") == "H":   # pure-H fluid host (sanity check of the method: mu_H must equal G_H per atom)
+        return h_vpa(a.from_dft, a.T, P)
+    if a.phase == "insert" and a.hper != 2.0:   # H(hper)O host crystal: the volume of that crystal (DFT EOS or ideal mixing, as for the crystal runs)
+        return solid_vpa(argparse.Namespace(**{**vars(a), "phase": getattr(a, "host_phase", "fcc")}), P)
+    if a.phase == "insert":   # H2O host crystal: fcc (default) or bcc (--host-phase)
+        return import_module("17_eos_md").dft_vpa(a.from_dft, getattr(a, "host_phase", "fcc"), a.T, [P], 2.0, min_runs=a.min_runs)[0]
+    if a.phase == "liquid":
+        return hull_vpa(a.hull, a.hper, a.T, P)
+    return solid_vpa(a, P)
+
+
+def solid_vpa(a, P):
+    """V/atom of the H(hper)O crystal at (T, P): the DFT EOS of that composition if the inventory has it, else ideal mixing of the DFT H2O crystal (3 atoms/formula) and the DFT pure-H fluid
+    (n = hper - 2 added H per O). Excess volume is neglected: with the PdV_excess of about 0.1-0.2 A^3 per added H (docs/mixing_pv.py) the pressure error is below 1 GPa for a few added H in 108 O,
+    and the free energy error is second order in it."""
+    eos = import_module("17_eos_md")
+    try:
+        v = eos.dft_vpa(a.from_dft, "fcc" if a.phase in eos.LAYERED else a.phase, a.T, [P], a.hper, min_runs=a.min_runs)[0]   # hcp / fccl (layered cell): the DFT fcc EOS
+    except SystemExit:   # no DFT EOS of this composition near this T
+        if a.hper <= 2.0:
+            raise
+        v = float("nan")
+    if np.isfinite(v) or a.hper <= 2.0:   # nan: P outside the EOS data (setup refuses it)
+        return v
+    n = a.hper - 2.0; v_w = eos.dft_vpa(a.from_dft, "fcc" if a.phase in eos.LAYERED else a.phase, a.T, [P], 2.0, min_runs=a.min_runs)[0]; v_h = h_vpa(a.from_dft, a.T, P)
+    v = (3 * v_w + n * v_h) / (3 + n)
+    print(f"NOTE: no DFT EOS for H{a.hper:g}O {a.phase} at {P:g} GPa: volume by ideal mixing of H2O ({v_w:.4f} A^3/atom) and pure H ({v_h:.4f}): {v:.4f} A^3/atom", flush=True)
+    return v
+
+
+def add_ghosts(host, n, seed=0, dmin=0.75):
+    """append n H atoms at random positions at least dmin (A) from every atom already present (minimum image); they are ghosts at lambda = 0 and ordinary protons at lambda = 1"""
+    from ase import Atoms
+    from ase.geometry import get_distances
+    rng = np.random.default_rng(seed); at = host.copy()
+    for _ in range(n):
+        best = (-1.0, None)
+        for _try in range(20000):
+            p = rng.random(3) @ at.cell.array
+            _, d = get_distances(p[None, :], at.positions, cell=at.cell, pbc=True)
+            if d.min() >= dmin:
+                at += Atoms("H", positions=[p], cell=at.cell, pbc=True); break
+            best = max(best, (float(d.min()), p), key=lambda b: b[0])
+        else:   # a dense start lattice can have no hole of dmin (bcc pure H at 1.16 A^3/atom: largest hole 0.74 A): the roomiest point tried; the stage-0 / lambda MD relaxes it
+            if best[0] < 0.5 * dmin:
+                raise SystemExit(f"could not place ghost {len(at) - len(host) + 1}: largest hole found {best[0]:.2f} A (< {0.5 * dmin:.2f} A)")
+            print(f"NOTE: no point {dmin} A from every atom for ghost {len(at) - len(host) + 1}: placed at the roomiest point tried ({best[0]:.2f} A)", flush=True)
+            at += Atoms("H", positions=[best[1]], cell=at.cell, pbc=True)
+    return at
+
+
+def build_h_n(vpa, natoms):
+    """pure hydrogen with natoms atoms on a cubic lattice (sc n^3, bcc 2n^3 or fcc 4n^3: whichever matches); the lattice melts, only the density matters"""
+    from ase import Atoms
+    for k, basis in ((1, [(0, 0, 0)]), (2, [(0, 0, 0), (.5, .5, .5)]), (4, [(0, 0, 0), (.5, .5, 0), (.5, 0, .5), (0, .5, .5)])):
+        n = round((natoms / k) ** (1 / 3))
+        if k * n ** 3 == natoms:
+            a = (natoms * vpa / n ** 3) ** (1 / 3)
+            sp = [((np.array(b) + (i, j, l)) / n) for i in range(n) for j in range(n) for l in range(n) for b in basis]
+            return Atoms("H" * natoms, scaled_positions=sp, cell=[a * n] * 3, pbc=True)
+    raise SystemExit(f"{natoms} atoms is not n^3, 2n^3 or 4n^3")
+
+
+def build_h(vpa, nrep):
+    """pure hydrogen: bcc lattice of 2 nrep^3 atoms (it melts at these conditions: check the displacement column), cubic cell at V/atom = vpa"""
+    from ase import Atoms
+    n = 2 * nrep ** 3; a_conv = (n * vpa / nrep ** 3) ** (1 / 3)
+    sp = [((np.array(b) + (i, j, k)) / nrep) for i in range(nrep) for j in range(nrep) for k in range(nrep) for b in ((0, 0, 0), (.5, .5, .5))]
+    return Atoms("H" * n, scaled_positions=sp, cell=[a_conv * nrep] * 3, pbc=True)
+
+
+def make_tag(a):
+    """file-name stem of a run (before setup() fills in the default nrep): the launcher asks for it with --print-tag, so the shell and the files always agree"""
+    return a.tag or f"{a.phase}_{a.P:.0f}GPa_{a.T:.0f}K" + (f"_n{a.nghost}" + {"bcc": "_bcc", "H": "_Hhost" + (f"_N{a.natoms}" if a.natoms else "")}.get(getattr(a, "host_phase", "fcc"), "") if a.phase == "insert" else "") + (f"_h{a.hper:g}o" if (a.hper != 2.0 or a.phase == "liquid") and a.phase != "H" else "") + (f"_N{a.natoms}" if a.phase == "H" and a.natoms else "") + (f"_rep{a.nrep}" if a.nrep and a.phase in ("bcc", "fcc", "liquid") else "")
+
+
+def setup(a):
+    eos = import_module("17_eos_md")
+    tag = make_tag(a)
+    os.makedirs(a.outdir, exist_ok=True)
+    vpa = a.vpa or vpa_at(a, a.P)
+    if not np.isfinite(vpa):
+        raise SystemExit(f"{a.phase} at {a.P:g} GPa, {a.T:g} K: the target pressure is outside the DFT EOS data (the volume would be clipped to the edge of the data): give --vpa")
+    if a.phase == "H":
+        a.nrep = a.nrep or 5
+        at0 = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
+    elif a.phase == "insert":   # fcc H2O host (volume from the DFT EOS at this T, P) + n ghost protons
+        hp = getattr(a, "host_phase", "fcc"); a.nrep = a.nrep or {"bcc": 4, "H": 5}.get(hp, 3)   # bcc: 128 O, fcc: 108 O, pure H: 250 atoms (bcc 5^3 x 2)
+        if hp == "H":   # pure-H fluid host: inserting H into H must give mu_H = G_H per atom (end-to-end check of the insertion route)
+            host = build_h_n(vpa, a.natoms) if a.natoms else build_h(vpa, a.nrep)
+        else:
+            host = eos.build(hp, vpa, a.nrep, a.seed, a.hper)   # H2O, or H(hper)O with HPER (was always H2O: HPER only changed the tag)
+        at0 = add_ghosts(host, a.nghost, a.seed + 7)
+    elif a.phase == "liquid":   # fluid H(2+n)O: fcc start (32 O for nrep 2) that should melt; volume from the DFT hull EOS
+        a.nrep = a.nrep or 2
+        at0 = eos.build("fcc", vpa, a.nrep, a.seed, a.hper)
+    else:
+        a.nrep = a.nrep or eos.CELL[a.phase][2]
+        at0 = eos.build(a.phase, vpa, a.nrep, a.seed, a.hper)
+    iO = np.where(at0.numbers == 8)[0]; iH = np.where(at0.numbers == 1)[0]
+    ctx = dict(a=a, tag=tag, vpa=vpa, at0=at0, N=len(at0), iO=iO, iH=iH, nO=len(iO), nH=len(iH), V=at0.get_volume(), sitesO=at0.positions[iO].copy(), kt=refs.kT(a.T))
+    if a.phase == "insert":
+        nh = len(host); ctx.update(host_label={"fcc": "fcc H2O", "bcc": "bcc H2O", "H": "pure-H fluid"}[getattr(a, "host_phase", "fcc")], nO_real=int((host.numbers == 8).sum()), host_idx=np.arange(nh), nH_host=int((host.numbers == 1).sum()), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)), V=at0.get_volume())
+    if a.phase in ("H", "liquid"):   # no lattice: no Einstein springs, no fixed centre of mass; every atom starts as an ideal gas
+        ctx.update(nO_real=len(iO), iO=np.array([], dtype=int), nO=0, sitesO=np.zeros((0, 3)))
+    ctx["init_pos"] = None
+    if a.init_from:   # warm start: every lambda point begins from this configuration (last frame of an extxyz) instead of the ideal lattice with H on bond midpoints
+        from ase.io import read
+        fr = read(a.init_from, index=-1)
+        if len(fr) != len(at0) or (fr.numbers != at0.numbers).any():
+            raise SystemExit(f"--init-from {a.init_from}: {len(fr)} atoms / species order differ from this system ({len(at0)} atoms)")
+        pos = fr.positions.copy()
+        if len(iO):   # O next to its own lattice site (minimal image), so that the Einstein displacements and the fixed O centre of mass are as in a cold start
+            pos[iO] = ctx["sitesO"] + find_mic(pos[iO] - ctx["sitesO"], at0.cell, True)[0]
+        ctx["init_pos"] = pos
+        print(f"warm start from the last frame of {a.init_from}", flush=True)
+    ctx["calc"] = import_module("04_benchmark").get_calc_spec(a.model, a.device)
+    ctx["full"] = engine.full_component(ctx["calc"])
+    ctx["steps"] = lambda ps: int(round(ps * 1000 / a.dt))
+    if a.rule == "gk" and a.nodes != 2 * a.ngauss + 1:
+        raise SystemExit(f"--rule gk needs --nodes = 2 --ngauss + 1 (got nodes {a.nodes}, ngauss {a.ngauss})")
+    ctx["lam"], ctx["w"], _ = analyze.rule_nodes(dict(nodes=a.nodes, power=a.power, rule=a.rule, ngauss=a.ngauss))
+    banner(ctx)
+    return ctx
+
+
+def stage0_given_k(c, kE):
+    """skip the lambda=1 run: use an Einstein constant k (eV/A^2) known from an earlier run (any sensible k gives the same G; it only changes the statistical efficiency)"""
+    a = c["a"]; kt, V, N = c["kt"], c["V"], c["N"]
+    mO, mH = float(c["at0"].get_masses()[c["iO"][0]]), float(c["at0"].get_masses()[c["iH"][0]])
+    f_ref_cons = refs.f_einstein_cons(c["nO"], kE, a.T) + refs.f_ideal_gas(c["nH"], V, a.T)
+    f_kin = refs.kinetic_free_energy([(c["nO"], mO, False), (c["nH"], mH, True)], a.T); PV = a.P / EV_A3_GPA * V
+    print(f"lambda=1 run skipped: Einstein k = {kE:.3f} eV/A^2 given; reference pieces (eV): config {f_ref_cons:.3f}  kinetic {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=float("nan"), O_struct="not checked (k given)", lindemann=float("nan"),
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
+    return d
+
+
+def stage0_hydrogen(c):
+    """fluid (pure H or liquid H(2+n)O): nothing to measure; reference = ideal gas of the N atoms, indistinguishable within each species (no fixed centre of mass, so no -kT ln V term)"""
+    a = c["a"]; V, N = c["V"], c["N"]; nOr = c.get("nO_real", 0); nH = c["nH"]; m = c["at0"].get_masses(); nums = c["at0"].numbers
+    species = [(n, float(m[nums == z][0]), True) for n, z in ((nOr, 8), (nH, 1)) if n > 0]
+    f_ref = refs.f_ideal_gas(N, V, a.T); f_kin = refs.kinetic_free_energy(species, a.T); PV = a.P / EV_A3_GPA * V
+    print(f"fluid {nOr} O + {nH} H: reference pieces (eV, whole cell): F_ideal config {f_ref:.3f}  kinetic (incl. kT ln N_O! N_H!) {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=nOr, nH=nH, kE=0.0, P_mlp=float("nan"), O_struct="fluid (no lattice)", lindemann=float("nan"),
+             f_ref_cons_eV=f_ref, f_kin_eV=f_kin, PV_eV=PV, no_com_term=True, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
+    return d
+
+
+def stage0_insert(c):
+    """F(N+n) - F(N) = int <U_full - U_host> dlambda + kT [ln((N_H+n)!/N_H!) - n ln V] + 3 n kT ln(Lambda_H) is the chemical potential of H in the host at fixed V, i.e. at the MLP
+    pressure of the cell, not at P_target. Correction to P_target (second order in the pressure offsets; exact for F(V) quadratic with one bulk modulus B):
+        G(N+n, P) - G(N, P) = F(N+n, V) - F(N, V) - V / (2 B) [(P_full - P)^2 - (P_host - P)^2]
+    = to first order mu(P) = mu(P_mid) + v_H (P - P_mid), P_mid = (P_host + P_full) / 2, v_H = V (P_full - P_host) / (n B). P_host and P_full are the MLP pressures of the host alone
+    and of host + n H (free full-MLP NVT, --equil-ps + --ps1 each; kept in the json and reused while V, n, T, dt and the model are unchanged); B is the bulk modulus of the DFT EOS
+    that gave V (--bulk-gpa with --vpa). Its error enters G_err. Reported per added H (the json 'N' is the number of ghosts); no P V term (it cancels at equal V)."""
+    a = c["a"]; n = a.nghost; V = c["V"]; kt = c["kt"]; NH = c["nH_host"]; P = a.P
+    f_conf = kt * sum(np.log(NH + i) for i in range(1, n + 1)) - n * kt * np.log(V)
+    f_kin = refs.kinetic_free_energy([(n, float(c["at0"].get_masses()[-1]), False)], a.T)
+    print(f"insertion of {n} H into {c['host_label']} ({c['nO_real']} O + {NH} H, V = {V:.1f} A^3): reference pieces (eV): configurational {f_conf:.3f}  3 n kT ln Lambda {f_kin:.3f}", flush=True)
+    B = bulk_modulus(a)
+    if not np.isfinite(B):
+        raise SystemExit("insertion: no bulk modulus for the pressure correction (P at the edge of the DFT EOS data, or --vpa without --bulk-gpa)")
+    prev = {}
+    if os.path.exists(stage0_path(c)) and not a.fresh:
+        try:
+            prev = json.load(open(stage0_path(c)))
+        except ValueError:
+            prev = {}
+    A0 = prev.get("args", {})
+    keep = (all(np.isfinite(prev.get(k, np.nan)) for k in ("P_host_GPa", "P_host_err_GPa", "P_full_GPa", "P_full_err_GPa")) and abs(prev.get("V", 0.0) - V) <= 1e-9 * V
+            and prev.get("N") == n and prev.get("T") == a.T and A0.get("dt") == a.dt and A0.get("model") == a.model)
+    if keep:
+        Ph, eh, Pf, ef = (float(prev[k]) for k in ("P_host_GPa", "P_host_err_GPa", "P_full_GPa", "P_full_err_GPa"))
+        print(f"MLP pressures kept from {stage0_path(c)}: host {Ph:.2f} +- {eh:.2f}, host + {n} H {Pf:.2f} +- {ef:.2f} GPa", flush=True)
+    else:
+        Ph, eh = free_md_pressure(c, c["at0"][c["host_idx"]], a.seed + 101, "the host alone")
+        Pf, ef = free_md_pressure(c, c["at0"], a.seed + 102, f"host + {n} H")
+    dG = -V / (2 * B) * ((Pf - P) ** 2 - (Ph - P) ** 2) / EV_A3_GPA
+    dGe = V / B * float(np.hypot((Pf - P) * ef, (Ph - P) * eh)) / EV_A3_GPA
+    print(f"pressure correction to P_target {P:g} GPa (B = {B:.0f} GPa, v_H = {V * (Pf - Ph) / (n * B):.3f} A^3): {dG / n * 1e3:.1f} +- {dGe / n * 1e3:.1f} meV per added H", flush=True)
+    d = dict(tag=c["tag"], phase="insert", T=a.T, P_target=P, vpa=c["vpa"], V=V, N=n, N_atoms_total=c["N"], nO=c["nO_real"], nH=NH + n, kE=0.0, P_mlp=Pf, O_struct=f"{c['host_label']} host + ghosts", lindemann=float("nan"),
+             f_ref_cons_eV=f_conf, f_kin_eV=f_kin, PV_eV=0.0, no_com_term=True, per="added H", P_host_GPa=Ph, P_host_err_GPa=eh, P_full_GPa=Pf, P_full_err_GPa=ef, B_GPa=B,
+             dG_P_eV=dG, dG_P_err_eV=dGe, args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
+    return d
+
+
+def stage0(c):
+    a = c["a"]
+    check_stage0_compatible(c, 0.0 if a.phase in ("insert", "H", "liquid") else a.k)   # before any MD: never rewrite the json of existing samples with other settings
+    if c["a"].phase == "insert":
+        return stage0_insert(c)
+    if c["a"].phase in ("H", "liquid"):
+        return stage0_hydrogen(c)
+    if c["a"].k:
+        return stage0_given_k(c, c["a"].k)
+    a = c["a"]; at0, iO, N, V, kt = c["at0"], c["iO"], c["N"], c["V"], c["kt"]; t0 = time.time()
+    from ase.neighborlist import neighbor_list
+    d1_0 = float(neighbor_list("d", at0[iO], 0.6 * V ** (1 / 3)).min())
+    r1 = LambdaRun(at0, {"full": c["full"], "E": engine.einstein_component(c["sitesO"], iO, 1.0)}, 1.0, a.T, iO, a.dt, a.tau, a.seed, a.every, c["steps"](a.equil_ps))
+    neq, nq = c["steps"](a.equil_ps), int(round(a.ps1 / 0.25)); st25 = c["steps"](0.25); tot = neq + nq * st25
+    r1.dyn.attach(StepProgress(r1.dyn, tot, label="lambda=1 run", print_s=60), interval=1)   # progress line every minute (the equilibration was silent)
+    r1.start(); print(f"lambda=1 equilibrated ({a.equil_ps} ps), {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
+    for q in range(nq):
+        tl = time.time(); r1.advance(c["steps"](0.25))
+        uu = np.array([find_mic(p[iO] - c["sitesO"], at0.cell, True)[0] for p in r1.snaps]); uu -= uu.mean(1, keepdims=True)
+        print(f"  lambda=1 {0.25 * (q + 1):.2f} ps  {r1.diag(last=c['steps'](0.25) // a.every)}  Lindemann {np.sqrt((uu ** 2).sum(-1).mean()) / d1_0:.3f}  <|u|^2>_O {(uu ** 2).sum(-1).mean():.4f}  {(time.time() - t0) / 60:.1f} min{prog(t0, neq + (q + 1) * st25, tot, tl, st25)}", flush=True)
+    u = np.array([find_mic(p[iO] - c["sitesO"], at0.cell, True)[0] for p in r1.snaps]); u -= u.mean(1, keepdims=True)
+    msd = float((u ** 2).sum(-1).mean()); kE = 3 * kt / msd
+    lab, c1, c2, d1 = import_module("09_label_phase").o_structure(c["sitesO"] + u.mean(0), at0.cell.array)
+    sig = []
+    for p in r1.snaps[len(r1.snaps) // 2:][::2]:
+        b = at0.copy(); b.positions = p; b.calc = c["calc"]; sig.append(-b.get_stress(voigt=True)[:3].mean())
+    P_mlp = float(np.mean(sig)) * EV_A3_GPA + N * kt / V * EV_A3_GPA
+    mO, mH = float(at0.get_masses()[iO[0]]), float(at0.get_masses()[c["iH"][0]])
+    f_ref_cons = refs.f_einstein_cons(c["nO"], kE, a.T) + refs.f_ideal_gas(c["nH"], V, a.T)
+    f_kin = refs.kinetic_free_energy([(c["nO"], mO, False), (c["nH"], mH, True)], a.T)
+    PV = a.P / EV_A3_GPA * V
+    print(f"lambda=1 summary ({a.ps1} ps, {(time.time() - t0) / 60:.1f} min): T_kin {np.mean(r1.tk):.0f} K, <|u|^2>_O {msd:.4f} A^2 (Lindemann {np.sqrt(msd) / d1:.3f}), Einstein k = {kE:.3f} eV/A^2, "
+          f"O structure {lab} (CN1 {c1:.1f}, CN2 {c2:.1f}), MLP pressure {P_mlp:.1f} GPa (target {a.P:.0f})", flush=True)
+    print(f"reference pieces (eV, whole cell): F_Einstein(O)+F_ideal(H) config {f_ref_cons:.3f}  -kT ln V {-kt * np.log(V):.3f}  kinetic {f_kin:.3f}  P_target V {PV:.3f}", flush=True)
+    if lab != a.phase:
+        print(f"WARNING: O sublattice is '{lab}', not {a.phase}: the reference lattice does not describe this system")
+    d = dict(tag=c["tag"], phase=a.phase, T=a.T, P_target=a.P, vpa=c["vpa"], V=V, N=N, nO=c["nO"], nH=c["nH"], kE=kE, P_mlp=P_mlp, O_struct=lab, lindemann=float(np.sqrt(msd) / d1),
+             f_ref_cons_eV=f_ref_cons, f_kin_eV=f_kin, PV_eV=PV, B_GPa=bulk_modulus(a), args=vars(a), meta=meta())
+    write_json(stage0_path(c), d)
+    return d
+
+
+SLURM_ENDED = {"COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE", "SPECIAL_EXIT", "REVOKED"}
+
+
+def _lock_holder_alive(old):
+    """is the process that wrote lock text `old` ('<host> job <id> pid <pid> <date>') still running? Same host: ask the OS about the pid (definite). Other host: ask Slurm about
+    the job (pending / running / completing = alive; ended or unknown id = dead; squeue unusable = assume alive). No job id from another host: assume alive."""
+    import socket, subprocess
+    f = old.split()
+    host = f[0] if f else ""; jid = f[f.index("job") + 1] if "job" in f[:-1] else "-"; pid = f[f.index("pid") + 1] if "pid" in f[:-1] else ""
+    if host == socket.gethostname() and pid.isdigit():
+        try:
+            os.kill(int(pid), 0); return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+    if jid in ("-", ""):
+        return True
+    if jid == os.environ.get("SLURM_JOB_ID"):   # this same job on another node or after a requeue: an earlier incarnation (a node runs once per job)
+        return False
+    try:
+        q = subprocess.run(["squeue", "-h", "-j", jid, "-o", "%T"], capture_output=True, text=True, timeout=20)
+    except Exception:
+        return True
+    if q.returncode != 0:
+        return "Invalid job id" not in q.stderr
+    return any(st not in SLURM_ENDED for st in q.stdout.split())
+
+
+def acquire_lock(path, stale_s):
+    """one writer per lambda node: <tag>_node<k>.lock holds '<host> job <Slurm id> pid <pid> <date>' and is touched every minute by a heartbeat thread while the process lives.
+    An existing lock is respected (return False: the caller exits) while its holder is alive and it was touched less than stale_s ago; a lock of a dead holder (killed job, crashed
+    or requeued process) or one not touched for stale_s (hung holder) is taken over. Takeover removes the old file and creates a new one exclusively, then re-reads it, so of two jobs
+    taking over at once only one proceeds. H3O_NOLOCK=1 switches the check off; deleting the file does the same for one node."""
+    import atexit, signal, socket, threading
+    if os.environ.get("H3O_NOLOCK"): return True
+    me = f"{socket.gethostname()} job {os.environ.get('SLURM_JOB_ID', '-')} pid {os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    read = lambda: open(path).read().strip()
+    for attempt in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY); break
+        except FileExistsError:
+            if attempt:   # another job created it between our removal and our create: it won
+                print(f"LOCKED: {path} was just taken by [{read()}]. Not starting.", flush=True); return False
+            try: age = time.time() - os.path.getmtime(path); old = read()
+            except OSError: continue   # vanished meanwhile: try to create it again
+            alive = _lock_holder_alive(old)
+            if alive and age < stale_s:
+                print(f"LOCKED: {path} is held by [{old}] (touched {age / 60:.1f} min ago): another job is running this lambda node. Not starting. (taken over once its holder is gone or "
+                      f"it is {stale_s / 60:.0f} min old; delete the lock file or set H3O_NOLOCK=1 to override)", flush=True); return False
+            try:
+                if read() != old:   # someone else took it over while we looked
+                    print(f"LOCKED: {path} was just taken by [{read()}]. Not starting.", flush=True); return False
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            print(f"taking over lock [{old}] ({age / 60:.1f} min old, holder {'alive but silent: hung?' if alive else 'gone'})", flush=True)
+    os.write(fd, me.encode()); os.close(fd)
+    time.sleep(1.0)
+    if read() != me:
+        print(f"LOCKED: {path} was taken over by [{read()}] at the same moment. Not starting.", flush=True); return False
+    stop = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(60):
+            try:
+                if read() != me: return   # taken over (we were silent too long): stop touching it
+                os.utime(path)
+            except OSError:
+                return
+
+    def release():
+        stop.set()
+        try:
+            if read() == me: os.remove(path)
+        except OSError:
+            pass
+    threading.Thread(target=heartbeat, daemon=True).start()
+    atexit.register(release)
+    if threading.current_thread() is threading.main_thread():   # the batched engine runs nodes in threads: its main thread sets the handler
+        signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+    return True
+
+
+def prep(c):
+    """start-configuration protocol for crystals with added H: thermalise H with the O atoms held on their lattice sites (--prep-hold-ps), release O and let everything move freely (--prep-free-ps), both with the full MLP at T;
+    the last frame (O centre of mass moved back onto the lattice) is written to <outdir>/<tag>_prep.extxyz and used by every lambda node as its start configuration (--init-from)"""
+    a = c["a"]; out = os.path.join(a.outdir, f"{c['tag']}_prep.extxyz")
+    if a.phase not in ("fcc", "bcc"): print(f"prep: not for phase {a.phase} (crystals only), skipped", flush=True); return
+    if os.path.exists(out) and not a.fresh: print(f"prep: {out} exists, kept (--fresh to redo)", flush=True); return
+    from ase.constraints import FixAtoms
+    from ase.io import write
+    at = c["at0"].copy(); at.calc = c["calc"]; iO = c["iO"]; rng = np.random.default_rng(a.seed + 777); t0 = time.time()
+    MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = 0; at.set_momenta(p, apply_constraint=False); at.set_constraint(FixAtoms(indices=iO))
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng)
+    dyn.attach(StepProgress(dyn, c["steps"](a.prep_hold_ps), label="prep (O held)", print_s=60), interval=1); dyn.run(c["steps"](a.prep_hold_ps))
+    print(f"prep: H thermalised with O held for {a.prep_hold_ps} ps ({time.time() - t0:.0f} s), T_kin {at.get_temperature():.0f} K", flush=True)
+    at.set_constraint(); tmp = at.copy(); MaxwellBoltzmannDistribution(tmp, temperature_K=a.T, rng=rng); p = at.get_momenta(); p[iO] = tmp.get_momenta()[iO]; at.set_momenta(p)
+    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=1.0 / (a.tau * units.fs), fixcm=False, rng=rng)
+    dyn.attach(StepProgress(dyn, c["steps"](a.prep_free_ps), label="prep (O released)", print_s=60), interval=1); dyn.run(c["steps"](a.prep_free_ps))
+    d = find_mic(at.positions[iO] - c["sitesO"], c["at0"].cell, True)[0]; shift = d.mean(0); at.positions -= shift   # O lattice drifted as a whole: put its centre of mass back (the TDI fixes it)
+    d = d - shift; print(f"prep: O released for {a.prep_free_ps} ps ({time.time() - t0:.0f} s): rms O displacement from the ideal sites {np.sqrt((d ** 2).sum(-1).mean()):.3f} A, max {np.sqrt((d ** 2).sum(-1)).max():.3f} A, T_kin {at.get_temperature():.0f} K "
+          f"(compare: Einstein-spring rms at k = 25 eV/A^2 is {np.sqrt(3 * units.kB * a.T / 25.0):.3f} A; much larger = the lattice is melting)", flush=True)
+    write(out, at); print(f"prep: wrote {out}", flush=True)
+
+
+def run_node(c, st, k):
+    """node k alone; the series of <U_MLP - E> is saved to <outdir>/<tag>_node<k>.npy after every chunk"""
+    a = c["a"]; l = float(c["lam"][k]); t0 = time.time()
+    lock = os.path.join(a.outdir, f"{c['tag']}_node{k}.lock")
+    if not acquire_lock(lock, a.lock_stale_min * 60): return
+    comps = {"full": c["full"], "E": c["E_fn"](st["kE"]) if "E_fn" in c else E_component(c, st["kE"])}   # E_fn: the batched engine's host component (tdi/batched.py)
+    r = LambdaRun(c["at0"], comps, l, a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps))
+    if c.get("init_pos") is not None:
+        r.at.set_positions(c["init_pos"])
+    if a.hot_ps > 0 and a.phase == "liquid": r.hot = (a.hot_T, c["steps"](a.hot_ps))
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = neq + nchunk * per
+    r.pfn = mlp_pressure_fn(c["calc"])
+    r.at.get_forces(); t0 = time.time()   # warm-up evaluation: XLA compile / model graph build stays out of the speed and ETA numbers
+    sf = os.path.join(a.outdir, f"{c['tag']}_node{k}_state.npz"); done = 0
+    state_keys = (("dt", a.dt), ("lam", l), ("T", a.T), ("natoms", len(c["at0"])), ("V", c["V"]), ("kE", float(st["kE"])), ("chunk_ps", a.chunk_ps), ("every", a.every), ("model", a.model), ("hhwall", os.environ.get("HHWALL", "")))
+    pf = os.path.join(a.outdir, f"{c['tag']}_node{k}_progress.json")   # steps done / total / speed of this lambda for the whole-job ETA (tdi/eta.py)
+    if os.path.exists(sf) and not a.fresh:   # restart: positions, momenta and the recorded series of the last finished chunk
+        z = np.load(sf)
+        for key, now in state_keys:   # a state from other settings would silently mix samples (old state files lack some keys: those are not checked)
+            if key not in z.files and key != "hhwall":
+                continue
+            old = z[key].item() if key in z.files else ""   # hhwall: a state written before the wall existed was run without it
+            if (old != now) if isinstance(now, str) else abs(float(old) - float(now)) > 1e-9 * max(1.0, abs(float(now))):
+                print(f"lambda {k}: saved state has {key} = {old!r} but this run has {key} = {now!r}: refusing to mix samples. Use FRESH=1 (deletes the old files) or move them away.", flush=True); sys.exit(6)
+        r.at.positions[:] = z["pos"]; r.at.set_momenta(z["mom"], apply_constraint=False)
+        r.series, r.tk, r.eful, r.espr = (list(z[x]) for x in ("series", "tk", "eful", "espr")); r.snaps = []
+        r.dyn.attach(r._rec, interval=a.every); r.started = True; done = len(r.series) // (per // a.every)
+        pr = StepProgress(r.dyn, tot, base=neq + done * per, path=pf, info=dict(k=k, lam=l)); r.dyn.attach(pr, interval=1)
+        print(f"lambda {k}: RESTART from {sf}: {done} of {nchunk} chunks done ({len(r.series)} samples), continuing", flush=True)
+    else:
+        pr = StepProgress(r.dyn, tot, path=pf, info=dict(k=k, lam=l)); r.dyn.attach(pr, interval=1)   # reads the step counter and the clock only
+        r.start()
+        Teq = 2 * r.at.get_kinetic_energy() / (r.ndof * units.kB)
+        if not np.isfinite(Teq) or Teq > 20 * a.T:
+            print(f"lambda {k}: UNSTABLE DYNAMICS during equilibration: T_kin {Teq:.0f} K (target {a.T:.0f} K). Rerun with a smaller time step (DT=0.5, FRESH=1).", flush=True); pr.write("failed"); sys.exit(5)
+        print(f"lambda {k} = {l:.3e} equilibrated ({a.equil_ps} ps): {r.diag()} {(time.time() - t0) / 60:.1f} min{prog(t0, neq, tot)}", flush=True)
+    f = os.path.join(a.outdir, f"{c['tag']}_node{k}.npy")
+    n_per = per // a.every
+    if done >= nchunk:
+        if not os.path.exists(f):   # complete state but no series file (deleted / lost): rewrite it from the state
+            np.save(f, np.array(r.series)); print(f"lambda {k}: series file was missing: rewritten from {sf}", flush=True)
+        pr.write("done"); print(f"lambda {k}: already complete"); return
+    t_resume = time.time()
+    for ch in range(done + 1, nchunk + 1):
+        tl = time.time(); n_before = len(r.series)
+        try:
+            r.advance(per)
+            Tavg = float(np.mean(r.tk[n_before:]))
+            if Tavg > 2.0 * a.T:
+                raise Unstable(f"mean T_kin {Tavg:.0f} K in the last chunk (target {a.T:.0f} K)")
+        except Unstable as ex:
+            print(f"lambda {k}: UNSTABLE DYNAMICS: {ex}. This chunk is discarded and NOT saved; files hold the last healthy chunk ({ch - 1} of {nchunk}). "
+                  f"Rerun this lambda with a smaller time step (DT=0.5; use FRESH=1 so every sample has the same dt).", flush=True)
+            pr.write("failed"); sys.exit(5)
+        np.save(f[:-4] + ".tmp.npy", np.array(r.series)); os.replace(f[:-4] + ".tmp.npy", f)   # atomic: readers and a kill never see a truncated series
+        np.savez(sf + ".tmp.npz", pos=r.at.get_positions(), mom=r.at.get_momenta(), series=r.series, tk=r.tk, eful=r.eful, espr=r.espr, **dict(state_keys)); os.replace(sf + ".tmp.npz", sf)
+        pm = float(np.nanmean([x["P_MLP_GPa"] for x in r.thermo])) if r.thermo else float("nan")
+        if r.thermo:
+            import csv
+            ft = os.path.join(a.outdir, f"{c['tag']}_node{k}_thermo.csv"); new = not os.path.exists(ft)
+            with open(ft, "a", newline="") as fh:
+                wr = csv.DictWriter(fh, fieldnames=list(r.thermo[0].keys()))
+                if new:
+                    wr.writeheader()
+                wr.writerows(r.thermo)
+            r.thermo = []
+        if r.snaps:   # configurations (every 20 recorded samples) for later analysis / DFT single points
+            from ase.io import write
+            for p in r.snaps:
+                fr = c["at0"].copy(); fr.positions = p; fr.info.update(lam=l, node=k, tag=c["tag"], t_ps=ch * a.chunk_ps)
+                write(os.path.join(a.outdir, f"{c['tag']}_node{k}_traj.extxyz"), fr, append=True)
+            r.snaps = []
+        m, e = stats(r.series)
+        print(f"lambda {k} = {l:.3e} t {ch * a.chunk_ps:5.2f} ps: last chunk <dU/dl> {np.mean(r.series[-n_per:]):10.3f}  all {m:10.3f} +- {e:7.3f} eV | {r.diag(last=n_per)} | P_MLP {pm:6.1f} GPa | trace {trace(r.series, n_per)} | {(time.time() - t0) / 60:.1f} min{prog(t_resume, (ch - done) * per, (nchunk - done) * per, tl, per)}", flush=True)
+    pr.write("done")
+
+
+def make_parser():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model"); ap.add_argument("--phase", choices=["bcc", "fcc", "hcp", "fccl", "H", "liquid", "insert"], required=True)
+    ap.add_argument("--T", type=float, default=3000); ap.add_argument("--P", type=float, default=400, help="target pressure (GPa)")
+    ap.add_argument("--from-dft", default=None); ap.add_argument("--vpa", type=float, default=None, help="A^3/atom (instead of --from-dft)")
+    ap.add_argument("--nrep", type=int, default=None); ap.add_argument("--nodes", type=int, default=8); ap.add_argument("--power", type=float, default=4.0)
+    ap.add_argument("--ps", type=float, default=4.0, help="production per lambda node"); ap.add_argument("--chunk-ps", type=float, default=0.5)
+    ap.add_argument("--hot-ps", type=float, default=0.0, help="liquid phase: first heat every lambda to --hot-T for this long so the lattice start melts, then equilibrate at T"); ap.add_argument("--hot-T", type=float, default=12000.0)
+    ap.add_argument("--lock-stale-min", type=float, default=30.0, help="a lambda-node lock file not touched for this long is taken over (see acquire_lock; a live holder touches it every minute)")
+    ap.add_argument("--bulk-gpa", type=float, default=None, help="bulk modulus (GPa) for the pressure corrections; default: from the DFT EOS (required for insert with --vpa)")
+    ap.add_argument("--prep", action="store_true", help="only build the start configuration (hold O, thermalise H, release O): see prep()"); ap.add_argument("--prep-hold-ps", type=float, default=1.0); ap.add_argument("--prep-free-ps", type=float, default=1.0)
+    ap.add_argument("--equil-ps", type=float, default=1.0); ap.add_argument("--ps1", type=float, default=3.0, help="length of the lambda=1 run")
+    ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0); ap.add_argument("--every", type=int, default=2)
+    ap.add_argument("--seed", type=int, default=0); ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default="runs/tdi"); ap.add_argument("--device", default="cuda")
+    ap.add_argument("--host-phase", choices=["fcc", "bcc", "H"], default="fcc", help="insert: host of the added H: fcc H2O (108 O), bcc H2O (128 O; tag _bcc), or H = pure-H fluid (250 atoms or --natoms; tag _Hhost[_N<natoms>]): the method check, mu_H - G_H must be ~0"); ap.add_argument("--k", type=float, default=None, help="Einstein constant (eV/A^2): skip the lambda=1 run"); ap.add_argument("--fresh", action="store_true", help="ignore saved node states"); ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O (2 = H2O, 2.25 = H2.25O: 128 O + 288 H in bcc)"); ap.add_argument("--natoms", type=int, default=0, help="pure H only: number of atoms (n^3, 2n^3 or 4n^3), e.g. 729"); ap.add_argument("--hull", default="data-h3o-convex-hull.csv", help="liquid mode: EOS table for the volume"); ap.add_argument("--nghost", type=int, default=1, help="insert mode: number of added H atoms (ghosts) in the fcc H2O host"); ap.add_argument("--min-runs", type=int, default=20, help="DFT EOS lookup: minimum runs in a 1000 K bin to use it (lower it to interpolate to a bin with fewer runs)"); ap.add_argument("--init-from", default=None, help="warm start: extxyz whose LAST frame (same atoms, O first) is the starting configuration of every lambda point, e.g. runs/tdi/<tag>_node16_traj.extxyz of a finished run; removes the bias of the ideal-lattice start")
+    ap.add_argument("--rule", default="gl", choices=["gl", "gk"], help="quadrature: gl = Gauss-Legendre with --nodes values; gk = Gauss-Kronrod: --ngauss Gauss values (the same lambda values as gl with that many) plus ngauss + 1 added ones, --nodes = 2 ngauss + 1")
+    ap.add_argument("--ngauss", type=int, default=0); ap.add_argument("--stage0", action="store_true"); ap.add_argument("--node", type=int, default=None)
+    ap.add_argument("--batch-nodes", default=None, help='batched engine: these lambda values ("0 1 2 ...") in ONE process, one model call per MD step for all of them (tdi/batched.py); same files as --node')
+    ap.add_argument("--batch-max-atoms", type=int, default=0, help="batched engine: at most this many atoms per model call (0 = all in one call; lower it if the GPU runs out of memory)")
+    ap.add_argument("--print-tag", action="store_true", help="print the run's tag (file-name stem) and exit")
+    return ap
+
+
+if __name__ == "__main__":
+    a = make_parser().parse_args()
+    if a.print_tag:
+        print(make_tag(a)); sys.exit(0)
+    sys.path.insert(0, HERE)
+    c = setup(a)
+    if a.stage0:
+        stage0(c); sys.exit(0)
+    if a.prep:
+        prep(c); sys.exit(0)
+    if a.node is not None:
+        st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
+        run_node(c, st, a.node); sys.exit(0)
+    if a.batch_nodes is not None:
+        import signal
+        from tdi.batched import run_batched
+        signal.signal(signal.SIGTERM, lambda *x: sys.exit(143))
+        st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
+        sys.exit(run_batched(c, st, [int(x) for x in a.batch_nodes.replace(",", " ").split()], run_node))
+    # all in one process
+    st = stage0(c); t0 = time.time(); lam, w, N = c["lam"], c["w"], c["N"]
+    comps = {"full": c["full"], "E": E_component(c, st["kE"])}
+    runs = [LambdaRun(c["at0"], comps, float(l), a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps)) for k, l in enumerate(lam)]
+    neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = len(runs) * (neq + nchunk * per)
+    for k, r in enumerate(runs):
+        r.start(); print(f"   lambda {k} = {r.lam:.2e} equilibrated: {r.diag()}  {(time.time() - t0) / 60:.1f} min{prog(t0, (k + 1) * neq, tot)}", flush=True)
+    print("   t/lambda (ps)   G (meV/atom)   dF_TDI (meV/atom)   wall (min)", flush=True)
+    hist = []; n_per = c["steps"](a.chunk_ps) // a.every
+    for ch in range(1, nchunk + 1):
+        for k, r in enumerate(runs):
+            tl = time.time(); r.advance(per)
+            print(f"     chunk {ch} lambda {k} = {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min{prog(t0, len(runs) * neq + ((ch - 1) * len(runs) + k + 1) * per, tot, tl, per)}", flush=True)
+        G, Ge, dF, m, s = G_from_nodes(st, lam, w, [r.series for r in runs], N)
+        hist.append(dict(t_ps=ch * a.chunk_ps, G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF))
+        print(f"   {ch * a.chunk_ps:6.2f}      {G:12.2f} +- {Ge:5.2f}   {dF:12.2f}        {(time.time() - t0) / 60:7.1f}", flush=True)
+        json.dump(dict(st, lam=lam.tolist(), weights=w.tolist(), dudl_mean=m.tolist(), dudl_sem=s.tolist(), hist=hist, G_meV_atom=G, G_err_meV_atom=Ge), open(os.path.join(a.outdir, f"tdi_{c['tag']}.json"), "w"), indent=1)
+    print(f"FINAL {c['tag']}: G = {G:.2f} +- {Ge:.2f} meV/atom (statistical error of the integral only)")
