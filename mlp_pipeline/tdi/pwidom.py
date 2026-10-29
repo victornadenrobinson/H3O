@@ -56,11 +56,32 @@ def proxy_params(spec):
 
 
 def proxy_energy(p, pts, pos, isH, cell, chunk=512):
-    """proxy insertion energy (eV) of each point in pts (m x 3) into the frame pos (isH: bool per atom); 0 for proxy 'none'"""
+    """proxy insertion energy (eV) of each point in pts (m x 3) into the frame pos (isH: bool per atom); 0 for proxy 'none'.
+    Neighbour search (scipy cKDTree): the host is replicated over every periodic image that can lie within rc of the cell, and only pairs closer than rc are evaluated.
+    Same energies as toy_ice.ghost_energy (all images, dense m x N distances), which was ~27x slower when rc exceeds half the cell width (the 250-atom pure-H cell)."""
     if p is None:
         return np.zeros(len(pts))
-    from tdi.toy_ice import ghost_energy
-    return np.concatenate([ghost_energy(pts[i:i + chunk], pos, isH, cell, p) for i in range(0, len(pts), chunk)])
+    from tdi.toy_ice import pair_energy
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        from tdi.toy_ice import ghost_energy
+        return np.concatenate([ghost_energy(pts[i:i + chunk], pos, isH, cell, p) for i in range(0, len(pts), chunk)])
+    cell = np.asarray(cell, float); inv = np.linalg.inv(cell); rc = float(p["rc"])
+    width = abs(np.linalg.det(cell)) / np.linalg.norm(np.cross(cell[[1, 2, 0]], cell[[2, 0, 1]]), axis=1)
+    m = [int(np.ceil(rc / w)) for w in width]                       # images needed on each side
+    fh = (pos @ inv) % 1.0; fp = (pts @ inv) % 1.0                  # both wrapped into the cell
+    sh = np.array([(i, j, k) for i in range(-m[0], m[0] + 1) for j in range(-m[1], m[1] + 1) for k in range(-m[2], m[2] + 1)], float)
+    fimg = (fh[None, :, :] + sh[:, None, :]).reshape(-1, 3); idx = np.tile(np.arange(len(pos)), len(sh))
+    pad = rc / width
+    keep = np.all((fimg > -pad) & (fimg < 1 + pad), axis=1)         # only images within rc of the cell
+    host = fimg[keep] @ cell; hH = isH[idx[keep]]
+    pair = cKDTree(fp @ cell).sparse_distance_matrix(cKDTree(host), rc, output_type="coo_matrix")
+    i, j, r = pair.row, pair.col, pair.data
+    out = np.zeros(len(pts)); h = hH[j]
+    if (~h).any(): np.add.at(out, i[~h], pair_energy(1, r[~h], p)[0])
+    if h.any(): np.add.at(out, i[h], pair_energy(2, r[h], p)[0])
+    return out
 
 
 class Model:
