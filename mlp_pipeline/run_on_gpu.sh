@@ -20,8 +20,9 @@ for item in "$@"; do
   [ -f "$s" ] || { echo "no such script: $s"; continue; }
   log=runs/ongpu/$(basename "$s" .sbatch)_$k.log
   dev=""; [ ${#DEVS[@]} -gt 1 ] && dev=${DEVS[$((j % ${#DEVS[@]}))]}; j=$((j + 1))
-  if [ -n "$dev" ]; then CUDA_VISIBLE_DEVICES=$dev SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" > "$log" 2>&1 &
-  else SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" > "$log" 2>&1 & fi
+  echo "======== run_on_gpu $(date '+%F %T'): $s task $k ========" >> "$log"   # APPEND: a rerun never wipes the log of an earlier run (verdict lines)
+  if [ -n "$dev" ]; then CUDA_VISIBLE_DEVICES=$dev SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" >> "$log" 2>&1 &
+  else SLURM_ARRAY_TASK_ID=$k SLURM_ARRAY_JOB_ID=ongpu$$ bash "$s" >> "$log" 2>&1 & fi
   pids+=($!); logs+=("$log"); echo "== started $s task $k (pid $!)${dev:+ on GPU $dev} -> $log  ($(date +%H:%M:%S))"
   [ "$item" != "${@: -1}" ] && sleep ${STAGGER:-20}   # model load + XLA compile of several processes at once can exceed the GPU memory
 done
@@ -30,7 +31,7 @@ while :; do
   n=0; echo "== status after $(( ($(date +%s) - t0) / 60 )) min ($(date +%H:%M))"
   for i in "${!pids[@]}"; do
     if kill -0 ${pids[$i]} 2>/dev/null; then n=$((n + 1)); st=running; else st=finished; fi
-    hdr=$(grep -m1 -E '^ *t/ps ' "${logs[$i]}" 2>/dev/null)   # table logs (stability_npt): show the column header above the last line
+    hdr=$(grep -E '^ *t/ps ' "${logs[$i]}" 2>/dev/null | tail -n1)   # table logs (stability_npt): show the column header above the last line
     printf "   %-9s %s\n" $st "${logs[$i]}"
     [ -n "$hdr" ] && printf "      %s\n" "$(echo "$hdr" | cut -c1-${WIDTH:-220})"
     printf "      %s\n" "$(grep -v -e '^\s*$' -e '_handle_getgr' "${logs[$i]}" | tail -n1 | cut -c1-${WIDTH:-220})"

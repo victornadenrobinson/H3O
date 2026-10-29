@@ -1,5 +1,6 @@
 """Quick, LIGHT scan of dg = mu_H(host) - G_H(pure H) over (P, T) with the proxy-guided Widom / deletion + BAR method (tdi/pwidom.py, docs/MU_METHODS.md R1),
-reusing the volumes of existing runs: no lambda path, ~10 min per (P, T) on one GPU. Rough numbers (+-100-150 meV with the defaults) to see the shape of mu_H(P, T, n).
+reusing the volumes of existing runs: no lambda path, ~10 min per (P, T) on one GPU. Rough numbers to see the shape of mu_H(P, T, n). Trust a row only if Widom and deletion agree (column del-Wid; flagged UNCONVERGED otherwise):
+the first GRACE scan (K 1000, 20 frames) had Kish fractions 0.02-0.05 and Widom/deletion 300-850 meV apart in the H2O host, so the defaults are now K 2000 and --batch 8.
 Per (P, T) it runs side by side (3 processes on the GPU, below the 4-process saturation): the H2O host, the H2.25O host (if a run exists) and the pure-H reservoir.
 Volumes, bulk moduli and sizes come from existing stage0 jsons in runs/tdi*: H2O host = an insertion run's json (preferred, same host as the insertion TDI) or a fcc H2O crystal json;
 H2.25O host = a fcc crystal json with H per O 2.25; pure H = a pure-H run json (phase H). `--list` shows what exists. Frames are cached per host in --out, so a rerun (or a
@@ -16,6 +17,7 @@ from math import lgamma, log
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); KB = 8.617333262e-5
+NOISE = ("_handle_getgr", "I0000", "W0000", "E0000", "cuda_executor", "device_compiler", "cuDNN", "gpu_device", "tensorflow", "XLA", "absl", "ptxas")   # TensorFlow chatter, never a status
 
 
 def hosts(roots):
@@ -61,16 +63,17 @@ def dg(w, h):
 
 def table(out):
     rows = [json.loads(l) for l in open(os.path.join(out, "scan.jsonl"))] if os.path.exists(os.path.join(out, "scan.jsonl")) else []
-    print(f"\n{'P/GPa':>6s} {'T/K':>6s} {'host':>7s} {'dg/meV':>8s} {'+-':>6s} {'mu_P host':>9s} {'mu_P H':>8s} {'proxy kT':>8s} {'kish':>5s} {'O MSD':>6s}  flags")
+    print(f"\n{'P/GPa':>6s} {'T/K':>6s} {'host':>7s} {'dg/meV':>8s} {'+-':>6s} {'mu_P host':>9s} {'mu_P H':>8s} {'del-Wid':>7s} {'proxy kT':>8s} {'kish':>5s} {'O MSD':>6s}  flags")
     for r in sorted(rows, key=lambda r: (r["P"], r["T"], r["host"])):
-        print(f"{r['P']:6.0f} {r['T']:6.0f} {r['host']:>7s} {r['dg']:8.0f} {r['err']:6.0f} {r['mu_host']:9.0f} {r['mu_H']:8.0f} {r['proxy_kT']:8.2f} {r['kish']:5.2f} {r['msd']:6.2f}  {r['flags']}")
+        print(f"{r['P']:6.0f} {r['T']:6.0f} {r['host']:>7s} {r['dg']:8.0f} {r['err']:6.0f} {r['mu_host']:9.0f} {r['mu_H']:8.0f} {r.get('deletion', 0) - r.get('widom', 0):7.0f} {r['proxy_kT']:8.2f} {r['kish']:5.2f} {r['msd']:6.2f}  {r['flags']}")
     return rows
 
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--roots", nargs="+", default=None); ap.add_argument("--list", action="store_true"); ap.add_argument("--table", default=None)
     ap.add_argument("--points", default=None, help='"P T;P T;..." (default: every point that has an H2O host and a pure-H run)')
-    ap.add_argument("--ps", type=float, default=0.4); ap.add_argument("--equil-ps", type=float, default=0.2); ap.add_argument("--K", type=int, default=1000)
+    ap.add_argument("--ps", type=float, default=0.4); ap.add_argument("--equil-ps", type=float, default=0.2); ap.add_argument("--K", type=int, default=2000)
+    ap.add_argument("--batch", type=int, default=8, help="structures per batched GRACE call (smaller = less GPU memory with 3 hosts on one GPU)")
     ap.add_argument("--sel", type=int, default=8); ap.add_argument("--ndel", type=int, default=4); ap.add_argument("--proxy", default="docs/data/toyfit_t4.json")
     ap.add_argument("--no-h225", action="store_true"); ap.add_argument("--out", default="runs/pwidom_scan"); ap.add_argument("--device", default="cuda"); ap.add_argument("--model", default=None)
     ap.add_argument("--py", default=sys.executable); a = ap.parse_args()
@@ -91,15 +94,15 @@ def main():
             print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K: SKIPPED (missing {'H2O host' if 'ice' not in d else ''} {'pure-H run' if 'H' not in d else ''})", flush=True); continue
         jobs = [("H2O", d["ice"], "ice")] + ([("H2.25O", d["h225"], "fcc")] if "h225" in d and not a.no_h225 else []) + [("pure H", d["H"], "H")]
         print(f"\n-- [{i + 1}/{len(want)}] {P:g} GPa {T:g} K ({time.strftime('%H:%M:%S')}, scan {(time.time() - t_all) / 60:.1f} min): " + ", ".join(f"{n} <- {os.path.basename(f)}" for n, f, _ in jobs), flush=True)
-        procs = []
+        procs = []; cmds = {}
         for name, f, kind in jobs:
             tag = f"pw_{name.replace(' ', '').replace('.', '')}_{P:g}GPa_{T:.0f}K"; log_ = os.path.join(a.out, f"{tag}.log")
             res = glob.glob(os.path.join(a.out, f"{tag}_*_K{a.K}.json"))
             if res: procs.append((name, None, log_, res[0], tag)); print(f"   {name}: done before ({os.path.basename(res[0])})", flush=True); continue
             cmd = [a.py, "-u", os.path.join(HERE, "pwidom.py"), "run", *pw_args(f, kind), "--ps", repr(a.ps), "--equil-ps", repr(a.equil_ps), "--proxy", a.proxy, "--K", str(a.K),
-                   "--sel", str(a.sel), "--ndel", str(a.ndel), "--out", a.out, "--tag", tag, "--device", a.device] + (["--model", a.model] if a.model else [])
+                   "--sel", str(a.sel), "--ndel", str(a.ndel), "--out", a.out, "--tag", tag, "--device", a.device, "--batch", str(a.batch)] + (["--model", a.model] if a.model else [])
             env = dict(os.environ, TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2")
-            procs.append((name, subprocess.Popen(cmd, stdout=open(log_, "w"), stderr=subprocess.STDOUT, env=env), log_, None, tag)); time.sleep(5)
+            procs.append((name, subprocess.Popen(cmd, stdout=open(log_, "w"), stderr=subprocess.STDOUT, env=env), log_, None, tag)); cmds[name] = (cmd, env, log_); time.sleep(5)
         t0 = time.time(); last = 0
         while any(p and p.poll() is None for _, p, *_ in procs):
             time.sleep(2)
@@ -107,9 +110,13 @@ def main():
                 last = time.time(); st = []
                 for name, p, log_, _, _ in procs:
                     if p is None: st.append(f"{name}: done before"); continue
-                    lines = [l.strip() for l in open(log_).read().splitlines() if l.strip() and "_handle_getgr" not in l]
+                    lines = [l.strip() for l in open(log_).read().splitlines() if l.strip() and not any(z in l for z in NOISE)]
                     st.append(f"{name}: {'finished' if p.poll() is not None else (lines[-1][:70] if lines else 'starting')}")
                 print(f"   {time.time() - t0:5.0f} s | " + " | ".join(st), flush=True)
+        for name, p, log_, res, tag in procs:   # a host that died (usually GPU out of memory while 3 processes shared the GPU) is retried ALONE: its MD frames are cached, only the single points rerun
+            if p is not None and not glob.glob(os.path.join(a.out, f"{tag}_*_K{a.K}.json")) and name in cmds:
+                cmd, env, lg = cmds[name]; print(f"   {name}: failed while sharing the GPU ({' / '.join([l for l in open(lg).read().splitlines() if l.strip()][-1:])[:120]}); retrying alone", flush=True)
+                t1 = time.time(); subprocess.run(cmd, stdout=open(lg, "a"), stderr=subprocess.STDOUT, env=env); print(f"   {name}: retry finished in {(time.time() - t1) / 60:.1f} min", flush=True)
         out = {}
         for name, p, log_, res, tag in procs:
             res = res or (sorted(glob.glob(os.path.join(a.out, f"{tag}_*_K{a.K}.json")), key=os.path.getmtime) or [None])[-1]
@@ -124,6 +131,9 @@ def main():
             if w.get("melted"): flags.append("HOST MELTED")
             if hh < 0.25: flags.append(f"PURE-H COLLAPSE (min dHH {hh:.2f} A)")
             if max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]) > 3: flags.append("proxy poor (>3 kT)")
+            wd = w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]
+            if abs(wd) > max(200.0, 3 * e_): flags.append(f"UNCONVERGED (deletion - Widom {wd:+.0f} meV)")   # insertion and deletion bracket the answer: far apart = too few effective samples
+            if w["kish_frac_ins"] < 0.05: flags.append(f"few effective insertions (Kish {w['kish_frac_ins']:.2f})")
             row = dict(P=P, T=T, host=name.replace("H2O", "H2O").replace("H2.25O", "H2.25O"), dg=g_, err=e_, mu_host=w["mu_P_meV"], mu_H=h["mu_P_meV"],
                        proxy_kT=max(w["proxy_gap_std_kT_ins"], w["proxy_gap_std_kT_del"]), kish=w["kish_frac_ins"], msd=(w["msd_O_host"] or [np.nan])[-1], min_dHH=hh,
                        widom=w["mu_ex_widom_meV"], deletion=w["mu_ex_delete_meV"], bar=w["mu_ex_bar_meV"], flags=",".join(flags) or "ok", ps=a.ps, K=a.K, sel=a.sel)

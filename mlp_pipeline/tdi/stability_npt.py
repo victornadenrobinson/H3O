@@ -26,14 +26,44 @@ def strain(h0, h):
     return float(np.abs(np.linalg.eigvalsh(E)).max())
 
 
+def verdict(rows, ps, equil_ps, h0, tag):
+    """VERDICT over the second half of the run (after equil_ps): O sublattice fcc in every block, systematic shear < 3 %, O MSD not growing, H diffusing"""
+    late = [r for r in rows if r["t_ps"] > equil_ps + (ps - equil_ps) / 2]
+    fcc_all = all(r["O_struct"] == "fcc" for r in late); shear_max = max(r["shear"] for r in late); shear_sys = strain(h0, np.mean([r["cell"] for r in late], 0)) if h0 is not None and all("cell" in r for r in late) else float(np.mean([r["shear"] for r in late]))   # systematic: cell averaged over the late blocks (older jsons without cells: mean block shear)
+    grow = (late[-1]["msd_O"] - late[0]["msd_O"]) / max(late[-1]["t_ps"] - late[0]["t_ps"], 1e-9) * 10 if len(late) > 1 else float("nan")
+    DH = np.mean([r["D_H"] for r in late])
+    ok = fcc_all and shear_sys < 0.03 and grow < 0.5 and DH > 1e-5
+    print(f"\nVERDICT {tag}: {'STABLE superionic fcc' if ok else 'NOT stable as superionic fcc'} over the 2nd half ({len(late)} blocks): O sublattice "
+          f"{'fcc throughout' if fcc_all else 'NOT always fcc: ' + ','.join(sorted({r['O_struct'] for r in late}))}, systematic shear {100 * shear_sys:.1f} % (largest block-mean shear {100 * shear_max:.1f} %), O MSD growth {grow:.2f} A^2 per 10 ps, "
+          f"D_H {DH:.1e} cm^2/s ({'superionic' if DH > 1e-5 else 'H not diffusing'}), <V/atom> {np.mean([r['vpa'] for r in late]):.4f}, <P> {np.mean([r['P'] for r in late]):.1f} GPa", flush=True)
+
+
+HDR = (f"{'t/ps':>6s} {'T/K':>6s} {'P/GPa':>7s} {'V/atom':>7s} {'a':>6s} {'b':>6s} {'c':>6s} {'alpha':>6s} {'beta':>6s} {'gamma':>6s} {'shear':>6s} {'O_lat':>6s} {'CN1':>4s} "
+       f"{'Lind_O':>6s} {'msdO/A2':>7s} {'D_H cm2/s':>9s}")
+
+
+def report(d):
+    """table and VERDICT of a run directory from its stability.json (also for runs whose log was lost, or that were cut off before the end)"""
+    j = json.load(open(os.path.join(d, "stability.json"))); rows = j["blocks"]; A = j["args"]
+    h0 = np.array(j["h0"]) if "h0" in j else (np.array(rows[0]["cell"]) if "cell" in rows[0] else None)
+    print(f"{j['tag']}: {len(rows)} blocks ({rows[-1]['t_ps']:g} of {A['ps']:g} ps)" + ("" if "h0" in j else "; reference cell = first block (start cell not stored in this older json)"))
+    print(HDR)
+    for r in rows:
+        print(f"{r['t_ps']:6.1f} {r['T']:6.0f} {r['P']:7.1f} {r['vpa']:7.4f} {r['a']:6.2f} {r['b']:6.2f} {r['c']:6.2f} {r['alpha']:6.1f} {r['beta']:6.1f} {r['gamma']:6.1f} "
+              f"{100 * r['shear']:5.1f}% {r['O_struct']:>6s} {r['CN1']:4.1f} {r['lind_O']:6.3f} {r['msd_O']:7.3f} {r['D_H']:9.2e}")
+    verdict(rows, rows[-1]["t_ps"], A["equil_ps"], h0, j["tag"])
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--hper", type=float, default=2.1); ap.add_argument("--P", type=float, default=400); ap.add_argument("--T", type=float, default=4500)
     ap.add_argument("--ps", type=float, default=30.0); ap.add_argument("--equil-ps", type=float, default=2.0, help="first part not used for the verdict (barostat settling)")
     ap.add_argument("--block-ps", type=float, default=1.0); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--nrep", type=int, default=4)
     ap.add_argument("--vpa", type=float, default=None, help="start V/atom (default: rough guess; the barostat corrects it within ~1-2 ps)")
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda"); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--report", default=None, help="print the table and VERDICT of an existing run directory (from its stability.json) and exit")
     ap.add_argument("--fresh", action="store_true", help="ignore a checkpoint of this run and start over (default: continue from the last finished block)")
     ap.add_argument("--ttime", type=float, default=25.0); ap.add_argument("--ptime", type=float, default=100.0); ap.add_argument("-o", default="runs/stability_npt"); a = ap.parse_args()
+    if a.report: return report(a.report)
     from ase import units
     from ase.io import write
     try:
@@ -92,17 +122,10 @@ def main():
         print(f"{t:6.1f} {r['T']:6.0f} {r['P']:7.1f} {r['vpa']:7.4f} {cp[0]:6.2f} {cp[1]:6.2f} {cp[2]:6.2f} {cp[3]:6.1f} {cp[4]:6.1f} {cp[5]:6.1f} {100 * sh:5.1f}% {L:>6s} {c1:4.1f} "
               f"{lind:6.3f} {msdO:7.3f} {DH:9.2e}   {el / ((k + 1 - k0) * nb) * 1000:5.0f}  ~{el / (k + 1 - k0) * (nblk - k - 1) / 60:.0f} min", flush=True)
         write(os.path.join(d, "traj.extxyz"), at, append=True)
-        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, blocks=rows), open(os.path.join(d, "stability.json.tmp"), "w"), indent=1, default=float)
+        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, h0=h0.tolist(), blocks=rows), open(os.path.join(d, "stability.json.tmp"), "w"), indent=1, default=float)
         os.replace(os.path.join(d, "stability.json.tmp"), os.path.join(d, "stability.json"))   # atomic: a kill never leaves a truncated file
         np.savez(ck + ".tmp.npz", blocks=k + 1, pos=at.get_positions(), mom=at.get_momenta(), cell=at.cell.array, h0=h0, O0=O0, uf=uf, last=last); os.replace(ck + ".tmp.npz", ck)
-    late = [r for r in rows if r["t_ps"] > a.equil_ps + (a.ps - a.equil_ps) / 2]
-    fcc_all = all(r["O_struct"] == "fcc" for r in late); shear_max = max(r["shear"] for r in late); shear_sys = strain(h0, np.mean([r["cell"] for r in late], 0))   # systematic: cell averaged over the late blocks
-    grow = (late[-1]["msd_O"] - late[0]["msd_O"]) / max(late[-1]["t_ps"] - late[0]["t_ps"], 1e-9) * 10 if len(late) > 1 else float("nan")
-    DH = np.mean([r["D_H"] for r in late])
-    ok = fcc_all and shear_sys < 0.03 and grow < 0.5 and DH > 1e-5
-    print(f"\nVERDICT {tag}: {'STABLE superionic fcc' if ok else 'NOT stable as superionic fcc'} over the 2nd half ({len(late)} blocks): O sublattice "
-          f"{'fcc throughout' if fcc_all else 'NOT always fcc: ' + ','.join(sorted({r['O_struct'] for r in late}))}, systematic shear {100 * shear_sys:.1f} % (largest block-mean shear {100 * shear_max:.1f} %), O MSD growth {grow:.2f} A^2 per 10 ps, "
-          f"D_H {DH:.1e} cm^2/s ({'superionic' if DH > 1e-5 else 'H not diffusing'}), <V/atom> {np.mean([r['vpa'] for r in late]):.4f}, <P> {np.mean([r['P'] for r in late]):.1f} GPa", flush=True)
+    verdict(rows, a.ps, a.equil_ps, h0, tag)
     print(f"files: {d}/stability.json, traj.extxyz (one frame per block)")
 
 
