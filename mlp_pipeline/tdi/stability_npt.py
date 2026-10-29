@@ -9,6 +9,7 @@ O MSD does not grow (< 0.5 A^2 per 10 ps) and H diffuses. The largest block-mean
 usage:  ~/grace-venv/bin/python -u mlp_pipeline/tdi/stability_npt.py --hper 2.1 --P 400 --T 4500 [--ps 30] [--nrep 4] [--model grace-ft:runs/grace/ft_m2] [-o runs/stability_npt]
         batch: sbatch mlp_pipeline/young_stability_npt.sbatch   (H2O, H2.1O, H2.2O at 400 GPa 4500 K and 500 GPa 5000 K)
 Cell: fcc O, nrep^3 conventional cells (nrep 4 = 256 O; H2.1O -> 538 H = H2.102O, H2.2O -> 563 H = H2.199O), extra H on random O-O bond midpoints (17_eos_md.build).
+Restart: rerunning the same command continues from the last finished block (checkpoint.npz; --fresh starts over), so a job killed at its time limit loses at most one block.
 Barostat: ttime 25 fs, ptime 100 fs, pfactor = ptime^2 B with B ~ 4.5 P (rough bulk modulus; only sets the barostat time scale). The cell must stay upper triangular (ASE NPT).
 """
 import argparse, json, os, sys, time
@@ -31,6 +32,7 @@ def main():
     ap.add_argument("--block-ps", type=float, default=1.0); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--nrep", type=int, default=4)
     ap.add_argument("--vpa", type=float, default=None, help="start V/atom (default: rough guess; the barostat corrects it within ~1-2 ps)")
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda"); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--fresh", action="store_true", help="ignore a checkpoint of this run and start over (default: continue from the last finished block)")
     ap.add_argument("--ttime", type=float, default=25.0); ap.add_argument("--ptime", type=float, default=100.0); ap.add_argument("-o", default="runs/stability_npt"); a = ap.parse_args()
     from ase import units
     from ase.io import write
@@ -46,11 +48,17 @@ def main():
     tag = f"fcc_H{nH / nO:.3f}O_{a.P:.0f}GPa_{a.T:.0f}K_n{a.nrep}"; d = os.path.join(a.o, tag); os.makedirs(d, exist_ok=True)
     print(f"{tag}: {nO} O + {nH} H = H{nH / nO:.3f}O, {N} atoms, start V/atom {vpa:.3f}, NPT (flexible cell) {a.ps} ps at {a.P} GPa, {a.T} K, dt {a.dt} fs, model {a.model}", flush=True)
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True, rng=np.random.default_rng(a.seed)); Stationary(at)   # seeded: the run is reproducible up to the barostat's own (deterministic) dynamics
+    ck = os.path.join(d, "checkpoint.npz"); k0 = 0; rows = []; ckd = None
+    if os.path.exists(ck) and not a.fresh:   # resume: atoms (positions, momenta, cell) and the analysis state after the last finished block; the thermostat / barostat variables restart at 0
+        ckd = np.load(ck); k0 = int(ckd["blocks"]); at.set_cell(ckd["cell"], scale_atoms=False); at.set_positions(ckd["pos"]); at.set_momenta(ckd["mom"])
+        rows = json.load(open(os.path.join(d, "stability.json")))["blocks"][:k0]
+        print(f"RESUMING from {ck}: {k0} blocks ({k0 * a.block_ps:g} ps) done; thermostat / barostat variables restart at zero (a small kick, settles within ~0.5 ps). --fresh to start over", flush=True)
     B = 4.5 * a.P / EV_A3_GPA
     dyn = NPT(at, timestep=a.dt * units.fs, temperature_K=a.T, externalstress=a.P / EV_A3_GPA, ttime=a.ttime * units.fs, pfactor=(a.ptime * units.fs) ** 2 * B)
     nb = int(a.block_ps * 1000 / a.dt); nblk = int(round(a.ps / a.block_ps)); every = 10
-    h0 = at.cell.array.copy(); O0 = None; t0 = time.time(); rows = []; buf = dict(O=[], H=[], T=[], P=[], V=[], h=[])
-    uf = at.get_scaled_positions().copy(); last = uf.copy()   # unwrapped FRACTIONAL positions: the cell changes, so time averages are taken in fractional coordinates
+    h0 = at.cell.array.copy(); O0 = None; t0 = time.time(); buf = dict(O=[], H=[], T=[], P=[], V=[], h=[])
+    uf = at.get_scaled_positions().copy(); last = uf.copy()
+    if ckd is not None: h0 = ckd["h0"]; O0 = ckd["O0"]; uf = ckd["uf"].copy(); last = ckd["last"].copy()   # unwrapped FRACTIONAL positions: the cell changes, so time averages are taken in fractional coordinates
 
     def sample():
         nonlocal last
@@ -61,7 +69,7 @@ def main():
     dyn.attach(sample, interval=every)
     print(f"{'t/ps':>6s} {'T/K':>6s} {'P/GPa':>7s} {'V/atom':>7s} {'a':>6s} {'b':>6s} {'c':>6s} {'alpha':>6s} {'beta':>6s} {'gamma':>6s} {'shear':>6s} {'O_lat':>6s} {'CN1':>4s} "
           f"{'Lind_O':>6s} {'msdO/A2':>7s} {'D_H cm2/s':>9s}   ms/step  ETA", flush=True)
-    for k in range(nblk):
+    for k in range(k0, nblk):
         for v in buf.values(): v.clear()
         dyn.run(nb)
         hm = np.mean(buf["h"], 0); O = np.array(buf["O"]) @ hm; H = np.array(buf["H"]) @ hm; mean = O.mean(0)   # block-mean cell; fractional -> Cartesian
@@ -77,9 +85,11 @@ def main():
                  shear=sh, O_struct=L, CN1=c1, lind_O=lind, msd_O=msdO, D_H=float(DH), cell=hm.tolist())
         rows.append(r)
         print(f"{t:6.1f} {r['T']:6.0f} {r['P']:7.1f} {r['vpa']:7.4f} {cp[0]:6.2f} {cp[1]:6.2f} {cp[2]:6.2f} {cp[3]:6.1f} {cp[4]:6.1f} {cp[5]:6.1f} {100 * sh:5.1f}% {L:>6s} {c1:4.1f} "
-              f"{lind:6.3f} {msdO:7.3f} {DH:9.2e}   {el / ((k + 1) * nb) * 1000:5.0f}  ~{el / (k + 1) * (nblk - k - 1) / 60:.0f} min", flush=True)
+              f"{lind:6.3f} {msdO:7.3f} {DH:9.2e}   {el / ((k + 1 - k0) * nb) * 1000:5.0f}  ~{el / (k + 1 - k0) * (nblk - k - 1) / 60:.0f} min", flush=True)
         write(os.path.join(d, "traj.extxyz"), at, append=True)
-        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, blocks=rows), open(os.path.join(d, "stability.json"), "w"), indent=1, default=float)
+        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, blocks=rows), open(os.path.join(d, "stability.json.tmp"), "w"), indent=1, default=float)
+        os.replace(os.path.join(d, "stability.json.tmp"), os.path.join(d, "stability.json"))   # atomic: a kill never leaves a truncated file
+        np.savez(ck + ".tmp.npz", blocks=k + 1, pos=at.get_positions(), mom=at.get_momenta(), cell=at.cell.array, h0=h0, O0=O0, uf=uf, last=last); os.replace(ck + ".tmp.npz", ck)
     late = [r for r in rows if r["t_ps"] > a.equil_ps + (a.ps - a.equil_ps) / 2]
     fcc_all = all(r["O_struct"] == "fcc" for r in late); shear_max = max(r["shear"] for r in late); shear_sys = strain(h0, np.mean([r["cell"] for r in late], 0))   # systematic: cell averaged over the late blocks
     grow = (late[-1]["msd_O"] - late[0]["msd_O"]) / max(late[-1]["t_ps"] - late[0]["t_ps"], 1e-9) * 10 if len(late) > 1 else float("nan")

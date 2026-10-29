@@ -194,6 +194,7 @@ def run_one(a, calc, vpa, tag):
             pos.append(at.get_positions().copy()); tpos.append(s * a.dt)
         if s % int(500 / a.dt) == 0 and s:
             allr = pd.DataFrame(rows); prod = allr[allr.step >= n_eq]
+            allr.to_csv(os.path.join(d, "thermo.csv"), index=False)   # every 500 fs: a run killed at its time limit keeps its thermo series
             if len(prod) >= 10:
                 w, phase = prod, "prod avg"
             else:   # still equilibrating: average over the last 250 fs rather than one instantaneous value
