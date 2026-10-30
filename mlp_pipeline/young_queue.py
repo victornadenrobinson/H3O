@@ -200,7 +200,7 @@ def sections(S, a, now):
         sc = {"r": "green", "qw": "yellow", "Eqw": "red", "hqw": "dim"}.get(j["state"], "white")
         qh = j["queue"].split(".")[0].replace("node-", ""); mine.append([j["id"] + (("." + j["task"]) if j["task"] else ""), j["name"][:12], f"[{sc}]{j['state']}[/]", qh or "-", str(j["slots"]) + (f" x{j['ntask']}" if j["ntask"] > 1 else ""),
                      j["when"].strftime("%d/%m %H:%M"), ("running " if j["running"] else "waiting ") + hms(j["age"]),
-                     ("#%s of %s, %s slots ahead" % (format(j["rank"], ","), format(S["queued"], ","), format(j["slots_ahead"], ","))) if "rank" in j else ("held / error: not queued" if not j["running"] else "")])
+                     ("#%s/%s, %s slots ahead" % (format(j["rank"], ","), format(S["queued"], ","), format(j["slots_ahead"], ","))) if "rank" in j else ("held / error: not queued" if not j["running"] else "")])
     out.append(("Your jobs", ["job", "name", "st", "queue@host", "slots", "when", "so far", "priority rank"], mine or [["[dim]none[/]", "", "", "", "", "", "", ""]]))
     return out
 

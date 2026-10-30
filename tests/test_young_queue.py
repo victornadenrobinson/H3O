@@ -66,4 +66,4 @@ def test_exclusive_mode_rank_and_held(tmp_path):
     assert S["classes"]["1-8"]["oldest"] < 10 * 3600, S["classes"]["1-8"]                                                        # the 2023 error-state job is not a queue wait
     out = run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--plain")
     assert "completely free node" in out and "relation EXCL" in out and "slots ahead" in out and "#" in out, out[:2500]
-    assert "#3 of" in out   # 2335902 (3.48133) and 2335970 (3.10000) queue behind the 9.0 job: ranks 2 and 3 of the 6 queued (2340011 2.7, 2340020 9.0 ... )
+    assert "#3/" in out   # 2335902 (3.48133) and 2335970 (3.10000) queue behind the 9.0 job: ranks 2 and 3 of the 6 queued (2340011 2.7, 2340020 9.0 ... )
