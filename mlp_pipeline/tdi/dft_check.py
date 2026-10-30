@@ -8,6 +8,7 @@ POTCAR, POSCAR for the species order) so the energies are those the model was tr
   python mlp_pipeline/tdi/dft_check.py prep-static runs/h3o_static --template <dft run dir> --P 300 400 500 600 [--scales 0.98 1.0 1.02] [--tel 1000] [--kspacing 0.25] -o runs/dft_check/static
   python mlp_pipeline/tdi/dft_check.py prep-selftest --template <dft run dir> -o runs/dft_check/selftest        (a 12-atom cell and the template geometry as single points: does the VASP chain work on Young CPUs, what does a real-size cell cost? --size small|template|both)
   python mlp_pipeline/tdi/dft_check.py prep-widom runs/pwidom/pw_fcc_450GPa_6000K_frames.npz --template <dir> --proxy docs/data/toyfit_t4.json [--model <mlp> --top 50] -o runs/dft_check/widom
+  python mlp_pipeline/tdi/dft_check.py audit runs/dft_check/probe --template <dir> [--train-outcar <training OUTCAR> --new-outcar <OUTCAR of a finished point>]   (same settings as the training DFT?)
   python mlp_pipeline/tdi/dft_check.py status runs/dft_check/probe       (any prepared directory: pending / running / done / failed per single point, SCF progress, mean time, ETA)
   ~/grace-venv/bin/python mlp_pipeline/tdi/dft_check.py analyze runs/dft_check/probe     (and .../fep, .../static, .../selftest, .../widom): reads OUTCARs, evaluates the MLP on the same structures, prints the comparison
 
@@ -256,6 +257,65 @@ def prep_selftest(a):
     finish(a, rows, dirs, dict(mode="selftest", template=a.template, T=T, model_default=a.model))
 
 
+def parse_incar(path):
+    inc = {}
+    for line in open(path):
+        line = line.split("#")[0].split("!")[0]
+        for part in line.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1); inc[k.strip().upper()] = v.strip()
+    return inc
+
+
+AUDIT_KEYS = ("ENCUT", "PREC", "EDIFF", "ISMEAR", "SIGMA", "NBANDS", "IALGO", "ALGO", "LREAL", "ISPIN", "LASPH", "GGA", "VOSKOWN", "NELM", "NELMIN", "LMAXMIX", "AMIX", "BMIX", "AMIN", "MAXMIX", "NELECT", "ENAUG", "ISYM", "ISIF", "LSORBIT", "LMAXPAW")
+
+
+def outcar_params(path):
+    """the settings VASP itself echoes in an OUTCAR (defaults included) + the VASP version line + POTCAR titles"""
+    t = open(path, errors="replace").read(); out = {}
+    m = re.search(r"vasp\.[\d.]+\S*|VASP\.?\s*[\d.]+\S*", t); out["VASP"] = m.group(0) if m else "?"
+    out["POTCAR"] = ",".join(re.findall(r"POTCAR:\s+PAW_PBE\s+(\S+\s+\S+)", t)[:4])
+    for k in AUDIT_KEYS:
+        m = re.search(rf"\b{k}\s*=\s*([-+\w.]+)", t)
+        if m: out[k] = m.group(1)
+    return out
+
+
+def do_audit(a):
+    """does the prepared set use the template's (training) settings? tag-by-tag diff of every generated INCAR against the template, POTCAR / KPOINTS identity, the electronic temperature, and
+    (--train-outcar, --new-outcar) the settings VASP itself echoed in a training OUTCAR vs a finished single point of this set (catches defaults that differ between VASP versions)"""
+    tp = template(a.template); ti = tp["incar"]; dirs = [l.strip() for l in open(os.path.join(a.o, "dirs.txt")) if l.strip()]
+    tmd = float(ti.get("TEBEG", 0) or 0); print(f"template {a.template}: species {tp['species']}, ISMEAR {ti.get('ISMEAR')}, SIGMA {ti.get('SIGMA')} (kB*TEBEG = {KB * tmd:.6f} eV for TEBEG {tmd:.0f} K), ENCUT {ti.get('ENCUT')}, NBANDS {ti.get('NBANDS', 'not set')}")
+    if ti.get("SIGMA") and tmd and abs(float(ti["SIGMA"]) - KB * tmd) > 2e-3:
+        print("   !! the template SIGMA is NOT kB*TEBEG: the generated SIGMA (kB*T of the frame) differs from the training smearing; set SIGMA by hand or tell me the training rule")
+    pats = {}; temps = set(); badpot = 0; kdiff = 0
+    for d in dirs:
+        gi = parse_incar(os.path.join(d, "INCAR")); diffs = []
+        for k in sorted(set(ti) | set(gi)):
+            tv, gv = ti.get(k), gi.get(k)
+            if tv == gv: continue
+            kind = ("MD tag removed" if gv is None and k in MD_TAGS else "parallelization only (no effect on the energy)" if k in ("NCORE", "NPAR", "KPAR") else "single-point tag" if k in ("IBRION", "NSW", "ISYM", "LWAVE", "LCHARG") else "smearing rule" if k in ("SIGMA", "ISMEAR", "KSPACING", "KGAMMA")
+                    else "NBANDS rescaled" if k == "NBANDS" else "UNEXPECTED")
+            diffs.append((k, tv, "<per-structure value>" if k in ("SIGMA", "NBANDS") and kind != "UNEXPECTED" else gv, kind))
+        if gi.get("ISMEAR") == "-1": temps.add(round(float(gi.get("SIGMA", 0) or 0) / KB))
+        pats.setdefault(tuple(diffs), []).append(d)
+        pc = open(os.path.join(d, "POTCAR")).read(); present = set(read(os.path.join(d, "structure.extxyz")).get_chemical_symbols())
+        if not all(tp["blocks"][s_] in pc for s_ in present if s_ in tp["blocks"]): badpot += 1
+        if open(os.path.join(d, "KPOINTS")).read() != tp["kpoints"]: kdiff += 1
+    print(f"\n{len(dirs)} directories in {a.o}: {len(pats)} distinct INCAR difference pattern(s) vs the template:")
+    for pat, ds in pats.items():
+        print(f"  {len(ds)} dirs (e.g. {os.path.basename(ds[0])}):")
+        for k, tv, gv, kind in pat: print(f"      {k}: template {tv!r} -> {gv!r}   [{kind}]")
+    print(f"electronic temperatures used (ISMEAR=-1, SIGMA/kB): {sorted(temps)} K")
+    print(f"POTCAR blocks identical to the template's: {len(dirs) - badpot} of {len(dirs)}; KPOINTS identical to the template's: {len(dirs) - kdiff} of {len(dirs)}" + ("  (static mode changes the k-mesh and smearing on purpose)" if kdiff else ""))
+    if any(kind == "UNEXPECTED" for pat in pats for _, _, _, kind in pat): print("!! UNEXPECTED differences above: not the template's settings")
+    if a.train_outcar and a.new_outcar:
+        A, B = outcar_params(a.train_outcar), outcar_params(a.new_outcar); print(f"\nsettings VASP echoed:  training {a.train_outcar}  vs  new {a.new_outcar}")
+        for k in ["VASP", "POTCAR"] + list(AUDIT_KEYS):
+            if k in A or k in B: print(f"   {k:9s} {A.get(k, '-'):22s} {B.get(k, '-'):22s} {'' if A.get(k) == B.get(k) else '  <-- differs'}")
+        print("   (SIGMA / NBANDS / ISYM / ISIF may differ by design; anything else, or a different VASP version with different defaults, is worth understanding)")
+
+
 def prep_widom(a):
     from tdi import pwidom as pw
     tp = template(a.template); z = np.load(a.frames); fh = z["host"]; numbers = z["numbers"]; V = float(z["V"]); T = float(z["T"]); kT = KB * T
@@ -479,7 +539,8 @@ p = sp.add_parser("prep-widom"); p.add_argument("frames", help="pwidom.py frames
 p.add_argument("--proxy", default="none", help="as pwidom.py: a toy_fit.py json, 'toyice' or 'none'"); p.add_argument("--K", type=int, default=2000); p.add_argument("--sel", type=int, default=3, help="Rosenbluth-sampled sites per frame")
 p.add_argument("--frames-n", type=int, default=4, help="host frames used"); p.add_argument("--model", default=None, help="MLP: adds the tier of sites where the MLP energy is lowest"); p.add_argument("--top", type=int, default=50)
 p.add_argument("--device", default="cuda"); p.add_argument("--L", type=float, default=0.0, help="cubic cell edge (A) if the frames are not from a cubic build_host cell"); p.add_argument("--seed", type=int, default=0)
+p = sp.add_parser("audit"); p.add_argument("o", help="a prepared directory (dirs.txt)"); p.add_argument("--template", required=True); p.add_argument("--train-outcar", default=None); p.add_argument("--new-outcar", default=None)
 p = sp.add_parser("status"); p.add_argument("o"); p.add_argument("--all", action="store_true", help="also list pending directories"); p.add_argument("--stale", type=float, default=900.0, help="seconds without output after which a started point counts as stopped")
 p = sp.add_parser("analyze"); p.add_argument("o"); p.add_argument("--model", default=None); p.add_argument("--device", default="cuda")
 a = ap.parse_args()
-{"prep-probe": prep_probe, "prep-fep": prep_fep, "prep-static": prep_static, "prep-selftest": prep_selftest, "prep-widom": prep_widom, "status": do_status, "analyze": do_analyze}[a.cmd](a)
+{"prep-probe": prep_probe, "prep-fep": prep_fep, "prep-static": prep_static, "prep-selftest": prep_selftest, "prep-widom": prep_widom, "status": do_status, "audit": do_audit, "analyze": do_analyze}[a.cmd](a)

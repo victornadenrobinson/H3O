@@ -55,6 +55,9 @@ def test_sge_wrapper_and_modes(tmp_path):
     out = run("mlp_pipeline/tdi/dft_check.py", "analyze", sd, "--model", "toyice", "--device", "cpu"); assert "finished; 24 atoms on 16 ranks" in out and "finished; 12 atoms" in out and "MLP - DFT" in out, out[-900:]
     nm = subprocess.run(["bash", "mlp_pipeline/young_dft_check.sge", sd], cwd=ROOT, env=dict(ENV, PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}", NSLOTS="16"), capture_output=True, text=True)   # no module command, not a login shell
     assert nm.returncode == 2 and "module command not found" in nm.stdout, nm.stdout[-400:]
+    wo = os.path.join(sd, "selftest_small", "OUTCAR"); tr = str(tmp_path / "train_OUTCAR"); open(tr, "w").write(open(wo).read().replace("1100.0", "1000.0"))
+    out = run("mlp_pipeline/tdi/dft_check.py", "audit", sd, "--template", tpl, "--train-outcar", tr, "--new-outcar", wo)
+    assert "2 of 2" in out and "[single-point tag]" in out and "NCORE: template '16' -> '12'   [parallelization" in out and "UNEXPECTED" not in out and "<-- differs" in out, out[-1200:]
     g = str(tmp_path / "guard"); os.makedirs(g); ds = [os.path.join(wd, x) for x in ("f0_host", "f1_host")]
     for x in ds: os.remove(os.path.join(x, "OUTCAR"))
     open(os.path.join(g, "dirs.txt"), "w").write("\n".join(ds) + "\n")
