@@ -23,6 +23,8 @@ except Exception:
 
 FILES = dict(hosts="qhost_q.txt", gc="qstat_gc.txt", jobs="qstat_all.txt", budgets="budgets.txt", complexes="complexes.txt")
 CMDS = dict(hosts="qhost -q", gc="qstat -g c", jobs="qstat -u '*'", budgets="budgets 2>/dev/null", complexes="qconf -sc 2>/dev/null")
+CORES = 40       # cores (slots that count) per CPU node: a job of s slots holds ceil(s / 40) nodes when hosts are exclusive
+STALE = 14 * 86400   # pending longer than this = stale (abandoned / unsatisfiable), reported separately from real waits
 BAD = set("udDE")   # queue-instance state flags that stop scheduling (a alarm / s suspended / S subordinate / c, C are different and not counted here)
 
 
@@ -135,18 +137,22 @@ def summarize(hosts, gc, jobs, budgets, me, excl=(), fits=(8, 16, 40)):
     for h in hosts: pools[h["pool"]].append(h)
     for name, hs in sorted(pools.items()):
         ok = [h for h in hs if h["state"] == "ok"]; cpu = Counter(h["ncpu"] for h in hs).most_common(1)[0][0]
-        S["pools"].append(dict(pool=name, nodes=len(hs), cpus=cpu, mem=hs[0]["memtot"], usable=len(ok), free=sum(1 for h in ok if h["used"] == 0), full=sum(1 for h in ok if h["free"] == 0),
-                               part=sum(1 for h in ok if 0 < h["free"] < h["tot"]), disabled=sum(1 for h in hs if h["state"] == "disabled"), down=sum(1 for h in hs if h["state"] == "down"),
+        nfree = sum(1 for h in ok if h["used"] == 0)
+        S["pools"].append(dict(pool=name, nodes=len(hs), cpus=cpu, mem=hs[0]["memtot"], usable=len(ok), free=nfree, busy=len(ok) - nfree, full=sum(1 for h in ok if h["free"] == 0),
+                               part=0 if excl else sum(1 for h in ok if 0 < h["free"] < h["tot"]), disabled=sum(1 for h in hs if h["state"] == "disabled"), down=sum(1 for h in hs if h["state"] == "down"),
                                used=sum(h["used"] for h in ok), tot=sum(h["tot"] for h in ok), fit={n: (sum(1 for h in ok if h["used"] == 0 and h["tot"] >= n) if excl else sum(1 for h in ok if h["free"] >= n)) for n in fits},
                                idle_but_off=sum(1 for h in hs if h["state"] != "ok" and h["load"] is not None and h["load"] < 1.0)))
     run = [j for j in jobs if j["running"]]; pend = [j for j in jobs if not j["running"]]
+    nn = lambda j: -(-j["slots"] // CORES)   # nodes a job holds: ceil(slots / 40 cores)
+    S["run_nodes"] = sum(nn(j) for j in run); S["pend_nodes"] = sum(nn(j) * j["ntask"] for j in pend if j["state"] == "qw")
     S["run_jobs"] = len(run); S["run_slots"] = sum(j["slots"] for j in run); S["pend_jobs"] = sum(j["ntask"] for j in pend); S["pend_slots"] = sum(j["slots"] * j["ntask"] for j in pend)
     cls = {}
     for c in ("1-8", "9-39", "40", "41+"):
         p = [j for j in pend if size_class(j["slots"]) == c]; r = [j for j in run if size_class(j["slots"]) == c]
-        w = sorted(j["age"] for j in p if j["state"] == "qw")   # held (hqw) / error (Eqw) jobs are not waiting for resources
-        cls[c] = dict(run=len(r), run_slots=sum(j["slots"] for j in r), pend=sum(j["ntask"] for j in p), pend_slots=sum(j["slots"] * j["ntask"] for j in p), med=w[len(w) // 2] if w else None, oldest=w[-1] if w else None,
-                      held=sum(1 for j in p if j["state"].startswith(("h", "E"))))
+        w = sorted(j["age"] for j in p if j["state"] == "qw" and j["age"] < STALE)   # held (hqw) / error (Eqw) jobs are not waiting for resources; jobs older than STALE are listed separately
+        cls[c] = dict(run=len(r), run_slots=sum(j["slots"] for j in r), run_nodes=sum(nn(j) for j in r), pend=sum(j["ntask"] for j in p), pend_slots=sum(j["slots"] * j["ntask"] for j in p),
+                      pend_nodes=sum(nn(j) * j["ntask"] for j in p if j["state"] == "qw"), med=w[len(w) // 2] if w else None, oldest=w[-1] if w else None, recent=len(w),
+                      stale=sum(1 for j in p if j["state"] == "qw" and j["age"] >= STALE), held=sum(1 for j in p if j["state"].startswith(("h", "E"))))
     S["classes"] = cls
     users = defaultdict(lambda: dict(run=0, slots=0, pend=0, pslots=0))
     for j in jobs:
@@ -157,7 +163,8 @@ def summarize(hosts, gc, jobs, budgets, me, excl=(), fits=(8, 16, 40)):
     queued = sorted([j for j in pend if j["state"] == "qw"], key=lambda j: -j["prior"]); S["queued"] = len(queued)
     for j in jobs:
         if j in queued:
-            ahead = [k for k in queued if k["prior"] > j["prior"]]; j["rank"] = len(ahead) + 1; j["slots_ahead"] = sum(k["slots"] * k["ntask"] for k in ahead)
+            ahead = [k for k in queued if k is not j and (k["prior"] > j["prior"] or (k["prior"] == j["prior"] and k["when"] <= j["when"]))]   # equal priority: older first
+            j["rank"] = len(ahead) + 1; j["slots_ahead"] = sum(k["slots"] * k["ntask"] for k in ahead); j["nodes_ahead"] = sum(nn(k) * k["ntask"] for k in ahead)
     S["mine"] = sorted([j for j in jobs if j["user"] == me], key=lambda j: (not j["running"], j["when"]))
     seen = defaultdict(list)
     for q in gc:
@@ -165,31 +172,39 @@ def summarize(hosts, gc, jobs, budgets, me, excl=(), fits=(8, 16, 40)):
     S["queues"] = sorted(((k, v) for k, v in seen.items()), key=lambda kv: -kv[0][2])
     S["budgets"] = budgets
     S["nodes"] = dict(total=len(hosts), usable=sum(h["state"] == "ok" for h in hosts), disabled=sum(h["state"] == "disabled" for h in hosts), down=sum(h["state"] == "down" for h in hosts))
+    okh = [h for h in hosts if h["state"] == "ok"]; S["node_use"] = dict(usable=len(okh), free=sum(1 for h in okh if h["used"] == 0), busy=sum(1 for h in okh if h["used"] > 0))
     S["slots"] = dict(used=sum(h["used"] for h in hosts if h["state"] == "ok"), tot=sum(h["tot"] for h in hosts if h["state"] == "ok"))
     return S
 
 
 # ------------------------------------------------------------------ rendering (sections -> rich or plain)
 def sections(S, a, now):
-    out = []; n = S["nodes"]; sl = S["slots"]; f40 = sum(p["fit"].get(40, 0) for p in S["pools"])
-    out.append(("Overview", None, [
-        ["Nodes", f"{n['total']} CPU nodes: [green]{n['usable']} usable[/], [yellow]{n['disabled']} disabled/unknown[/] (queue flags d/u/E), [red]{n['down']} down[/]"],
-        ["Slots (usable nodes)", f"{sl['used']:,} / {sl['tot']:,}  {bar(sl['used'] / sl['tot'] if sl['tot'] else 0, 24)}"],
-        [("A 40-slot job needs" if S["exclusive"] else "A 40-slot job fits on"), (f"[bold]{f40}[/] completely free node(s)" if S["exclusive"] else f"[bold]{f40}[/] usable nodes (slot count only)") + ("  [green](can start now unless priority / reservations hold it)[/]" if f40 else "  [red](will queue)[/]")]]
-        + ([["Exclusive hosts", "[yellow]jobs request " + ", ".join(S["exclusive"]) + " (complex relation EXCL): each job takes a whole node whatever its slot count, so only completely free nodes count[/]"]] if S["exclusive"] else []) + [
-        ["Jobs", f"{S['run_jobs']} running ({S['run_slots']:,} slots), {S['pend_jobs']} pending ({S['pend_slots']:,} slots)"],
-        ["Your jobs", f"{sum(1 for j in S['mine'] if j['running'])} running, {sum(1 for j in S['mine'] if not j['running'])} pending"],
-    ] + [["Budget " + p, f"{b:,.2f}" + ("  [red](empty)[/]" if b <= 0 else "")] for p, m, b in S["budgets"] if b > 0 or p == "UKCP_ED_P"]))
-    rows = []
+    out = []; n = S["nodes"]; sl = S["slots"]; nu = S["node_use"]; ex = bool(S["exclusive"]); nfree = nu["free"]
+    ov = [["Nodes", f"{n['total']} CPU nodes: [green]{n['usable']} usable[/], [yellow]{n['disabled']} disabled/unknown[/] (queue flags d/u/E), [red]{n['down']} down[/]"]]
+    if ex:
+        ov += [["Usable nodes busy", f"[bold]{nu['busy']}[/] / {nu['usable']}  {bar(nu['busy'] / nu['usable'] if nu['usable'] else 0, 24)}   [bold]{nfree} completely free[/]" + ("" if nfree else "  [red](cluster full)[/]")],
+               ["Running jobs hold", f"~{S['run_nodes']} nodes (sum of ceil(slots / {CORES})) in {S['run_jobs']} jobs, {S['run_slots']:,} slots"],
+               ["Queued demand", f"{S['pend_jobs']} pending jobs = ~{S['pend_nodes']} nodes of work in 'qw' ({S['pend_slots']:,} slots); [bold]{nfree}[/] free node(s) now"],
+               ["Exclusive hosts", "[yellow]" + ", ".join(S["exclusive"]) + " (complex relation EXCL): every job takes whole node(s) whatever its slot count: a node with ANY job is full[/]"]]
+    else:
+        f40 = sum(p["fit"].get(40, 0) for p in S["pools"])
+        ov += [["Slots (usable nodes)", f"{sl['used']:,} / {sl['tot']:,}  {bar(sl['used'] / sl['tot'] if sl['tot'] else 0, 24)}"],
+               ["A 40-slot job fits on", f"[bold]{f40}[/] usable nodes (slot count only)" + ("  [green](can start now unless priority / reservations hold it)[/]" if f40 else "  [red](will queue)[/]")],
+               ["Jobs", f"{S['run_jobs']} running ({S['run_slots']:,} slots), {S['pend_jobs']} pending ({S['pend_slots']:,} slots)"]]
+    ov += [["Your jobs", f"{sum(1 for j in S['mine'] if j['running'])} running, {sum(1 for j in S['mine'] if not j['running'])} pending"]]
+    ov += [["Budget " + p, f"{b:,.2f}" + ("  [red](empty)[/]" if b <= 0 else "")] for p, m, b in S["budgets"] if b > 0 or p == "UKCP_ED_P"]
+    out.append(("Overview", None, ov)); rows = []
     for p in S["pools"]:
-        rows.append([p["pool"], "%dc/%s" % (p["cpus"], short_mem(p["mem"])), str(p["nodes"]), f"[green]{p['free']}[/]", str(p["part"]), f"[red]{p['full']}[/]", f"[yellow]{p['disabled']}[/]" + ("*" if p["idle_but_off"] else ""),
-                     f"[red]{p['down']}[/]", bar(p["used"] / p["tot"] if p["tot"] else 0), "/".join(str(v) for v in p["fit"].values())])
+        tail = [f"[red]{p['down']}[/]", bar(p["busy"] / p["usable"] if p["usable"] else 0)] if ex else [f"[red]{p['down']}[/]", bar(p["used"] / p["tot"] if p["tot"] else 0), "/".join(str(v) for v in p["fit"].values())]
+        mid = [str(p["usable"]), f"[green]{p['free']}[/]", f"[red]{p['busy']}[/]"] if ex else [f"[green]{p['free']}[/]", str(p["part"]), f"[red]{p['full']}[/]"]
+        rows.append([p["pool"], "%dc/%s" % (p["cpus"], short_mem(p["mem"])), str(p["nodes"])] + mid + [f"[yellow]{p['disabled']}[/]" + ("*" if p["idle_but_off"] else "")] + tail)
     idle_off = sum(p["idle_but_off"] for p in S["pools"])
-    out.append(("Node pools  (free = usable, every slot free; part = partly used; full = no free slot; disabled = every queue has d/u/E; down = no load report)",
-                ["pool", "type", "nodes", "free", "part", "full", "disabled", "down", "slots used", "fit " + "/".join(str(k) for k in (S["pools"][0]["fit"] if S["pools"] else {}))], rows))
+    head = (["pool", "type", "nodes", "usable", "free", "busy", "disabled", "down", "busy share"] if ex else ["pool", "type", "nodes", "free", "part", "full", "disabled", "down", "slots used", "fit 8/16/40"])
+    out.append(("Node pools  (usable = not disabled / unknown / error on every queue; free = no job at all" + ("; busy = any job: exclusive hosts)" if ex else "; part / full by slots)"), head, rows))
     if idle_off: out.append(("", None, [["*", f"{idle_off} disabled/down nodes look idle (load < 1) but SGE will not schedule on them: do not count them as free"]]))
-    out.append(("Queue pressure by job size (slots per job)", ["size", "running", "run slots", "pending", "pend slots", "median wait", "oldest wait", "held/error"],
-                [[c, str(v["run"]), f"{v['run_slots']:,}", str(v["pend"]), f"{v['pend_slots']:,}", hms(v["med"]) if v["med"] is not None else "-", hms(v["oldest"]) if v["oldest"] is not None else "-", str(v["held"])] for c, v in S["classes"].items()]))
+    out.append((f"Queue pressure by job size (slots per job; 'qw' only: waits of jobs pending > {STALE // 86400} days are shown as stale, held / error jobs separately)",
+                ["size", "running", "run nodes", "pending", "pend nodes", "median wait", "oldest wait", "stale", "held/error"],
+                [[c, str(v["run"]), f"{v['run_nodes']:,}", str(v["pend"]), f"{v['pend_nodes']:,}", hms(v["med"]) if v["med"] is not None else "-", hms(v["oldest"]) if v["oldest"] is not None else "-", str(v["stale"]), str(v["held"])] for c, v in S["classes"].items()]))
     if not a.no_users:
         out.append(("Top users by running slots", ["user", "running jobs", "slots", "pending jobs", "pending slots"],
                     [[("[bold cyan]" + u + "[/]" if u == S["me"] else u), str(v["run"]), f"{v['slots']:,}", str(v["pend"]), f"{v['pslots']:,}"] for u, v in S["users"][:a.top]]))
@@ -198,9 +213,13 @@ def sections(S, a, now):
     mine = []
     for j in S["mine"]:
         sc = {"r": "green", "qw": "yellow", "Eqw": "red", "hqw": "dim"}.get(j["state"], "white")
-        qh = j["queue"].split(".")[0].replace("node-", ""); mine.append([j["id"] + (("." + j["task"]) if j["task"] else ""), j["name"][:12], f"[{sc}]{j['state']}[/]", qh or "-", str(j["slots"]) + (f" x{j['ntask']}" if j["ntask"] > 1 else ""),
-                     j["when"].strftime("%d/%m %H:%M"), ("running " if j["running"] else "waiting ") + hms(j["age"]),
-                     ("#%s/%s, %s slots ahead" % (format(j["rank"], ","), format(S["queued"], ","), format(j["slots_ahead"], ","))) if "rank" in j else ("held / error: not queued" if not j["running"] else "")])
+        qh = j["queue"].split(".")[0].replace("node-", "")
+        rk = ""
+        if "rank" in j:
+            rk = "#%s/%s, ~%s nodes ahead" % (format(j["rank"], ","), format(S["queued"], ","), format(j["nodes_ahead"], ",")) + ("; priority 0: not scored yet" if j["prior"] == 0 else "")
+        elif not j["running"]: rk = "held / error: not queued"
+        mine.append([j["id"] + (("." + j["task"]) if j["task"] else ""), j["name"][:12], f"[{sc}]{j['state']}[/]", qh or "-", str(j["slots"]) + (f" x{j['ntask']}" if j["ntask"] > 1 else ""),
+                     j["when"].strftime("%d/%m %H:%M"), ("running " if j["running"] else "waiting ") + hms(j["age"]), rk])
     out.append(("Your jobs", ["job", "name", "st", "queue@host", "slots", "when", "so far", "priority rank"], mine or [["[dim]none[/]", "", "", "", "", "", "", ""]]))
     return out
 

@@ -65,5 +65,20 @@ def test_exclusive_mode_rank_and_held(tmp_path):
     c12m = next(p for p in S["pools"] if p["pool"] == "c12m"); assert c12m["fit"]["40"] == 1 and c12m["fit"]["8"] == 1, c12m          # only the completely free node counts under EXCL
     assert S["classes"]["1-8"]["oldest"] < 10 * 3600, S["classes"]["1-8"]                                                        # the 2023 error-state job is not a queue wait
     out = run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--plain")
-    assert "completely free node" in out and "relation EXCL" in out and "slots ahead" in out and "#" in out, out[:2500]
+    assert "completely free" in out and "relation EXCL" in out and "nodes ahead" in out and "Usable nodes busy" in out and "any job is full" in out.replace("a node with ANY job is full", "any job is full").lower().replace("any job is full", "any job is full"), out[:2500]
     assert "#3/" in out   # 2335902 (3.48133) and 2335970 (3.10000) queue behind the 9.0 job: ranks 2 and 3 of the 6 queued (2340011 2.7, 2340020 9.0 ... )
+
+
+def test_exclusive_counting_stale_and_ties(tmp_path):
+    d = str(tmp_path); write_fixture(d); open(os.path.join(d, "complexes.txt"), "w").write(COMPLEXES)
+    with open(os.path.join(d, "qstat_all.txt"), "a") as f:
+        f.write("2340030 0.50000 stalejob    zed01        qw    01/01/2026 00:00:00                                    8\n"          # waiting 300 days: stale, not a median
+                "2340031 0.00000 newone      mmm0037      qw    10/29/2026 20:59:00                                    40\n"           # priority 0 (not scored yet), the newest
+                "2340032 0.00000 zero2       zed01        qw    10/29/2026 20:58:00                                   120\n")           # also 0, older: ahead of 2340031, and 3 nodes
+    S = json.loads(run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--json"))
+    nu = S["node_use"]; assert (nu["usable"], nu["free"], nu["busy"]) == (3, 1, 2), nu          # exclusive: the half-used node is BUSY, not 'part'
+    assert S["run_nodes"] == 1 + 1 and S["pend_nodes"] >= 3 + 1, (S["run_nodes"], S["pend_nodes"])   # 8 slots = 1 node, 40 = 1, 120 = 3 (ceil(slots / 40))
+    c = S["classes"]["1-8"]; assert c["stale"] == 1 and c["oldest"] < 10 * 3600, c              # the 300-day job is stale and out of the wait statistics
+    out = run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--plain")
+    assert "priority 0: not scored yet" in out, out[-900:]
+    row = next(l for l in out.splitlines() if "2340031" in l); assert "#6/6" in row and "~26 nodes ahead" in row, row   # last of 6 queued: behind every scored job and the older priority-0 job (1 + 1 + 20 + 1 + 3 nodes ahead)
