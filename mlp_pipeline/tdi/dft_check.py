@@ -157,8 +157,9 @@ def finish(a, rows, dirs, meta):
     os.makedirs(a.o, exist_ok=True)
     json.dump(dict(meta, rows=rows), open(os.path.join(a.o, "manifest.json"), "w"), indent=1)
     open(os.path.join(a.o, "dirs.txt"), "w").write("".join(d + "\n" for d in dirs))
-    print(f"{len(dirs)} single-point directories in {a.o} (list: {a.o}/dirs.txt). Young CPU nodes (SGE), from the repo root, 16 ranks per directory, CHUNK directories per task:\n"
-          f"  CHUNK=1 qsub -V -P Gold -A UKCP_ED_P -pe smp 16 -l mem=4G,h_rt=6:00:00 -t 1-{len(dirs)} -tc 10 mlp_pipeline/young_dft_check.sge {a.o}\n"
+    ch = 10 if len(dirs) > 10 else 1; nt = -(-len(dirs) // ch)
+    print(f"{len(dirs)} single-point directories in {a.o} (list: {a.o}/dirs.txt). Young jobs are NODE-EXCLUSIVE (exc=true): ask for the whole node (40 slots) and pack it, 5 points at once with 8 ranks each, {ch} points per task:\n"
+          f"  CHUNK={ch} PAR=5 NP=40 qsub -V -P Gold -A UKCP_ED_P -pe smp 40 -l mem=4G,h_rt=6:00:00 -t 1-{nt} -tc 10 mlp_pipeline/young_dft_check.sge {a.o}      (big cells: PAR=1, one point on 40 ranks)\n"
           f"  progress:  ~/grace-venv-cpu/bin/python mlp_pipeline/tdi/dft_check.py status {a.o}")
 
 

@@ -58,6 +58,8 @@ def test_sge_wrapper_and_modes(tmp_path):
     wo = os.path.join(sd, "selftest_small", "OUTCAR"); tr = str(tmp_path / "train_OUTCAR"); open(tr, "w").write(open(wo).read().replace("1100.0", "1000.0"))
     out = run("mlp_pipeline/tdi/dft_check.py", "audit", sd, "--template", tpl, "--train-outcar", tr, "--new-outcar", wo)
     assert "2 of 2" in out and "[single-point tag]" in out and "NCORE: template '16' -> '12'   [parallelization" in out and "UNEXPECTED" not in out and "<-- differs" in out, out[-1200:]
+    for x in [n for n in sorted(os.listdir(wd)) if os.path.isdir(os.path.join(wd, n))][:6]: os.remove(os.path.join(wd, x, "OUTCAR"))   # PAR: six points at once-ish on one exclusive node, NP split between them
+    r = sge(dict(PAR="3", NP="12"), wd, tmp_path); assert r.returncode == 0 and "PAR 3: 3 directories at once, 4 ranks each" in r.stdout and "15 of 15 finished" in r.stdout and r.stdout.count("finished /") == 6, r.stdout[-1800:]
     g = str(tmp_path / "guard"); os.makedirs(g); ds = [os.path.join(wd, x) for x in ("f0_host", "f1_host")]
     for x in ds: os.remove(os.path.join(x, "OUTCAR"))
     open(os.path.join(g, "dirs.txt"), "w").write("\n".join(ds) + "\n")

@@ -139,6 +139,8 @@ Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |d
 | 2335963 gold | Gold | node-c12p-003 | 20:32:10 | 20:34:19 | 2 min 9 s | 1536 s |
 | 2335965 free | Free (-P Free -A UKCP_ED_P) | node-c12n-007 | 20:32:34 | 20:50:58 | 18 min 24 s | 1547 s |
 
+**Node-exclusive scheduling (qconf -sc, 2026-10-30): the complexes `exc` (c12 nodes), `exw`, `exy`, `exz` have relation EXCL and the job filter sets exc=true: every job gets a whole node whatever its slot count (an 8-slot qrsh holds a node alone; yq shows the real picture: ~2 of 143 usable nodes free). Use 40 slots, fill the node (10 x 4 for GRACE), pack small tasks (PAR / CHUNK). The 8-slot benchmark numbers are unaffected, but a 40-process run was possible in those shells.**
+
 **What this means (2026-10-30).**
 * CPU nodes lose on speed (an A100 does the work of ~11-16 nodes), so they are for MANY INDEPENDENT runs on free, wide capacity, not for anything on the critical path or a single long trajectory (stabnpt) or fine-tuning.
 * TDI insertion, one state point (17 lambda x 16,000 steps at 0.5 fs = 8 ps): A100 ~6.6 h; CPU at 10 x 4: 4.7 s per call = 9.4 s per step per lambda process -> ~42 h per lambda, 10 lambda per node at once -> 2 waves = ~84 node-hours (fits the 48 h limit per lambda with restarts, 2 nodes in parallel).
