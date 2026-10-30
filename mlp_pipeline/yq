@@ -1,0 +1,8 @@
+#!/bin/bash -l
+# yq: Young CPU cluster status (mlp_pipeline/young_queue.py) with the right Python. Alias:   alias yq='bash -l /lustre/scratch/mmm0037/H3O/mlp_pipeline/yq'      yq --watch 30
+# Loads module python/3.11.4-gnu-10.2.0 + ~/grace-venv-cpu (rich is installed there) inside this process only, so your shell's modules are untouched; without the venv it falls back to the system python3 (plain text).
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); VENV=${CPU_VENV:-$HOME/grace-venv-cpu}
+if type module >/dev/null 2>&1 && [ -x "$VENV/bin/python" ]; then
+  module unload -f compilers mpi gcc-libs >/dev/null 2>&1; module load python/3.11.4-gnu-10.2.0 >/dev/null 2>&1 && exec "$VENV/bin/python" "$HERE/young_queue.py" "$@"
+fi
+exec python3 "$HERE/young_queue.py" --plain "$@"
