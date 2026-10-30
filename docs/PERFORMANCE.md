@@ -103,7 +103,7 @@ Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |d
 
 ## CPU nodes on Young (SGE) vs the A100 (measured 2026-10-29/30, mlp_pipeline/cpu_bench.py, GRACE ft_m2, tensorpotential 0.6.1 / TF 2.20 on CPU)
 **Hardware / access.** Young CPU nodes: Xeon Gold 6248, 2 sockets x 20 cores (80 hardware threads, 40 slots), 188 GB, RHEL 7.9 (glibc 2.17); SGE (`qsub` / `qrsh`), not Slurm. `~/grace-venv` (built on the RHEL 9 GPU side) does not run there: use `source mlp_pipeline/young_cpu_env.sh`
-(module `python/3.11.4-gnu-10.2.0` + `~/grace-venv-cpu`). Project / budget: `-P Gold -A UKCP_ED_P`; Free needs `-A UKCP_ED_P` too (`-P Free`), same speed and nodes, only the cost differs (check `gbalance -u $USER`). Whole node: `-pe smp 40`. Interactive: `qrsh -P Gold -A UKCP_ED_P -pe smp 8 -l mem=4G,h_rt=2:00:00 -now no` (an 8-slot request started in minutes; a 40-slot one waited long at first, see the queue-wait row below).
+(module `python/3.11.4-gnu-10.2.0` + `~/grace-venv-cpu`). Project / budget: `-P Gold -A UKCP_ED_P`; Free needs `-A UKCP_ED_P` too (`-P Free`), same speed and nodes, only the cost differs (check `gbalance -u $USER`). Whole node: `-pe smp 40`. Interactive: `qrsh -P Gold -A UKCP_ED_P -pe smp 8 -l mem=4G,h_rt=2:00:00 -now no` (an 8-slot request started in minutes; a 40-slot interactive request waited long at first; the 40-slot batch jobs started in 2 / 18 min, table below).
 
 **Measured on 8 slots (one interactive job, node-c12n-006), calls = energy + forces of one cell, no MD overhead:**
 
@@ -118,13 +118,32 @@ Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |d
 * First call 12-20 s (warm-up), model load 8 s alone but 55-90 s with 4-8 processes starting together (Lustre): matters for short runs only.
 * The 325-atom insertion cell is FASTER per call than the 250-atom pure-H cell (7.7 vs 9.8 s); reason not established (pure H is denser: more neighbours per atom is a guess).
 
-**Extrapolation to a whole node (NOT measured yet; the 40-slot runs below replace it): 40 single-thread processes, 10-30 % contention -> ~3.1-3.6 steps/s pure H (~0.15x an A100), ~2.3-2.6 steps/s insertion (~0.2x).** Rule of thumb: a 40-core node is roughly 10-20 % of an A100 for our cells. The docs' earlier bar
-for writing SGE TDI scripts was ~0.3x, so on speed alone CPU nodes do not win; they are free (Free queue, up to 48 h) and wide, so they are for MANY INDEPENDENT single-thread runs (EOS map, h3o_static, DFT checks), not for stabnpt (one long ~800-atom trajectory) or fine-tuning.
+**Measured on a whole node (jobs 2335963 Gold node-c12p-003, 2335965 Free node-c12n-007; 40 slots, 10 calls per process, label gold_* / free_* in runs/cpu_bench.jsonl):**
 
-| run | queue | node | slots | submitted -> started (queue wait) | result |
+| cell | layout | s/call per process | node total (steps/s) | vs A100 | model load (s) |
 |---|---|---|---|---|---|
-| 2335963 (label gold, cells H and insert, layouts 40x1 20x2 10x4) | Gold | node-c12p-003 | 40 | started 20:32:17 (wait: pending qacct) | pending: paste `cpu_bench.py --table` |
-| 2335965 (label free, same) | Free (-P Free -A UKCP_ED_P) | node-c12n-007 | 40 | started 20:48:56 (wait: pending qacct) | pending |
+| pure H, 250 atoms | 40 x 1 | 15.6 | 1.41 | 0.06x | 273-284 |
+| pure H | 20 x 2 | 12.2-12.3 | 1.63-1.64 | 0.07x | 192-197 |
+| pure H | 10 x 4 | 6.1 | 1.63-1.65 | 0.07x | 38-39 |
+| insertion, 325 atoms (2 calls per step) | 40 x 1 | 13.5-14.1 | 0.96 | 0.08x | 96-124 |
+| insertion | 20 x 2 | 9.5-9.6 | 1.04-1.05 | 0.09x | 186-187 |
+| insertion | 10 x 4 | 4.7 | 1.06-1.07 | 0.09x | 35 |
+
+* **A whole 40-core node = 6-9 % of one A100 (about 11-16 GPUs-worth of nodes per A100 for TDI-like work).** My earlier extrapolation (0.15-0.2x, from the 8-slot runs) was ~2x too optimistic: 40 one-thread processes slow each other by ~75 % (15.6 s per call vs 8.8 s alone; at 8 processes only 11 %): memory / cache bandwidth.
+* **Best layout: 10 processes x 4 threads (or 20 x 2); 40 x 1 is the worst** (and its start-up, model load 100-280 s with 40 processes, is the slowest). 5 x 8 / 8 x 5 and the fcc H2O cell are not measured yet.
+* **Gold = Free in speed (within 1 %)**; same node type. Account string for both: UKCP_ED_P. Both jobs ran 25.6 min wall, exit 0.
+* **Queue wait (qacct, same minute of submission, 40 slots): Gold 2 min 9 s; Free 18 min 24 s** (one sample each; the queue was fairly empty).
+
+| run | queue | node | submitted | started | wait | wall |
+|---|---|---|---|---|---|---|
+| 2335963 gold | Gold | node-c12p-003 | 20:32:10 | 20:34:19 | 2 min 9 s | 1536 s |
+| 2335965 free | Free (-P Free -A UKCP_ED_P) | node-c12n-007 | 20:32:34 | 20:50:58 | 18 min 24 s | 1547 s |
+
+**What this means (2026-10-30).**
+* CPU nodes lose on speed (an A100 does the work of ~11-16 nodes), so they are for MANY INDEPENDENT runs on free, wide capacity, not for anything on the critical path or a single long trajectory (stabnpt) or fine-tuning.
+* TDI insertion, one state point (17 lambda x 16,000 steps at 0.5 fs = 8 ps): A100 ~6.6 h; CPU at 10 x 4: 4.7 s per call = 9.4 s per step per lambda process -> ~42 h per lambda, 10 lambda per node at once -> 2 waves = ~84 node-hours (fits the 48 h limit per lambda with restarts, 2 nodes in parallel).
+* EOS map (77 tasks x 16 volumes x 7000 steps = 8.6 M steps of 250-330 atoms): at 1.0-1.6 steps/s per node ~1,500-2,400 node-hours (4-5 days on 20 free nodes); the GPU estimate in young_eos_map.sbatch is ~77-110 GPU-hours. (My earlier 770 node-hour figure assumed 40 x 1 at 11-13 s per call and was wrong.)
+* DFT checks (VASP, CPU-only on Young) and small-cell relaxations (h3o_static, 36-64 atoms) are the natural CPU jobs.
 Reproduce / extend: `qsub -V -P Gold -A UKCP_ED_P -pe smp 40 -l h_rt=1:30:00 mlp_pipeline/young_cpu_bench.sge` with `CELLS`, `CALLS`, `LAYOUTS`, `BENCH_LABEL` exported (header of that file); table: `python mlp_pipeline/cpu_bench.py --table runs/cpu_bench.jsonl`; queue wait: `qacct -j <jobid> | grep -E "qsub_time|start_time"`.
 
 ## Using the faster options in production (after the benchmark)
