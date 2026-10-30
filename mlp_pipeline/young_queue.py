@@ -21,8 +21,8 @@ try:
 except Exception:
     HAVE_RICH = False
 
-FILES = dict(hosts="qhost_q.txt", gc="qstat_gc.txt", jobs="qstat_all.txt", budgets="budgets.txt")
-CMDS = dict(hosts="qhost -q", gc="qstat -g c", jobs="qstat -u '*'", budgets="budgets 2>/dev/null")
+FILES = dict(hosts="qhost_q.txt", gc="qstat_gc.txt", jobs="qstat_all.txt", budgets="budgets.txt", complexes="complexes.txt")
+CMDS = dict(hosts="qhost -q", gc="qstat -g c", jobs="qstat -u '*'", budgets="budgets 2>/dev/null", complexes="qconf -sc 2>/dev/null")
 BAD = set("udDE")   # queue-instance state flags that stop scheduling (a alarm / s suspended / S subordinate / c, C are different and not counted here)
 
 
@@ -97,6 +97,11 @@ def parse_jobs(text, now):
     return jobs
 
 
+def parse_exclusive(text):
+    """names of complexes with relation EXCL (SGE's exclusive-host request: a job asking for it, here added to every job as exc=true, needs a host to itself)"""
+    return [t[0] for t in (l.split() for l in text.splitlines()) if len(t) >= 4 and not t[0].startswith("#") and t[3] == "EXCL"]
+
+
 def parse_budgets(text):
     out = []
     for line in text.splitlines():
@@ -124,22 +129,22 @@ def size_class(s):
     return "1-8" if s <= 8 else "9-39" if s < 40 else "40" if s == 40 else "41+"
 
 
-def summarize(hosts, gc, jobs, budgets, me, fits=(8, 16, 40)):
-    S = dict(pools=[], me=me)
+def summarize(hosts, gc, jobs, budgets, me, excl=(), fits=(8, 16, 40)):
+    S = dict(pools=[], me=me, exclusive=list(excl))
     pools = defaultdict(list)
     for h in hosts: pools[h["pool"]].append(h)
     for name, hs in sorted(pools.items()):
         ok = [h for h in hs if h["state"] == "ok"]; cpu = Counter(h["ncpu"] for h in hs).most_common(1)[0][0]
         S["pools"].append(dict(pool=name, nodes=len(hs), cpus=cpu, mem=hs[0]["memtot"], usable=len(ok), free=sum(1 for h in ok if h["used"] == 0), full=sum(1 for h in ok if h["free"] == 0),
                                part=sum(1 for h in ok if 0 < h["free"] < h["tot"]), disabled=sum(1 for h in hs if h["state"] == "disabled"), down=sum(1 for h in hs if h["state"] == "down"),
-                               used=sum(h["used"] for h in ok), tot=sum(h["tot"] for h in ok), fit={n: sum(1 for h in ok if h["free"] >= n) for n in fits},
+                               used=sum(h["used"] for h in ok), tot=sum(h["tot"] for h in ok), fit={n: (sum(1 for h in ok if h["used"] == 0 and h["tot"] >= n) if excl else sum(1 for h in ok if h["free"] >= n)) for n in fits},
                                idle_but_off=sum(1 for h in hs if h["state"] != "ok" and h["load"] is not None and h["load"] < 1.0)))
     run = [j for j in jobs if j["running"]]; pend = [j for j in jobs if not j["running"]]
     S["run_jobs"] = len(run); S["run_slots"] = sum(j["slots"] for j in run); S["pend_jobs"] = sum(j["ntask"] for j in pend); S["pend_slots"] = sum(j["slots"] * j["ntask"] for j in pend)
     cls = {}
     for c in ("1-8", "9-39", "40", "41+"):
         p = [j for j in pend if size_class(j["slots"]) == c]; r = [j for j in run if size_class(j["slots"]) == c]
-        w = sorted(j["age"] for j in p)
+        w = sorted(j["age"] for j in p if j["state"] == "qw")   # held (hqw) / error (Eqw) jobs are not waiting for resources
         cls[c] = dict(run=len(r), run_slots=sum(j["slots"] for j in r), pend=sum(j["ntask"] for j in p), pend_slots=sum(j["slots"] * j["ntask"] for j in p), med=w[len(w) // 2] if w else None, oldest=w[-1] if w else None,
                       held=sum(1 for j in p if j["state"].startswith(("h", "E"))))
     S["classes"] = cls
@@ -149,6 +154,10 @@ def summarize(hosts, gc, jobs, budgets, me, fits=(8, 16, 40)):
         if j["running"]: u["run"] += 1; u["slots"] += j["slots"]
         else: u["pend"] += j["ntask"]; u["pslots"] += j["slots"] * j["ntask"]
     S["users"] = sorted(users.items(), key=lambda kv: (-kv[1]["slots"], -kv[1]["pslots"]))
+    queued = sorted([j for j in pend if j["state"] == "qw"], key=lambda j: -j["prior"]); S["queued"] = len(queued)
+    for j in jobs:
+        if j in queued:
+            ahead = [k for k in queued if k["prior"] > j["prior"]]; j["rank"] = len(ahead) + 1; j["slots_ahead"] = sum(k["slots"] * k["ntask"] for k in ahead)
     S["mine"] = sorted([j for j in jobs if j["user"] == me], key=lambda j: (not j["running"], j["when"]))
     seen = defaultdict(list)
     for q in gc:
@@ -166,7 +175,8 @@ def sections(S, a, now):
     out.append(("Overview", None, [
         ["Nodes", f"{n['total']} CPU nodes: [green]{n['usable']} usable[/], [yellow]{n['disabled']} disabled/unknown[/] (queue flags d/u/E), [red]{n['down']} down[/]"],
         ["Slots (usable nodes)", f"{sl['used']:,} / {sl['tot']:,}  {bar(sl['used'] / sl['tot'] if sl['tot'] else 0, 24)}"],
-        ["A 40-slot job fits on", f"[bold]{f40}[/] usable nodes right now" + ("  [green](should start at once)[/]" if f40 else "  [red](will queue)[/]")],
+        [("A 40-slot job needs" if S["exclusive"] else "A 40-slot job fits on"), (f"[bold]{f40}[/] completely free node(s)" if S["exclusive"] else f"[bold]{f40}[/] usable nodes (slot count only)") + ("  [green](can start now unless priority / reservations hold it)[/]" if f40 else "  [red](will queue)[/]")]]
+        + ([["Exclusive hosts", "[yellow]jobs request " + ", ".join(S["exclusive"]) + " (complex relation EXCL): each job takes a whole node whatever its slot count, so only completely free nodes count[/]"]] if S["exclusive"] else []) + [
         ["Jobs", f"{S['run_jobs']} running ({S['run_slots']:,} slots), {S['pend_jobs']} pending ({S['pend_slots']:,} slots)"],
         ["Your jobs", f"{sum(1 for j in S['mine'] if j['running'])} running, {sum(1 for j in S['mine'] if not j['running'])} pending"],
     ] + [["Budget " + p, f"{b:,.2f}" + ("  [red](empty)[/]" if b <= 0 else "")] for p, m, b in S["budgets"] if b > 0 or p == "UKCP_ED_P"]))
@@ -189,8 +199,9 @@ def sections(S, a, now):
     for j in S["mine"]:
         sc = {"r": "green", "qw": "yellow", "Eqw": "red", "hqw": "dim"}.get(j["state"], "white")
         qh = j["queue"].split(".")[0].replace("node-", ""); mine.append([j["id"] + (("." + j["task"]) if j["task"] else ""), j["name"][:12], f"[{sc}]{j['state']}[/]", qh or "-", str(j["slots"]) + (f" x{j['ntask']}" if j["ntask"] > 1 else ""),
-                     j["when"].strftime("%d/%m %H:%M"), ("running " if j["running"] else "waiting ") + hms(j["age"])])
-    out.append(("Your jobs", ["job", "name", "st", "queue@host", "slots", "when", "so far"], mine or [["[dim]none[/]", "", "", "", "", "", ""]]))
+                     j["when"].strftime("%d/%m %H:%M"), ("running " if j["running"] else "waiting ") + hms(j["age"]),
+                     ("#%s of %s, %s slots ahead" % (format(j["rank"], ","), format(S["queued"], ","), format(j["slots_ahead"], ","))) if "rank" in j else ("held / error: not queued" if not j["running"] else "")])
+    out.append(("Your jobs", ["job", "name", "st", "queue@host", "slots", "when", "so far", "priority rank"], mine or [["[dim]none[/]", "", "", "", "", "", "", ""]]))
     return out
 
 
@@ -202,7 +213,7 @@ def render_rich(secs, S, now, host, console):
         t = Table(title=title, title_justify="left", title_style="bold cyan", box=box.SIMPLE_HEAD, show_header=head is not None, header_style="bold", pad_edge=False)
         if head is None: t.add_column(style="bold", no_wrap=True); t.add_column()
         else:
-            for i, h in enumerate(head): t.add_column(h, justify="left" if i == 0 else "right" if h not in ("queue@host", "so far", "when", "queues", "name") else "left", no_wrap=True)
+            for i, h in enumerate(head): t.add_column(h, justify="left" if i == 0 else "right" if h not in ("queue@host", "so far", "when", "queues", "name", "priority rank") else "left", no_wrap=True)
         for r in rows: t.add_row(*r)
         console.print(t)
 
@@ -227,7 +238,7 @@ def main():
     console = Console(width=max(100, Console().width)) if HAVE_RICH and not a.plain else None; host = os.uname()[1] if hasattr(os, "uname") else "?"
     while True:
         now = datetime.datetime.strptime(a.now, "%Y-%m-%d %H:%M:%S") if a.now else datetime.datetime.now()
-        raw = collect(a); S = summarize(parse_hosts(raw["hosts"]), parse_gc(raw["gc"]), parse_jobs(raw["jobs"], now), parse_budgets(raw["budgets"]), os.environ.get("YQ_USER") or getpass.getuser())
+        raw = collect(a); S = summarize(parse_hosts(raw["hosts"]), parse_gc(raw["gc"]), parse_jobs(raw["jobs"], now), parse_budgets(raw["budgets"]), os.environ.get("YQ_USER") or getpass.getuser(), excl=parse_exclusive(raw["complexes"]))
         if not raw["hosts"] and not raw["jobs"]: print("no output from qhost / qstat: not on Young (or SGE not on PATH); use --from-dir for a saved snapshot"); return 1
         if a.json:
             print(json.dumps({k: v for k, v in S.items() if k not in ("mine", "users", "queues")}, default=str, indent=1)); return 0

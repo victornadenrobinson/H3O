@@ -32,6 +32,9 @@ def write_fixture(d):
                                                     "MCC_discov_kin  ANY,young  0.00\nUKCP_ED_P       ANY        151856.71\n")
 
 
+COMPLEXES = "#name               shortcut   type        relop requestable consumable default  urgency\n#------\nexc                 exc        BOOL        EXCL  YES         YES        0        1000\nh_rt                h_rt       TIME        <=    FORCED      NO         0:0:0    0\n"
+
+
 def run(*args):
     r = subprocess.run([PY, os.path.join(ROOT, "mlp_pipeline", "young_queue.py"), *args], capture_output=True, text=True, env=dict(os.environ, YQ_USER="mmm0037"))
     assert r.returncode == 0, r.stdout + r.stderr
@@ -51,3 +54,16 @@ def test_summary_and_render(tmp_path):
         assert needle in plain, (needle, plain[:1500])
     assert "MCC_discov_kin" not in plain                                                               # zero-balance projects are not listed (only UKCP_ED_P / positive ones)
     rich = run(*common, "--no-users"); assert "Top users" not in rich and "Node pools" in rich
+
+
+def test_exclusive_mode_rank_and_held(tmp_path):
+    d = str(tmp_path); write_fixture(d); open(os.path.join(d, "complexes.txt"), "w").write(COMPLEXES)
+    with open(os.path.join(d, "qstat_all.txt"), "a") as f:   # a pending job of the user with the highest and a lower priority, an error-state ancient job
+        f.write("2340020 9.00000 hi         zed01        qw    10/29/2026 20:55:00                                   16\n2340021 1.00000 ancient    zed01        Eqw   01/01/2023 00:00:00                                    8\n")
+    S = json.loads(run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--json"))
+    assert S["exclusive"] == ["exc"], S["exclusive"]
+    c12m = next(p for p in S["pools"] if p["pool"] == "c12m"); assert c12m["fit"]["40"] == 1 and c12m["fit"]["8"] == 1, c12m          # only the completely free node counts under EXCL
+    assert S["classes"]["1-8"]["oldest"] < 10 * 3600, S["classes"]["1-8"]                                                        # the 2023 error-state job is not a queue wait
+    out = run("--from-dir", d, "--now", "2026-10-29 21:00:00", "--plain")
+    assert "completely free node" in out and "relation EXCL" in out and "slots ahead" in out and "#" in out, out[:2500]
+    assert "#3 of" in out   # 2335902 (3.48133) and 2335970 (3.10000) queue behind the 9.0 job: ranks 2 and 3 of the 6 queued (2340011 2.7, 2340020 9.0 ... )
