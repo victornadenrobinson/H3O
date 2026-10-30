@@ -101,6 +101,32 @@ Self-check on the GPU (float32 model): batched vs single |dE| 1.4e-7 eV/atom, |d
   a heavier H mass in the MD with a larger dt (configurational averages do not depend on the masses), or an adaptive length per lambda value. These change how the
   samples are generated (the expected G stays the same) and need your decision and a validation run.
 
+## CPU nodes on Young (SGE) vs the A100 (measured 2026-10-29/30, mlp_pipeline/cpu_bench.py, GRACE ft_m2, tensorpotential 0.6.1 / TF 2.20 on CPU)
+**Hardware / access.** Young CPU nodes: Xeon Gold 6248, 2 sockets x 20 cores (80 hardware threads, 40 slots), 188 GB, RHEL 7.9 (glibc 2.17); SGE (`qsub` / `qrsh`), not Slurm. `~/grace-venv` (built on the RHEL 9 GPU side) does not run there: use `source mlp_pipeline/young_cpu_env.sh`
+(module `python/3.11.4-gnu-10.2.0` + `~/grace-venv-cpu`). Project / budget: `-P Gold -A UKCP_ED_P`; Free needs `-A UKCP_ED_P` too (`-P Free`), same speed and nodes, only the cost differs (check `gbalance -u $USER`). Whole node: `-pe smp 40`. Interactive: `qrsh -P Gold -A UKCP_ED_P -pe smp 8 -l mem=4G,h_rt=2:00:00 -now no` (an 8-slot request started in minutes; a 40-slot one waited long at first, see the queue-wait row below).
+
+**Measured on 8 slots (one interactive job, node-c12n-006), calls = energy + forces of one cell, no MD overhead:**
+
+| cell | layout (processes x threads) | s/call per process | node total (MD steps/s) | vs A100 |
+|---|---|---|---|---|
+| pure H, 250 atoms | 1 x 1 (alone) | 8.83 | 0.11 | - |
+| pure H, 250 atoms | 8 x 1 | 9.72-9.85 | 0.82 | 0.04x of 22.7 |
+| pure H, 250 atoms | 1 x 8 (8 threads, one process) | 3.83 | 0.26 | 0.01x |
+| insertion, 325 atoms (2 calls per step) | 8 x 1 | 7.71 | 0.52 | 0.05x of 11.5 |
+
+* Threads scale badly (8 threads = 2.5x one thread); one process per core is ~3x better. 8 processes together are ~11 % slower each than one alone (shared caches / memory).
+* First call 12-20 s (warm-up), model load 8 s alone but 55-90 s with 4-8 processes starting together (Lustre): matters for short runs only.
+* The 325-atom insertion cell is FASTER per call than the 250-atom pure-H cell (7.7 vs 9.8 s); reason not established (pure H is denser: more neighbours per atom is a guess).
+
+**Extrapolation to a whole node (NOT measured yet; the 40-slot runs below replace it): 40 single-thread processes, 10-30 % contention -> ~3.1-3.6 steps/s pure H (~0.15x an A100), ~2.3-2.6 steps/s insertion (~0.2x).** Rule of thumb: a 40-core node is roughly 10-20 % of an A100 for our cells. The docs' earlier bar
+for writing SGE TDI scripts was ~0.3x, so on speed alone CPU nodes do not win; they are free (Free queue, up to 48 h) and wide, so they are for MANY INDEPENDENT single-thread runs (EOS map, h3o_static, DFT checks), not for stabnpt (one long ~800-atom trajectory) or fine-tuning.
+
+| run | queue | node | slots | submitted -> started (queue wait) | result |
+|---|---|---|---|---|---|
+| 2335963 (label gold, cells H and insert, layouts 40x1 20x2 10x4) | Gold | node-c12p-003 | 40 | started 20:32:17 (wait: pending qacct) | pending: paste `cpu_bench.py --table` |
+| 2335965 (label free, same) | Free (-P Free -A UKCP_ED_P) | node-c12n-007 | 40 | started 20:48:56 (wait: pending qacct) | pending |
+Reproduce / extend: `qsub -V -P Gold -A UKCP_ED_P -pe smp 40 -l h_rt=1:30:00 mlp_pipeline/young_cpu_bench.sge` with `CELLS`, `CALLS`, `LAYOUTS`, `BENCH_LABEL` exported (header of that file); table: `python mlp_pipeline/cpu_bench.py --table runs/cpu_bench.jsonl`; queue wait: `qacct -j <jobid> | grep -E "qsub_time|start_time"`.
+
 ## Using the faster options in production (after the benchmark)
 
 - MPS with the current engine (interactive job, before the launcher; the daemon ends with the job or with `echo quit | nvidia-cuda-mps-control`):
