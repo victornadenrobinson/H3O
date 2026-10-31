@@ -116,8 +116,9 @@ for _, m in df[(df.phase == "insert") & (~df.tag.str.contains(r"_h\d", regex=Tru
     if len(hh):
         hh = best(hh, m.dt_fs)
         solid.append(dict(kind="insert_bcc" if "_bcc" in m.tag else "insert", P=m.P_target_GPa, T=m.T_K, h=2.0, a=m.N / m.nO, n=int(m.N), dG=m.G_meV_atom - hh.G_meV_atom,
-                          pcorr=float(m.get("P_corr_meV", np.nan)), err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=m.dt_fs != hh.dt_fs, tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))
+                          pcorr=float(m.get("P_corr_meV", np.nan)), err=(m.G_err_meV_atom ** 2 + hh.G_err_meV_atom ** 2) ** .5, caveat=(m.dt_fs != hh.dt_fs) or not np.isfinite(float(m.get("P_corr_meV", np.nan))), tags=f"{m.dir}/{m.tag} | {hh.dir}/{hh.tag}"))   # no stage-0 pressure correction (older run) = mu_H at the cell's own pressure: hollow marker, kept out of the mu0 / s fit
 solid = pd.DataFrame(solid, columns=["kind", "P", "T", "h", "a", "n", "dG", "err", "caveat", "tags", "pcorr"])
+os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True); solid.to_csv(f"{a.out}_table_solid.csv", index=False)   # input of tdi/solubility_check.py --solid (insertion + crystal rows with their caveat flags)
 if len(solid) and (solid.dG.abs() > 1500).any():
     print("mixing/insertion rows with |dG| > 1500 meV per H (off scale in the figure; check their input runs):"); print(solid[solid.dG.abs() > 1500][["kind", "P", "T", "n", "dG", "tags"]].round(0).to_string(index=False))
 

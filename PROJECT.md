@@ -1,6 +1,6 @@
 # H3O: benchmarking and fine-tuning MLPs on extreme-condition H2O / H mixtures
 
-Living project plan + data manifest. Last updated 2026-10-25. Branch: `claude/eloquent-ramanujan-2tjx2p`.
+Living project plan + data manifest. Last updated 2026-10-25. Branch: `claude/eloquent-hopper-kfjdei` (was eloquent-ramanujan; merged).
 
 ## Goal
 Benchmark foundation MLPs (MACE, MatterSim, GRACE; optionally CHGNet/SevenNet) against VASP AIMD data for H2O-H mixtures

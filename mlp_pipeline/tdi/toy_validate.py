@@ -24,7 +24,7 @@ EV_A3_GPA = 160.21766
 def systems():
     from importlib import import_module
     eos = import_module("17_eos_md"); rr = import_module("tdi.run_real")
-    return {"h2o": lambda v: eos.build("fcc", v, 2, 0, 2.0), "h2.25o": lambda v: eos.build("fcc", v, 2, 0, 2.25), "H": lambda v: rr.build_h_n(v, 128)}
+    return {"h2o": lambda v: eos.build("fcc", v, 2, 0, 2.0), "h2.25o": lambda v: eos.build("fcc", v, 2, 0, 2.25), "h2.125o": lambda v: eos.build("fcc", v, 2, 0, 2.125), "h2.5o": lambda v: eos.build("fcc", v, 2, 0, 2.5), "H": lambda v: rr.build_h_n(v, 128)}
 
 
 def md(at, T, ps, equil_ps, seed, every=40, dt=0.5, frames=False):
@@ -52,7 +52,7 @@ def cmd_eos(a):
     through the 3 points closest to the target (bracketing it)"""
     S = systems(); f = os.path.join(a.out, f"eos_{a.T:.0f}K.json"); out = json.load(open(f)) if os.path.exists(f) else {}
     sc = (a.P / 450) ** -0.35   # starting volumes are for 450 GPa; V ~ P^(-P/B) with P/B ~ 0.35 near 450 GPa
-    guess = {"h2o": [2.05, 2.14, 2.23], "h2.25o": [2.0, 2.09, 2.18], "H": ([1.25, 1.35, 1.45] if os.environ.get("TOYICE_FIT") else [1.6, 1.9, 2.2])}
+    guess = {"h2o": [2.05, 2.14, 2.23], "h2.25o": [2.0, 2.09, 2.18], "h2.125o": [2.0, 2.1, 2.2], "h2.5o": [1.9, 2.0, 2.1], "H": ([1.25, 1.35, 1.45] if os.environ.get("TOYICE_FIT") else [1.6, 1.9, 2.2])}
     guess = {k: [x * sc for x in v] for k, v in guess.items()}
     for name in (a.systems.split(",") if a.systems else S):
         build = S[name]; rows = []; msd = {}

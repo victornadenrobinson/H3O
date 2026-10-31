@@ -84,6 +84,23 @@ def guest_count(at):
     _, d = get_distances(H, O, cell=at.cell, pbc=True); return int((d.min(1) > 1.3).sum())
 
 
+def relax_cached(path, at, calc, P, steps, fmax, label, redo=False):
+    """relax() with its result saved to `path` (extxyz): a rerun reuses a finished relaxation (one energy call) instead of repeating it, so a job killed at its
+    time limit loses at most the relaxation it was in; a saved structure whose max force is above 2 fmax is relaxed further from where it stopped. redo: always relax."""
+    if os.path.exists(path) and not redo:
+        from ase.io import read
+        r = read(path); r.calc = calc; N = len(r)
+        from ase.filters import FrechetCellFilter
+        Fm = float(np.sqrt((FrechetCellFilter(r, scalar_pressure=P / EV_A3_GPA).get_forces() ** 2).sum(1)).max())   # same measure as relax(): atoms AND cell (stress - P)
+        if Fm <= 2 * fmax:
+            h = (r.get_potential_energy() + P / EV_A3_GPA * r.get_volume()) / N; PROG["done"] += 1
+            print(f"   [{PROG['done']}/{PROG['total']}] {label} at {P:.0f} GPa: reused {os.path.basename(path)} (max force {Fm:.3f}), H {h:.5f} eV/atom, V {r.get_volume() / N:.4f} A^3/atom", flush=True)
+            return r, h, r.get_volume() / N
+        print(f"   {label}: saved {os.path.basename(path)} has max force {Fm:.3f} > {2 * fmax:g}: relaxing further from it", flush=True); at = r
+    r, h, v = relax(at, calc, P, steps, fmax, label)
+    r.write(path); return r, h, v
+
+
 def relax(at, calc, P, steps, fmax, label="", every=25):
     """constant-pressure relaxation with a progress line every `every` steps and a summary line (verbose on purpose: a GPU relaxation can take minutes)"""
     import time
@@ -114,7 +131,7 @@ def main():
     ap.add_argument("--parallel", type=int, default=1, help="pressures run as separate processes sharing the GPU, at most this many at once (~4.5 GB GPU memory each)")
     ap.add_argument("--variants", type=float, nargs="+", default=[3, 2.75, 2.5, 2.25], help="H per O of the H3O-derived variants to relax (e.g. --variants 3 to skip the partly filled ones)")
     ap.add_argument("--table", action="store_true", help="no relaxations: merge the finished <o>/P<P>/h3o_static.csv files and print the dH tables (works while other pressures still run)")
-    ap.add_argument("--redo", action="store_true", help="parallel mode: rerun pressures whose <o>/P<P>/h3o_static.csv exists (default: reuse them)"); a = ap.parse_args()
+    ap.add_argument("--redo", action="store_true", help="rerun everything: pressures whose <o>/P<P>/h3o_static.csv exists and relaxations whose *_relaxed.extxyz exists (default: reuse both)"); a = ap.parse_args()
     if a.table or (a.parallel > 1 and len(a.P) > 1):
         return run_parallel(a)
     from importlib import import_module
@@ -131,15 +148,14 @@ def main():
     rows = []; PROG["total"] = len(a.P) * (1 + len(h_candidates()) + len(variants))
     print(f"plan: {len(a.P)} pressures x ({1 + len(h_candidates())} references + {len(variants)} H3O variants) = {PROG['total']} relaxations", flush=True)
     for P in a.P:
-        rw, hw, vw = relax(ice_x(), calc, P, a.steps, a.fmax, "ice X"); rw.write(os.path.join(a.o, f"iceX_{P:.0f}GPa_relaxed.extxyz"))   # references saved too: DFT single points of all of them check the MLP dH
+        rw, hw, vw = relax_cached(os.path.join(a.o, f"iceX_{P:.0f}GPa_relaxed.extxyz"), ice_x(), calc, P, a.steps, a.fmax, "ice X", a.redo)   # references saved too: DFT single points of all of them check the MLP dH
         hs = {}
         for name, c in h_candidates().items():
-            rh, h_, v_ = relax(c, calc, P, a.steps, a.fmax, name); hs[name] = (h_, v_)
-            rh.write(os.path.join(a.o, f"Href_{name.split()[0] + '_' + name.split()[1]}_{P:.0f}GPa_relaxed.extxyz"))
+            rh, h_, v_ = relax_cached(os.path.join(a.o, f"Href_{name.split()[0] + '_' + name.split()[1]}_{P:.0f}GPa_relaxed.extxyz"), c, calc, P, a.steps, a.fmax, name, a.redo); hs[name] = (h_, v_)
         best = min(hs, key=lambda k: hs[k][0]); hH = hs[best][0]
         print(f"\n{P:.0f} GPa: ice X h {hw:.4f} eV/atom (V {vw:.3f}); H reference = {best} ({hH:.4f} eV/atom; " + ", ".join(f"{k} {v[0]:.4f}" for k, v in hs.items()) + ")")
         for n, v in sorted(variants.items()):
-            r, h, vv = relax(v, calc, P, a.steps, a.fmax, f"H{2 + n:.3g}O")
+            r, h, vv = relax_cached(os.path.join(a.o, f"H{2 + n:.3g}O_{P:.0f}GPa_relaxed.extxyz"), v, calc, P, a.steps, a.fmax, f"H{2 + n:.3g}O", a.redo)
             nH = int((r.numbers == 1).sum()); extra = nH - 2 * nO; N = len(r)
             dH = (h * N - nO * 3 * hw - extra * hH) / N * 1e3
             rows.append(dict(P_GPa=P, H_per_O=2 + n, X=n / (n + 1), dH_meV_atom=dH, H_eV_cell=h * N, natoms=N, vpa=vv, H_ref=best, h_iceX_eV_atom=hw, h_Href_eV_atom=hH))
@@ -189,7 +205,7 @@ def run_parallel(a):
     """one child process per pressure (output <o>/P<P>), at most a.parallel at once; their lines are streamed with a [P GPa] prefix; results merged at the end"""
     import subprocess, threading, time
     base = [sys.executable, "-u", os.path.abspath(__file__), "--model", a.model, "--device", a.device, "--cell", a.cell, "--steps", str(a.steps), "--fmax", str(a.fmax),
-            "--variants"] + [f"{h:g}" for h in a.variants]
+            "--variants"] + [f"{h:g}" for h in a.variants] + (["--redo"] if a.redo else [])
     quiet = ("tensorflow", "xla", "cuda", "I0000", "W0000", "E0000", "ptxas", "absl", "cpu_feature", "AVX2", "Registers are spilled", "XLA service", "StreamExecutor", "rebuild TensorFlow")
     def pump(proc, tag):
         for line in proc.stdout:

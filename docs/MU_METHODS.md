@@ -77,6 +77,16 @@ So about 45 min of one GPU per host, and dg needs ice and pure H. The insertion 
 The script prints both diagnostics. The pair fit has force RMSE 1.5 eV/A against DFT, so on GRACE the gap is likely 1-3 kT at 6000 K. If it is larger, a better proxy
 (refit the pairs to the first ~200 GRACE dU values; a fixed proxy chosen before the production sampling keeps the estimator unbiased) or a larger K helps.
 
+**Refitting the proxy to GRACE insertion energies: `tdi/proxy_fit.py`, one job `mlp_pipeline/young_proxy_fit.sbatch`** (no MD: it reads the cached `runs/pwidom*/pw_*_frames.npz`).
+`label` takes a few frames of every cached state (all compositions, P, T; the cubic cell is V^(1/3) from the file) and evaluates dU = U(frame + H at x) - U(frame) with the real model at probe points
+(Rosenbluth-selected on the starting proxy at `--temper` x T, plus uniform points); `fit` solves one weighted least squares for the OH and HH spline coefficients (dU is linear in them; weight
+exp(-(dU - ref)/(wT kT)) per state so the fit is good where the sampler looks). The production state is held out of the fit (`--hold`), so the proxy has never seen its frames (the estimator
+is unbiased for any proxy independent of the frames it is applied to); inside the other states every 4th frame is held out too. The report gives std(dU - phi) and the Kish fraction of the old and
+new proxy on held-out states and frames, a per-state table, and how often the proxy is too low in the overlap region (a too-low phi there means overlap points get picked; relative diagnostic, compare old vs new).
+Output: a toy_fit json (OO, K, rc from `--base`) for `pwidom.py --proxy`; fit ice-like hosts and pure H separately (`--only` / `--skip`).
+Toy check only (sandbox, analytic pair truth, 3 states, 12 frames each): held-out state gap 4.6 kT -> 0.10 kT; this just shows the pipeline works, because a pair potential can fit a pair truth.
+On GRACE the held-out gap is the number that decides whether it helps; many-body effects set the floor.
+
 **Failure modes.**
 - The proxy misses favourable regions that GRACE has (e.g. H2 or H3+-like local states): then insertion is low-biased at finite sample and deletion is high-biased; they disagree, and BAR is still consistent if the overlap is nonzero.
 - Rare host cavities: the frame-to-frame scatter of W needs a long host MD. On the toy, 4 -> 12 ps moved plain BAR by 80 meV, but here W is computed exactly per frame with K candidates, so only the host sampling is left.
@@ -220,6 +230,19 @@ from the GRACE test below. If std(dU - phi) > ~2 kT, refit the proxy pairs to th
 sampling keeps the estimator exact), or raise K.
 
 ## GRACE test (Young, 500 GPa 6000 K)
+
+**First GRACE result (2026-10-29, PS=1 = 50 frames per host, K 4000, SEL 4, NDEL 4, interactive A100, ~40 min in total):**
+
+| host | proxy std(dU - phi) | Kish fraction | Widom / deletion / BAR mu_ex (meV) | mu_H fixed V / at 500 GPa (meV) |
+|---|---|---|---|---|
+| fcc H2O (ice) | 1.73 / 1.78 kT | 0.17 | 2969 +- 119 / 3035 +- 138 / 2982 +- 73 | 63.9 / 8.1 +- 88.1 (host at 509.6 GPa) |
+| pure H | 0.41 / 0.35 kT | 0.77 | 2991 +- 25 / 3004 +- 48 / 3010 +- 29 | 567.9 / 551.9 +- 29.2 |
+| plain Widom (no proxy), ice / pure H | 40 / 26 kT | 0.03 / 0.04 | Widom and deletion disagree by ~1 eV; BAR 2998 +- 170 / 3098 +- 78 | |
+
+- **dg = mu_H(ice) - G_H = -549 +- 93 meV** (pressure-corrected; fixed-V basis -510 +- 93). Insertion TDI at the same point: -552 +- 35 (n -> 0, uncorrected basis, P1b).
+  The two independent routes agree within the errors; the host stayed solid (O MSD flat at 0.15-0.18 A^2).
+- The error is set by the ice host (proxy 1.7 kT, Kish 0.17); pure H is excellent (0.4 kT). The proxy single points took ~17 min per host (CPU work for K = 4000 candidates x
+  200 trials), longer than the 8 min of MD. Next: PS=4 and SEL=16 (more insertions per frame are cheap) to reach +-30-45 meV; then hosts with extra H (--hper) for mu_H(n).
 
 Same hosts and volumes as the existing insertion TDI runs (`--like` reads their stage0.json):
 ```

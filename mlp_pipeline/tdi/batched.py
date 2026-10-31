@@ -253,7 +253,7 @@ class GraceBatch:
 
     def selfcheck(self, structs, tol_e=1e-4, tol_f=1e-4, tol_s=1e-6):
         """batched vs single-structure TPCalculator on the same structures: max |dE| per atom (eV), |dF| (eV/A), |dstress| (eV/A^3). Raises if above tolerance."""
-        b = self._call([(structs, True)])[0]; worst = [0.0, 0.0, 0.0]
+        b = self(None, [(structs, True)])[0]; worst = [0.0, 0.0, 0.0]   # through __call__: GPU out of memory splits the call instead of crashing
         for at, (e, f, s) in zip(structs, b):
             c = at.copy(); c.calc = self.calc
             e1, f1, s1 = c.get_potential_energy(), c.get_forces(), c.get_stress(voigt=True)

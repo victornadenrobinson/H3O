@@ -3,10 +3,13 @@ over tens of ps, or does it deform / change O sublattice / melt / phase-separate
 Printed every --block-ps (default 1 ps), from positions time-averaged over that block in fractional coordinates with the block-mean cell (O centre of mass removed):
   T, P, V/atom, cell lengths a b c and angles, shear strain (deviation of the cell from a uniformly scaled start cell), O sublattice type (fcc / bcc / other, 09_label_phase),
   Lindemann ratio of O, O mean-square displacement from the start (O diffusing = melting), H diffusion coefficient (superionic = fast H, O on its lattice).
-Final VERDICT line: stable superionic fcc if over the second half the O sublattice is fcc in every block, shear strain < 3 %, O MSD does not grow (< 0.5 A^2 per 10 ps) and H diffuses.
+Final VERDICT line: stable superionic fcc if over the second half the O sublattice is fcc in every block, the SYSTEMATIC shear strain (cell averaged over the second half) is < 3 %,
+O MSD does not grow (< 0.5 A^2 per 10 ps) and H diffuses. The largest block-mean shear is printed too but is not a criterion: the block-mean cell of a small cell fluctuates by several % thermally
+(toy test, 32 O: up to 4.5 % with a systematic shear of ~1 %; it falls like N^-1/2).
 usage:  ~/grace-venv/bin/python -u mlp_pipeline/tdi/stability_npt.py --hper 2.1 --P 400 --T 4500 [--ps 30] [--nrep 4] [--model grace-ft:runs/grace/ft_m2] [-o runs/stability_npt]
         batch: sbatch mlp_pipeline/young_stability_npt.sbatch   (H2O, H2.1O, H2.2O at 400 GPa 4500 K and 500 GPa 5000 K)
 Cell: fcc O, nrep^3 conventional cells (nrep 4 = 256 O; H2.1O -> 538 H = H2.102O, H2.2O -> 563 H = H2.199O), extra H on random O-O bond midpoints (17_eos_md.build).
+Restart: rerunning the same command continues from the last finished block (checkpoint.npz; --fresh starts over), so a job killed at its time limit loses at most one block.
 Barostat: ttime 25 fs, ptime 100 fs, pfactor = ptime^2 B with B ~ 4.5 P (rough bulk modulus; only sets the barostat time scale). The cell must stay upper triangular (ASE NPT).
 """
 import argparse, json, os, sys, time
@@ -23,16 +26,50 @@ def strain(h0, h):
     return float(np.abs(np.linalg.eigvalsh(E)).max())
 
 
+def verdict(rows, ps, equil_ps, h0, tag):
+    """VERDICT over the second half of the run (after equil_ps): O sublattice fcc in every block, systematic shear < 3 %, O MSD not growing, H diffusing"""
+    late = [r for r in rows if r["t_ps"] > equil_ps + (ps - equil_ps) / 2]
+    fcc_all = all(r["O_struct"] == "fcc" for r in late); shear_max = max(r["shear"] for r in late); shear_sys = strain(h0, np.mean([r["cell"] for r in late], 0)) if h0 is not None and all("cell" in r for r in late) else float(np.mean([r["shear"] for r in late]))   # systematic: cell averaged over the late blocks (older jsons without cells: mean block shear)
+    grow = (late[-1]["msd_O"] - late[0]["msd_O"]) / max(late[-1]["t_ps"] - late[0]["t_ps"], 1e-9) * 10 if len(late) > 1 else float("nan")
+    DH = np.mean([r["D_H"] for r in late])
+    ok = fcc_all and shear_sys < 0.03 and grow < 0.5 and DH > 1e-5
+    print(f"\nVERDICT {tag}: {'STABLE superionic fcc' if ok else 'NOT stable as superionic fcc'} over the 2nd half ({len(late)} blocks): O sublattice "
+          f"{'fcc throughout' if fcc_all else 'NOT always fcc: ' + ','.join(sorted({r['O_struct'] for r in late}))}, systematic shear {100 * shear_sys:.1f} % (largest block-mean shear {100 * shear_max:.1f} %), O MSD growth {grow:.2f} A^2 per 10 ps, "
+          f"D_H {DH:.1e} cm^2/s ({'superionic' if DH > 1e-5 else 'H not diffusing'}), <V/atom> {np.mean([r['vpa'] for r in late]):.4f}, <P> {np.mean([r['P'] for r in late]):.1f} GPa", flush=True)
+
+
+HDR = (f"{'t/ps':>6s} {'T/K':>6s} {'P/GPa':>7s} {'V/atom':>7s} {'a':>6s} {'b':>6s} {'c':>6s} {'alpha':>6s} {'beta':>6s} {'gamma':>6s} {'shear':>6s} {'O_lat':>6s} {'CN1':>4s} "
+       f"{'Lind_O':>6s} {'msdO/A2':>7s} {'D_H cm2/s':>9s}")
+
+
+def report(d):
+    """table and VERDICT of a run directory from its stability.json (also for runs whose log was lost, or that were cut off before the end)"""
+    j = json.load(open(os.path.join(d, "stability.json"))); rows = j["blocks"]; A = j["args"]
+    h0 = np.array(j["h0"]) if "h0" in j else (np.array(rows[0]["cell"]) if "cell" in rows[0] else None)
+    print(f"{j['tag']}: {len(rows)} blocks ({rows[-1]['t_ps']:g} of {A['ps']:g} ps)" + ("" if "h0" in j else "; reference cell = first block (start cell not stored in this older json)"))
+    print(HDR)
+    for r in rows:
+        print(f"{r['t_ps']:6.1f} {r['T']:6.0f} {r['P']:7.1f} {r['vpa']:7.4f} {r['a']:6.2f} {r['b']:6.2f} {r['c']:6.2f} {r['alpha']:6.1f} {r['beta']:6.1f} {r['gamma']:6.1f} "
+              f"{100 * r['shear']:5.1f}% {r['O_struct']:>6s} {r['CN1']:4.1f} {r['lind_O']:6.3f} {r['msd_O']:7.3f} {r['D_H']:9.2e}")
+    verdict(rows, rows[-1]["t_ps"], A["equil_ps"], h0, j["tag"])
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--hper", type=float, default=2.1); ap.add_argument("--P", type=float, default=400); ap.add_argument("--T", type=float, default=4500)
     ap.add_argument("--ps", type=float, default=30.0); ap.add_argument("--equil-ps", type=float, default=2.0, help="first part not used for the verdict (barostat settling)")
     ap.add_argument("--block-ps", type=float, default=1.0); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--nrep", type=int, default=4)
     ap.add_argument("--vpa", type=float, default=None, help="start V/atom (default: rough guess; the barostat corrects it within ~1-2 ps)")
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--device", default="cuda"); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--report", default=None, help="print the table and VERDICT of an existing run directory (from its stability.json) and exit")
+    ap.add_argument("--fresh", action="store_true", help="ignore a checkpoint of this run and start over (default: continue from the last finished block)")
     ap.add_argument("--ttime", type=float, default=25.0); ap.add_argument("--ptime", type=float, default=100.0); ap.add_argument("-o", default="runs/stability_npt"); a = ap.parse_args()
+    if a.report: return report(a.report)
     from ase import units
     from ase.io import write
-    from ase.md.npt import NPT
+    try:
+        from ase.md.melchionna import MelchionnaNPT as NPT   # ase.md.npt.NPT is deprecated (FutureWarning) in new ASE versions; same arguments
+    except ImportError:
+        from ase.md.npt import NPT
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
     md = import_module("17_eos_md"); lab = import_module("09_label_phase").o_structure
     vpa = a.vpa or 2.25 * (a.P / 400) ** -0.33 * (3 + 0.62 * (a.hper - 2)) / (3 + (a.hper - 2))   # rough: ~2.25 A^3/atom for H2O at 400 GPa, 5000 K; extra H ~0.6 of an H2O atom
@@ -40,12 +77,23 @@ def main():
     nO = int((at.numbers == 8).sum()); nH = int((at.numbers == 1).sum()); N = len(at); iO = at.numbers == 8; iH = ~iO
     tag = f"fcc_H{nH / nO:.3f}O_{a.P:.0f}GPa_{a.T:.0f}K_n{a.nrep}"; d = os.path.join(a.o, tag); os.makedirs(d, exist_ok=True)
     print(f"{tag}: {nO} O + {nH} H = H{nH / nO:.3f}O, {N} atoms, start V/atom {vpa:.3f}, NPT (flexible cell) {a.ps} ps at {a.P} GPa, {a.T} K, dt {a.dt} fs, model {a.model}", flush=True)
-    MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
+    MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True, rng=np.random.default_rng(a.seed)); Stationary(at)   # seeded: the run is reproducible up to the barostat's own (deterministic) dynamics
+    ck = os.path.join(d, "checkpoint.npz"); k0 = 0; rows = []; ckd = None
+    if not os.path.exists(ck) and os.path.exists(os.path.join(d, "stability.json")) and not a.fresh:   # a run from before checkpoints existed: never overwrite its results silently
+        sys.exit(f"{d} has results (stability.json) but no checkpoint.npz (run with an older version): it cannot be continued. Move it away, use another -o, or --fresh to overwrite.")
+    if a.fresh:
+        for f in ("checkpoint.npz", "traj.extxyz"):
+            if os.path.exists(os.path.join(d, f)): os.remove(os.path.join(d, f))   # traj is appended to: a fresh run must not add to the old one
+    if os.path.exists(ck) and not a.fresh:   # resume: atoms (positions, momenta, cell) and the analysis state after the last finished block; the thermostat / barostat variables restart at 0
+        ckd = np.load(ck); k0 = int(ckd["blocks"]); at.set_cell(ckd["cell"], scale_atoms=False); at.set_positions(ckd["pos"]); at.set_momenta(ckd["mom"])
+        rows = json.load(open(os.path.join(d, "stability.json")))["blocks"][:k0]
+        print(f"RESUMING from {ck}: {k0} blocks ({k0 * a.block_ps:g} ps) done; thermostat / barostat variables restart at zero (a small kick, settles within ~0.5 ps). --fresh to start over", flush=True)
     B = 4.5 * a.P / EV_A3_GPA
     dyn = NPT(at, timestep=a.dt * units.fs, temperature_K=a.T, externalstress=a.P / EV_A3_GPA, ttime=a.ttime * units.fs, pfactor=(a.ptime * units.fs) ** 2 * B)
     nb = int(a.block_ps * 1000 / a.dt); nblk = int(round(a.ps / a.block_ps)); every = 10
-    h0 = at.cell.array.copy(); O0 = None; t0 = time.time(); rows = []; buf = dict(O=[], H=[], T=[], P=[], V=[], h=[])
-    uf = at.get_scaled_positions().copy(); last = uf.copy()   # unwrapped FRACTIONAL positions: the cell changes, so time averages are taken in fractional coordinates
+    h0 = at.cell.array.copy(); O0 = None; t0 = time.time(); buf = dict(O=[], H=[], T=[], P=[], V=[], h=[])
+    uf = at.get_scaled_positions().copy(); last = uf.copy()
+    if ckd is not None: h0 = ckd["h0"]; O0 = ckd["O0"]; uf = ckd["uf"].copy(); last = ckd["last"].copy()   # unwrapped FRACTIONAL positions: the cell changes, so time averages are taken in fractional coordinates
 
     def sample():
         nonlocal last
@@ -56,7 +104,7 @@ def main():
     dyn.attach(sample, interval=every)
     print(f"{'t/ps':>6s} {'T/K':>6s} {'P/GPa':>7s} {'V/atom':>7s} {'a':>6s} {'b':>6s} {'c':>6s} {'alpha':>6s} {'beta':>6s} {'gamma':>6s} {'shear':>6s} {'O_lat':>6s} {'CN1':>4s} "
           f"{'Lind_O':>6s} {'msdO/A2':>7s} {'D_H cm2/s':>9s}   ms/step  ETA", flush=True)
-    for k in range(nblk):
+    for k in range(k0, nblk):
         for v in buf.values(): v.clear()
         dyn.run(nb)
         hm = np.mean(buf["h"], 0); O = np.array(buf["O"]) @ hm; H = np.array(buf["H"]) @ hm; mean = O.mean(0)   # block-mean cell; fractional -> Cartesian
@@ -69,20 +117,15 @@ def main():
         from ase.geometry import cell_to_cellpar
         cp = cell_to_cellpar(hm); sh = strain(h0, hm); t = (k + 1) * a.block_ps; el = time.time() - t0
         r = dict(t_ps=t, T=float(np.mean(buf["T"])), P=float(np.mean(buf["P"])), vpa=float(np.mean(buf["V"])), a=cp[0], b=cp[1], c=cp[2], alpha=cp[3], beta=cp[4], gamma=cp[5],
-                 shear=sh, O_struct=L, CN1=c1, lind_O=lind, msd_O=msdO, D_H=float(DH))
+                 shear=sh, O_struct=L, CN1=c1, lind_O=lind, msd_O=msdO, D_H=float(DH), cell=hm.tolist())
         rows.append(r)
         print(f"{t:6.1f} {r['T']:6.0f} {r['P']:7.1f} {r['vpa']:7.4f} {cp[0]:6.2f} {cp[1]:6.2f} {cp[2]:6.2f} {cp[3]:6.1f} {cp[4]:6.1f} {cp[5]:6.1f} {100 * sh:5.1f}% {L:>6s} {c1:4.1f} "
-              f"{lind:6.3f} {msdO:7.3f} {DH:9.2e}   {el / ((k + 1) * nb) * 1000:5.0f}  ~{el / (k + 1) * (nblk - k - 1) / 60:.0f} min", flush=True)
+              f"{lind:6.3f} {msdO:7.3f} {DH:9.2e}   {el / ((k + 1 - k0) * nb) * 1000:5.0f}  ~{el / (k + 1 - k0) * (nblk - k - 1) / 60:.0f} min", flush=True)
         write(os.path.join(d, "traj.extxyz"), at, append=True)
-        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, blocks=rows), open(os.path.join(d, "stability.json"), "w"), indent=1, default=float)
-    late = [r for r in rows if r["t_ps"] > a.equil_ps + (a.ps - a.equil_ps) / 2]
-    fcc_all = all(r["O_struct"] == "fcc" for r in late); shear_max = max(r["shear"] for r in late)
-    grow = (late[-1]["msd_O"] - late[0]["msd_O"]) / max(late[-1]["t_ps"] - late[0]["t_ps"], 1e-9) * 10 if len(late) > 1 else float("nan")
-    DH = np.mean([r["D_H"] for r in late])
-    ok = fcc_all and shear_max < 0.03 and grow < 0.5 and DH > 1e-5
-    print(f"\nVERDICT {tag}: {'STABLE superionic fcc' if ok else 'NOT stable as superionic fcc'} over the 2nd half ({len(late)} blocks): O sublattice "
-          f"{'fcc throughout' if fcc_all else 'NOT always fcc: ' + ','.join(sorted({r['O_struct'] for r in late}))}, max shear {100 * shear_max:.1f} %, O MSD growth {grow:.2f} A^2 per 10 ps, "
-          f"D_H {DH:.1e} cm^2/s ({'superionic' if DH > 1e-5 else 'H not diffusing'}), <V/atom> {np.mean([r['vpa'] for r in late]):.4f}, <P> {np.mean([r['P'] for r in late]):.1f} GPa", flush=True)
+        json.dump(dict(args=vars(a), tag=tag, nO=nO, nH=nH, h0=h0.tolist(), blocks=rows), open(os.path.join(d, "stability.json.tmp"), "w"), indent=1, default=float)
+        os.replace(os.path.join(d, "stability.json.tmp"), os.path.join(d, "stability.json"))   # atomic: a kill never leaves a truncated file
+        np.savez(ck + ".tmp.npz", blocks=k + 1, pos=at.get_positions(), mom=at.get_momenta(), cell=at.cell.array, h0=h0, O0=O0, uf=uf, last=last); os.replace(ck + ".tmp.npz", ck)
+    verdict(rows, a.ps, a.equil_ps, h0, tag)
     print(f"files: {d}/stability.json, traj.extxyz (one frame per block)")
 
 

@@ -36,6 +36,22 @@ def lse(x, axis=None):
     m = np.max(x, axis=axis, keepdims=True); return np.squeeze(m, axis=axis) + np.log(np.sum(np.exp(x - m), axis=axis))
 
 
+def model_fingerprint(spec):
+    """short hash of the resolved Hamiltonian: the model kind plus, for grace-ft: / mace-ft: checkpoints, the file names and first 16 MB of every file (the same weights hash the same on another machine);
+    toyice: the TOYICE_FIT file. Cached MD frames and pressures belong to ONE Hamiltonian: another model's frames are not an equilibrium ensemble of this one."""
+    import hashlib
+    kind, _, rest = spec.partition(":"); h = hashlib.sha256(kind.encode())
+    if kind.endswith("-ft") and rest and os.path.exists(rest):
+        root = rest if os.path.isdir(rest) else os.path.dirname(rest)
+        for f in ([rest] if os.path.isfile(rest) else sorted(os.path.join(d, x) for d, _, fs in os.walk(rest) for x in fs))[:200]:
+            h.update(os.path.relpath(f, root).encode()); h.update(open(f, "rb").read(1 << 24))
+    elif kind == "toyice" and os.environ.get("TOYICE_FIT") and os.path.exists(os.environ["TOYICE_FIT"]):
+        h.update(open(os.environ["TOYICE_FIT"], "rb").read())
+    else:
+        h.update(rest.encode())
+    return h.hexdigest()[:16]
+
+
 def build_host(a):
     from importlib import import_module
     if a.phase == "H":
@@ -56,11 +72,32 @@ def proxy_params(spec):
 
 
 def proxy_energy(p, pts, pos, isH, cell, chunk=512):
-    """proxy insertion energy (eV) of each point in pts (m x 3) into the frame pos (isH: bool per atom); 0 for proxy 'none'"""
+    """proxy insertion energy (eV) of each point in pts (m x 3) into the frame pos (isH: bool per atom); 0 for proxy 'none'.
+    Neighbour search (scipy cKDTree): the host is replicated over every periodic image that can lie within rc of the cell, and only pairs closer than rc are evaluated.
+    Same energies as toy_ice.ghost_energy (all images, dense m x N distances), which was ~27x slower when rc exceeds half the cell width (the 250-atom pure-H cell)."""
     if p is None:
         return np.zeros(len(pts))
-    from tdi.toy_ice import ghost_energy
-    return np.concatenate([ghost_energy(pts[i:i + chunk], pos, isH, cell, p) for i in range(0, len(pts), chunk)])
+    from tdi.toy_ice import pair_energy
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        from tdi.toy_ice import ghost_energy
+        return np.concatenate([ghost_energy(pts[i:i + chunk], pos, isH, cell, p) for i in range(0, len(pts), chunk)])
+    cell = np.asarray(cell, float); inv = np.linalg.inv(cell); rc = float(p["rc"])
+    width = abs(np.linalg.det(cell)) / np.linalg.norm(np.cross(cell[[1, 2, 0]], cell[[2, 0, 1]]), axis=1)
+    m = [int(np.ceil(rc / w)) for w in width]                       # images needed on each side
+    fh = (pos @ inv) % 1.0; fp = (pts @ inv) % 1.0                  # both wrapped into the cell
+    sh = np.array([(i, j, k) for i in range(-m[0], m[0] + 1) for j in range(-m[1], m[1] + 1) for k in range(-m[2], m[2] + 1)], float)
+    fimg = (fh[None, :, :] + sh[:, None, :]).reshape(-1, 3); idx = np.tile(np.arange(len(pos)), len(sh))
+    pad = rc / width
+    keep = np.all((fimg > -pad) & (fimg < 1 + pad), axis=1)         # only images within rc of the cell
+    host = fimg[keep] @ cell; hH = isH[idx[keep]]
+    pair = cKDTree(fp @ cell).sparse_distance_matrix(cKDTree(host), rc, output_type="coo_matrix")
+    i, j, r = pair.row, pair.col, pair.data
+    out = np.zeros(len(pts)); h = hH[j]
+    if (~h).any(): np.add.at(out, i[~h], pair_energy(1, r[~h], p)[0])
+    if h.any(): np.add.at(out, i[h], pair_energy(2, r[h], p)[0])
+    return out
 
 
 class Model:
@@ -153,18 +190,24 @@ def cmd_run(a):
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
-    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17)
+    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
     if os.path.exists(ff):
         z = np.load(ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
+        if "model_fp" in z.files:
+            if str(z["model_fp"]) != mfp:
+                raise SystemExit(f"{ff}: frames and pressures were made with another Hamiltonian (fingerprint {z['model_fp']} vs {mfp} for {a.model}): they are not an equilibrium ensemble of this model; use another --out or --tag")
+        else:
+            print(f"WARNING: {ff} has no model fingerprint (made before the check): the model is NOT verified", flush=True)
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
     else:
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers)
+        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp)   # both branches added fields: keep all (cell + model name, and the model fingerprint)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
-    melted = any(m and m[-1] > 1.0 for m in msd.values())   # solid O: < ~0.3 A^2 at 3000-6000 K; a melted crystal diffuses several A^2 per ps
+    melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
+    # over the second half (> 0.25 A^2: H2.5O at 600 GPa 5000 K went 0.32 -> 0.71 / 0.23 -> 0.89 A^2 in 0.8 ps, a slow melt the old 1 A^2 threshold missed)
     if msd["host"]:
         print(f"O MSD (A^2, relative to the O centre of mass) over the host run: {' '.join(f'{x:.2f}' for x in msd['host'])}; host + 1 H: {' '.join(f'{x:.2f}' for x in msd['full'])}"
               + ("  MELTED: the O lattice diffuses, this is not the crystal (results are written but flagged)" if melted else "  (solid)"), flush=True)
@@ -174,15 +217,22 @@ def cmd_run(a):
     isH1 = np.r_[isH, True]; numbers1 = np.r_[host.numbers, 1]
     # ---- insertion: per host frame, a.sel selections from one set of K uniform candidates (each selection is an unbiased trial). The proxy work is done frame
     # by frame; the real-model structures of all frames are collected and evaluated together (batched calls)
-    sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []
-    for f in sfr:
+    sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []; t_last = time.time()
+    def tick(i, ntot, what):   # the proxy stage is CPU work of minutes with no other output: a line every 30 s
+        nonlocal t_last
+        if time.time() - t_last >= 30:
+            t_last = time.time(); el = t_last - t0; print(f"  proxy {what}: frame {i + 1}/{ntot}, {el / 60:.1f} min, ETA {el / (i + 1) * (ntot - i - 1) / 60:.1f} min for this part", flush=True)
+    for i_f, f in enumerate(sfr):
+        tick(i_f, len(sfr), "insertions")
         x = fh[f]; c = rng.random((K, 3)) @ cell; phi = proxy_energy(p, c, x, isH, cell)
         lnW = lse(-phi / kT) - np.log(K); pr = np.exp(-phi / kT - lse(-phi / kT)); s = rng.choice(K, a.sel, p=pr)
         S0.append(Atoms(numbers=host.numbers, positions=x, cell=cell, pbc=True))
         S1 += [Atoms(numbers=numbers1, positions=np.vstack([x, c[j]]), cell=cell, pbc=True) for j in s]; ins.append((phi[s], lnW))
     # ---- deletion: per full frame, a.ndel randomly chosen H (incl. the added one: all H are identical)
     iH1 = np.where(isH1)[0]; dfr = list(range(0, len(fp), a.stride)); D0, D1, dele = [], [], []
-    for f in dfr:
+    t0 = time.time()
+    for i_f, f in enumerate(dfr):
+        tick(i_f, len(dfr), "deletions")
         x = fp[f]; ts = rng.choice(iH1, min(a.ndel, len(iH1)), replace=False); D0.append(Atoms(numbers=numbers1, positions=x, cell=cell, pbc=True)); ws = []
         for t in ts:
             keep = np.ones(len(x), bool); keep[t] = False; xr = x[keep]; hr = isH1[keep]
@@ -195,7 +245,17 @@ def cmd_run(a):
             ws.append((phi_t, lse(-phik / kT) - np.log(K)))
         dele.append(ws)
     print(f"proxy {a.proxy} K {K}: {len(S1)} insertion and {len(D1)} deletion trials prepared ({(time.time() - t0) / 60:.1f} min); real-model single points: {len(S0) + len(S1) + len(D0) + len(D1)}", flush=True)
+    lk = os.environ.get("PW_GPU_LOCK")   # several pwidom processes on one GPU (pwidom_scan): only one at a time in the memory-hungry batched single-point stage
+    if lk:
+        import fcntl
+        fh_lock = open(lk, "a"); t_w = time.time()
+        try:
+            fcntl.flock(fh_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print(f"waiting for the single-point GPU lock ({lk}): another host is in its single points", flush=True); fcntl.flock(fh_lock, fcntl.LOCK_EX)
+            print(f"got the GPU lock after {(time.time() - t_w) / 60:.1f} min", flush=True)
     E = model.energies(S0 + S1 + D0 + D1); n0, n1, m0 = len(S0), len(S1), len(D0)
+    if lk: fcntl.flock(fh_lock, fcntl.LOCK_UN); fh_lock.close()
     e0, e1, f0, f1 = E[:n0], E[n0:n0 + n1].reshape(n0, a.sel), E[n0 + n1:n0 + n1 + m0], E[n0 + n1 + m0:]
     wf_frame, gap_ins = [], []
     for k, (phis, lnW) in enumerate(ins):
@@ -220,7 +280,10 @@ def cmd_run(a):
              proxy_gap_std_kT_ins=float(np.std(gap_ins) / kT), proxy_gap_std_kT_del=float(np.std(gap_del) / kT), kish_frac_ins=kish,
              ideal_meV=ideal * 1e3, P_host_GPa=ph, P_host_err_GPa=eph, P_full_GPa=pf, P_full_err_GPa=epf, B_GPa=B, dG_P_meV=dGP * 1e3, dG_P_err_meV=dGPe * 1e3,
              msd_O_host=msd["host"], msd_O_full=msd["full"], melted=melted,
+             model_fp=mfp, pressure_corrected=bool(B),
              mu_fixedV_meV=(mu_b + ideal) * 1e3, mu_P_meV=(mu_b + ideal + dGP) * 1e3, mu_P_err_meV=float(np.hypot(eb, dGPe)) * 1e3)
+    if not B:
+        print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
     print(f"{tag} proxy {lab} K {K}: {len(wf)} insertions ({len(sfr)} frames), {len(wr)} deletions, {model.ncalls} model calls, {(time.time() - t0) / 60:.1f} min")
@@ -235,6 +298,16 @@ def cmd_dg(a):
     from math import lgamma, log
     w, h = (json.load(open(f)) for f in (a.ice, a.hfluid)); kT = KB * w["T"] * 1e3; N = h["N_H"]
     fs = kT * (log(N + 1) - lgamma(N + 1) / N - 1)
+    for k in ("T", "P_target"):
+        if abs(w[k] - h[k]) > 1e-6 * max(1.0, abs(w[k])):
+            raise SystemExit(f"dg: the two runs have a different {k} ({w[k]:g} vs {h[k]:g}): not the same state")
+    if w.get("model_fp") and h.get("model_fp"):
+        if w["model_fp"] != h["model_fp"]:
+            raise SystemExit(f"dg: the two runs used different Hamiltonians (fingerprints {w['model_fp']} vs {h['model_fp']})")
+    else:
+        print("WARNING: dg: a run has no model fingerprint (made before the check): the model is not verified", flush=True)
+    if not (w.get("pressure_corrected", bool(w.get("B_GPa"))) and h.get("pressure_corrected", bool(h.get("B_GPa")))):
+        print("WARNING: dg: a run has NO pressure correction (no bulk modulus): that mu_H is the fixed-volume value, dg is not at the target pressure", flush=True)
     dg = w["mu_P_meV"] - (h["mu_P_meV"] - fs); e = float(np.hypot(w["mu_P_err_meV"], h["mu_P_err_meV"]))
     if w.get("melted"):
         print(f"WARNING: {a.ice}: the crystal MELTED in the free MD (O MSD {w['msd_O_host'][-1]:.2f} / {w['msd_O_full'][-1]:.2f} A^2): dg is not that of the solid")
