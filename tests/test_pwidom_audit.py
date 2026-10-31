@@ -161,3 +161,10 @@ def test_auto_validates_existing_eos_in_dry_run(tmp_path, monkeypatch):
                      capture_output=True,text=True)
     assert r.returncode != 0 and 'must be finite and positive' in r.stderr
     assert not (tmp_path/'runs').exists()
+
+
+def test_auto_resume_refuses_conflicting_scan_inputs(monkeypatch):
+    monkeypatch.setenv('PY',sys.executable)
+    r=subprocess.run(['bash','mlp_pipeline/pwidom_auto.sh','--resume-run','missing',
+                      '--out','fresh','--P','500','--dry-run'],cwd=ROOT,capture_output=True,text=True)
+    assert r.returncode!=0 and 'inherits scan inputs' in r.stderr

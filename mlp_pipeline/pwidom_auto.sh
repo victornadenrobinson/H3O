@@ -10,6 +10,10 @@ NS=(5 11 16 22)
 SAMPLE_PS=1.0
 EQUIL_PS=0.4
 MINUTES=30
+CHECKPOINT_SECONDS=300
+SCAN_OPTIONS=0
+RESUME_RUN=""
+RESUME_OUT=""
 CANDIDATES="runs/dft_candidates"
 DRY_RUN=0
 INVENTORY="${PWIDOM_INVENTORY:-runs/inventory_binned.csv}"
@@ -25,6 +29,9 @@ Options:
   --n N [N ...]          Extra H atoms per 108-O host
   --ps VALUE             Production sampling, ps (default 1.0)
   --equil-ps VALUE       Equilibration, ps (default 0.4)
+  --resume-run DIR       Resume one prior stage (inherits its inputs)
+  --out NEW_DIR          Required fresh output with --resume-run
+  --checkpoint-seconds N  MD checkpoint wall interval (default 300)
   --minutes VALUE        Existing launcher limit (default 30)
   --candidate-dir PATH   Candidate output directory
   --inventory PATH       Binned H/O DFT inventory (needed only for missing EOS)
@@ -62,29 +69,46 @@ read_values() {
 while (($#)); do
     case "$1" in
         --P)
+            SCAN_OPTIONS=1
             shift
             read_values "--P" "$@"
             PS=("${VALUES[@]}")
             shift "${#VALUES[@]}"
             ;;
         --T)
+            SCAN_OPTIONS=1
             shift
             read_values "--T" "$@"
             TS=("${VALUES[@]}")
             shift "${#VALUES[@]}"
             ;;
         --n)
+            SCAN_OPTIONS=1
             shift
             read_values "--n" "$@"
             NS=("${VALUES[@]}")
             shift "${#VALUES[@]}"
             ;;
         --ps)
+            SCAN_OPTIONS=1
             SAMPLE_PS="${2:?Missing --ps value}"
             shift 2
             ;;
         --equil-ps)
+            SCAN_OPTIONS=1
             EQUIL_PS="${2:?Missing --equil-ps value}"
+            shift 2
+            ;;
+        --resume-run)
+            RESUME_RUN="${2:?Missing previous run}"
+            shift 2
+            ;;
+        --out)
+            RESUME_OUT="${2:?Missing fresh output}"
+            shift 2
+            ;;
+        --checkpoint-seconds)
+            CHECKPOINT_SECONDS="${2:?Missing checkpoint interval}"
             shift 2
             ;;
         --minutes)
@@ -92,10 +116,12 @@ while (($#)); do
             shift 2
             ;;
         --candidate-dir)
+            SCAN_OPTIONS=1
             CANDIDATES="${2:?Missing candidate directory}"
             shift 2
             ;;
         --inventory)
+            SCAN_OPTIONS=1
             INVENTORY="${2:?Missing inventory path}"
             shift 2
             ;;
@@ -124,14 +150,34 @@ h3o_select_python run --dry-run
 PYTHON="$("${H3O_PYTHON[@]}" -c 'import sys; print(sys.executable)')"
 export PY="$PYTHON"
 
-"$PYTHON" - "${PS[*]}" "${TS[*]}" "$SAMPLE_PS" "$EQUIL_PS" "$MINUTES" <<'PYVALID'
+# Resume is an explicit single-stage operation; source outputs stay untouched.
+if [[ -n "$RESUME_RUN" ]]; then
+    if ((SCAN_OPTIONS)); then
+        echo "ERROR: --resume-run inherits scan inputs; omit P/T/n/ps/equil/inventory/candidate options" >&2
+        exit 2
+    fi
+    if [[ -z "$RESUME_OUT" ]]; then
+        echo "ERROR: --resume-run requires --out NEW_DIR" >&2
+        exit 2
+    fi
+    RESUME_COMMAND=(bash mlp_pipeline/perlmutter_pwidom.sh
+        --resume-run "$RESUME_RUN" --out "$RESUME_OUT"
+        --minutes "$MINUTES" --checkpoint-seconds "$CHECKPOINT_SECONDS")
+    if ((DRY_RUN)); then RESUME_COMMAND+=(--dry-run); fi
+    exec "${RESUME_COMMAND[@]}"
+elif [[ -n "$RESUME_OUT" ]]; then
+    echo "ERROR: --out is only supported with --resume-run" >&2
+    exit 2
+fi
+
+"$PYTHON" - "${PS[*]}" "${TS[*]}" "$SAMPLE_PS" "$EQUIL_PS" "$MINUTES" "$CHECKPOINT_SECONDS" <<'PYVALID'
 import math, sys
-p, t, ps, eq, minutes = sys.argv[1:]
+p, t, ps, eq, minutes, checkpoint = sys.argv[1:]
 values = [float(x) for x in (p + " " + t).split()]
 if not all(math.isfinite(x) and x > 0 for x in values):
     raise SystemExit("P/T must be finite and positive")
-ps, eq, minutes = map(float, (ps, eq, minutes))
-if not all(map(math.isfinite, (ps, eq, minutes))) or ps < .1 or eq < 0 or minutes <= 0:
+ps, eq, minutes, checkpoint = map(float, (ps, eq, minutes, checkpoint))
+if not all(map(math.isfinite, (ps, eq, minutes, checkpoint))) or ps < .1 or eq < 0 or minutes <= 0 or checkpoint <= 0:
     raise SystemExit("Require ps >= .1, equil-ps >= 0, minutes > 0 (finite)")
 PYVALID
 
@@ -333,6 +379,7 @@ PY
                 --ps "$SAMPLE_PS" \
                 --equil-ps "$EQUIL_PS" \
                 --minutes "$MINUTES" \
+                --checkpoint-seconds "$CHECKPOINT_SECONDS" \
                 --out "$REFERENCE_OUT" \
                 --candidate-dir "$CANDIDATES"
         fi
@@ -368,6 +415,7 @@ PY
                 --ps "$SAMPLE_PS" \
                 --equil-ps "$EQUIL_PS" \
                 --minutes "$MINUTES" \
+                --checkpoint-seconds "$CHECKPOINT_SECONDS" \
                 --out "$EXTRA_OUT" \
                 --candidate-dir "$CANDIDATES"
         fi

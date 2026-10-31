@@ -411,3 +411,35 @@ def test_in_place_extension_archives_and_locks(campaign):
                 assert (history/f"{tag}_frames.npz").read_bytes() == before[f"{tag}_frames.npz"]
         report = shell("perlmutter_pwidom_status.sh", [str(out)], env)
         assert report.returncode == 0, report.stderr
+
+
+def test_resume_run_from_md_checkpoints_preserves_parent(campaign):
+    import shutil
+    env, args, out = campaign
+    first = shell('perlmutter_pwidom.sh', [*args, '--out', str(out)], env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    manifest = json.loads((out/'manifest.json').read_text())
+    interrupted = out.parent/'interrupted'; interrupted.mkdir()
+    manifest['status'] = 'wall-time cap'
+    for job in manifest['jobs']:
+        cmd=job['command']; tag=cmd[cmd.index('--tag')+1]
+        cmd[cmd.index('--out')+1]=str(interrupted)
+        for suffix in ('_host_md.npz','_full_md.npz'):
+            shutil.copy2(out/(tag+suffix),interrupted/(tag+suffix))
+    (interrupted/'manifest.json').write_text(json.dumps(manifest))
+    before={p:p.read_bytes() for p in interrupted.iterdir()}
+    resumed=out.parent/'resumed'
+    result=shell('perlmutter_pwidom.sh', ['--cpu','--resume-run',str(interrupted),
+                 '--out',str(resumed),'--verbose'],env)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert result.stdout.count('no velocity reset or repeated equilibration')==8
+    assert before=={p:p.read_bytes() for p in interrupted.iterdir()}
+    new=json.loads((resumed/'manifest.json').read_text())
+    assert new['status']=='complete' and new['resumed_from']==str(interrupted)
+    for job in new['jobs']:
+        tag=job['command'][job['command'].index('--tag')+1]
+        with np.load(out/(tag+'_frames.npz')) as a, np.load(resumed/(tag+'_frames.npz')) as b:
+            for key in ('host','full','P_host','P_full'): np.testing.assert_array_equal(a[key],b[key])
+        expected=json.loads((out/Path(job['result']).name).read_text())
+        actual=json.loads(Path(job['result']).read_text())
+        assert actual['mu_ex_bar_meV']==expected['mu_ex_bar_meV']

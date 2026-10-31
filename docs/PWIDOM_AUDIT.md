@@ -1,5 +1,8 @@
 # PWidom audit and safe validation
 
+For subsequently added checkpoint/resume support, see [PWIDOM_RESUME.md](PWIDOM_RESUME.md).
+The incomplete-MD limitations below describe the audited baseline.
+
 Base: `gpt/pwidom-diagnostics`, `eef2f6f`. No production MD or data changes
 were performed. Tests use synthetic inputs, dry runs and existing CPU diagnostics.
 

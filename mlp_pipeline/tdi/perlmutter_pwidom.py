@@ -222,15 +222,22 @@ def dashboard(manifest, elapsed=None, exits=None, plain=False, clear=False):
 
 def plan(a):
     parent = None
+    a.resume_run = getattr(a, "resume_run", None)
+    a.checkpoint_seconds = getattr(a, "checkpoint_seconds", 300)
+    if a.resume_run and (a.extend_run or a.in_place or a.extra_h or a.reference_run):
+        raise ValueError("--resume-run inherits the run; do not combine with extension/extra-H/reference options")
+    if not math.isfinite(a.checkpoint_seconds) or a.checkpoint_seconds <= 0:
+        raise ValueError("checkpoint-seconds must be finite and positive")
     if a.in_place and not a.extend_run:
         raise ValueError("--in-place requires --extend-run")
     if a.extra_h is not None and (a.extend_run or not a.state_json or not a.reference_run):
         raise ValueError("--extra-h requires --state-json and --reference-run; cannot combine with --extend-run")
     if a.reference_run and a.extra_h is None:
         raise ValueError("--reference-run requires --extra-h")
-    if a.extend_run:
-        parent = json.loads((Path(a.extend_run) / "manifest.json").read_text())
-        if parent["status"] != "complete":
+    if a.extend_run or a.resume_run:
+        parent_path = a.extend_run or a.resume_run
+        parent = json.loads((Path(parent_path) / "manifest.json").read_text())
+        if a.extend_run and parent["status"] != "complete":
             raise ValueError("Extend only a completed run; check the original host processes first")
         if a.state_json or a.roots:
             raise ValueError("--extend-run inherits its state; omit --state-json/--roots")
@@ -258,9 +265,11 @@ def plan(a):
             size = "natoms" if key == "H" else "nrep"
             explicit[key] = dict(vpa=float(option(name,"--vpa")),
                                  B_GPa=float(option(name,"--bulk-gpa")),
-                                 source=f"inherited from {a.extend_run}/manifest.json",
+                                 source=f"inherited from {parent_path}/manifest.json",
                                  **{size: int(option(name, "--"+size))})
         a._extension_eos = explicit
+        if a.resume_run:
+            a.ps, a.equil_ps = parent["ps"], parent["equil_ps"]
     if not all(math.isfinite(v) for v in (a.P, a.T, a.ps, a.equil_ps, a.minutes)):
         raise ValueError("P/T/time settings must be finite")
     if a.P <= 0 or a.T <= 0 or min(a.K, a.sel, a.ndel, a.batch) <= 0:
@@ -404,7 +413,7 @@ def plan(a):
                "--tag", tag, "--label", "candidate"]
         if a.candidate_dir:
             cmd += ["--candidate-dir", a.candidate_dir, "--candidate-limit", str(a.candidate_limit)]
-        if parent is not None:
+        if a.extend_run:
             oldcmd = byname[name]["command"]
             oldout = oldcmd[oldcmd.index("--out")+1]
             oldtag = oldcmd[oldcmd.index("--tag")+1]
@@ -420,13 +429,24 @@ def plan(a):
                         or abs(float(z["V"]) - host.get_volume()) > 1e-6 * host.get_volume()):
                     raise ValueError(f"T/species/volume differs from extension source: {source}")
             cmd += ["--extend-from", str(source.resolve())]
+        cmd += ["--checkpoint-seconds", str(a.checkpoint_seconds)]
+        if a.resume_run:
+            oldcmd = byname[name]["command"]
+            prefix = Path(oldcmd[oldcmd.index("--out")+1]) / oldcmd[oldcmd.index("--tag")+1]
+            if not any(Path(str(prefix)+suffix).is_file() for suffix in ("_frames.npz", "_host_md.npz", "_full_md.npz")):
+                # No work was saved for this host: safely start this host anew.
+                print(f"{name}: no checkpoint/cache; starting this host from its initial state", flush=True)
+            else:
+                cmd += ["--resume-from", str(prefix.resolve())]
+            if "--extend-from" in oldcmd:
+                cmd += ["--extend-from", oldcmd[oldcmd.index("--extend-from")+1]]
         records.append(dict(name=name, gpu=gpu, atoms=len(host), command=cmd,
                             log=str(out / f"{name}.log"),
                             progress=str(out / f"{name}_progress.json"),
                             result=str(out / f"{tag}_candidate_K{a.K}.json")))
     return out, dict(model=model, stage0=state, eos_inputs=explicit,
                      state_json=a.state_json, extends=a.extend_run, reference=reference,
-                     extra_h=a.extra_h, P=a.P, T=a.T, ps=a.ps,
+                     extra_h=a.extra_h, resumed_from=a.resume_run, checkpoint_seconds=a.checkpoint_seconds, P=a.P, T=a.T, ps=a.ps,
                      equil_ps=a.equil_ps, minutes=a.minutes, jobs=records,
                      allocation=os.environ.get("SLURM_JOB_ID"),
                      git=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip())
@@ -606,7 +626,7 @@ def run_unlocked(a):
         if a.verbose and not a.quiet:
             logs.drain(final=True)
         logs.close()
-    print(f"{manifest['status']}: {out}; unfinished MD is not checkpointed")
+    print(f"{manifest['status']}: {out}; MD checkpoints retained; resume into a fresh output with --resume-run")
     status(argparse.Namespace(out=str(out), gpu=False))
     if not complete:
         raise SystemExit(124 if stopped == "wall-time cap" else 1)
@@ -733,6 +753,8 @@ def main():
     r.add_argument("--batch", type=int, default=8)
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
+    r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints")
+    r.add_argument("--resume-run", help="previous run directory: inherit inputs and continue saved MD into fresh --out")
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
     r.add_argument("--in-place", action="store_true", help="extend in the same directory; archive completed parent under _history and lock against concurrent extensions")
     r.add_argument("--extra-h", nargs=4, type=int, help="four extra-H counts in the ice cell; requires explicit EOS and completed shared H reference")

@@ -112,9 +112,31 @@ class Model:
 
     def energies(self, structs, progress=None):
         out = []
+        cache = getattr(self, "energy_checkpoint", None)
+        if cache:
+            import hashlib
+            from tdi.pwidom_checkpoint import atomic_npz
+            digest = hashlib.sha256(str(self.checkpoint_model_fp).encode())
+            for at in structs:
+                for array in (at.numbers, at.positions, at.cell.array, at.pbc):
+                    digest.update(np.ascontiguousarray(array).tobytes())
+            fingerprint = digest.hexdigest()
+            source = getattr(self, "energy_resume", None)
+            if os.path.exists(cache):
+                raise ValueError(f"Energy checkpoint exists: {cache}; choose fresh output")
+            if source and os.path.isfile(source):
+                with np.load(source, allow_pickle=False) as z:
+                    if str(z["fingerprint"]) != fingerprint:
+                        raise ValueError("Single-point checkpoint model/structures mismatch")
+                    values = z["energies"]
+                    if values.ndim != 1 or len(values) > len(structs) or not np.isfinite(values).all():
+                        raise ValueError("Invalid single-point checkpoint energies")
+                    out = list(values)
+                print(f"RESUME single points: {len(out)}/{len(structs)} saved energies", flush=True)
+            atomic_npz(cache, fingerprint=fingerprint, energies=np.asarray(out))
         if progress:
             progress.update("single points", 0, len(structs), "structures", force=True)
-        for i in range(0, len(structs), self.batch):
+        for i in range(len(out), len(structs), self.batch):
             part = structs[i:i + self.batch]; self.ncalls += 1
             if self.gb is not None:
                 if not getattr(self, "checked", False):   # batched vs single calls once, on the first structures (raises above tolerance: rerun with --batch 1)
@@ -123,6 +145,8 @@ class Model:
             else:
                 for at in part:
                     at.calc = self.calc; out.append(float(at.get_potential_energy())); at.calc = None
+            if cache:
+                atomic_npz(cache, fingerprint=fingerprint, energies=np.asarray(out))
             if progress:
                 progress.update("single points", len(out), len(structs), "structures")
         return np.array(out)
@@ -130,6 +154,9 @@ class Model:
 
 def md_frames(model, at0, a, seed, label):
     """free NVT Langevin MD with the real model (no springs): positions every --every-fs after --equil-ps, and the MLP pressure (incl. kinetic) at each frame"""
+    if getattr(a, "_checkpoint_prefix", None):
+        from tdi.pwidom_checkpoint import md_frames as checkpointed_md
+        return checkpointed_md(model, at0, a, seed, label)
     from ase.md.langevin import Langevin
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
     from ase import units
@@ -209,19 +236,32 @@ def cmd_run(a):
     assert a.vpa and a.T and a.P, "--vpa, --T and --P (or --like)"
     from ase import Atoms
     from tdi import refs
+    from tdi.pwidom_checkpoint import atomic_npz
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
     if a.extend_from and os.path.exists(ff):
         raise SystemExit("--extend-from requires a fresh output cache; refusing to overwrite/reuse an existing one")
+    if a.resume_from and os.path.exists(ff):
+        raise SystemExit("--resume-from requires a fresh output")
+    a._checkpoint_prefix = os.path.join(a.out, tag)
+    source_ff = a.resume_from + "_frames.npz" if a.resume_from else ff
+    if a.resume_from and not any(os.path.isfile(a.resume_from + suffix) for suffix in
+                                ("_frames.npz", "_host_md.npz", "_full_md.npz")):
+        raise SystemExit("No saved frames/checkpoints for --resume-from; legacy unfinished MD cannot be recovered")
     model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
-    if os.path.exists(ff):
-        z = np.load(ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
+    if os.path.exists(source_ff):
+        z = np.load(source_ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
         if "model_fp" in z.files:
             if str(z["model_fp"]) != mfp:
                 raise SystemExit(f"{ff}: frames and pressures were made with another Hamiltonian (fingerprint {z['model_fp']} vs {mfp} for {a.model}): they are not an equilibrium ensemble of this model; use another --out or --tag")
         else:
             print(f"WARNING: {ff} has no model fingerprint (made before the check): the model is NOT verified", flush=True)
+        if a.resume_from:
+            if "model_fp" not in z.files or not np.array_equal(z["numbers"], host.numbers) or not np.array_equal(z["cell"], cell):
+                raise SystemExit("Resume requires fingerprinted frames with matching species/cell")
+            from tdi.pwidom_checkpoint import atomic_npz
+            atomic_npz(ff, **{k: z[k] for k in z.files})
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
     elif a.extend_from:
         with np.load(a.extend_from) as old:
@@ -250,7 +290,7 @@ def cmd_run(a):
         nf, nPf = md_frames(model, full0, a, segment_seed+1, "host + 1 H")
         fh, Ph = np.concatenate([previous["host"], nh]), np.concatenate([previous["P_host"], nPh])
         fp, Pf = np.concatenate([previous["full"], nf]), np.concatenate([previous["P_full"], nPf])
-        np.savez(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T,
+        atomic_npz(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T,
                  natoms=len(host), numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp,
                  segment_seed=segment_seed, segments=segments,
                  parent_frames=os.path.abspath(a.extend_from), additional_ps=a.ps, reequil_ps=a.equil_ps)
@@ -259,7 +299,7 @@ def cmd_run(a):
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
+        atomic_npz(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
@@ -313,6 +353,11 @@ def cmd_run(a):
             progress.update("waiting for single-point GPU lock", force=True)
             print(f"waiting for the single-point GPU lock ({lk}): another host is in its single points", flush=True); fcntl.flock(fh_lock, fcntl.LOCK_EX)
             print(f"got the GPU lock after {(time.time() - t_w) / 60:.1f} min", flush=True)
+    energy_label = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
+    energy_suffix = f"_{energy_label}_K{K}_energies.npz"
+    model.energy_checkpoint = a._checkpoint_prefix + energy_suffix
+    model.energy_resume = a.resume_from + energy_suffix if a.resume_from else None
+    model.checkpoint_model_fp = mfp
     E = model.energies(S0 + S1 + D0 + D1, progress=progress); n0, n1, m0 = len(S0), len(S1), len(D0)
     progress.update("analysis", force=True)
     if lk: fcntl.flock(fh_lock, fcntl.LOCK_UN); fh_lock.close()
@@ -370,7 +415,7 @@ def cmd_run(a):
         print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
     workfile = os.path.join(a.out,f"{tag}_{lab}_K{K}_work.npz")
-    np.savez(workfile, forward_work_eV=np.asarray(wf_frame),
+    atomic_npz(workfile, forward_work_eV=np.asarray(wf_frame),
              reverse_work_eV=-np.asarray(wr_frame), T=a.T, P_target=a.P,
              N_H=NH, model=a.model, model_fp=mfp, proxy=a.proxy,
              source_frames=os.path.abspath(ff), host_frame_ids=np.array(sfr),
@@ -419,6 +464,8 @@ def main():
     r.add_argument("--stride", type=int, default=1, help="use every stride-th cached frame"); r.add_argument("--batch", type=int, default=16, help="structures per batched model call (GRACE)")
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
+    r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints (default 300)")
+    r.add_argument("--resume-from", help="previous output/tag prefix; continue MD into fresh --out without re-equilibration")
     r.add_argument("--extend-from", help="cached frames: append a restarted MD segment in fresh --out; new thermal velocities and re-equilibration")
     r.add_argument("--candidate-dir", default=None, help="optional unlabeled extxyz diagnostic queue; no DFT submission")
     r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic trial pairs per host run")
