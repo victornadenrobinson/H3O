@@ -60,14 +60,20 @@ Every run requires a fresh `--out` or creates a timestamped directory: existing
 results are never overwritten or silently reused. `manifest.json` records the
 commands, source paths, resolved model, Git revision, allocation, PIDs and exits;
 each host has a log and the usual pwidom frames/result files. Status is read-only.
-The launcher streams full emitted host output with `[H2O]` / `[pureH]` prefixes,
-while preserving the full files. `--quiet` restores summary-only output. The
+The launcher defaults to a compact bordered table with per-host progress bars,
+stage elapsed/remaining ETA, GPU utilization and used/total VRAM. It uses colour
+and refreshes in place on interactive terminals; `--plain` selects ASCII output
+without colour/screen clearing. Redirected output has no ANSI formatting.
+`--verbose` additionally streams full emitted host output with prefixes, while
+the complete files are always preserved. `--quiet` suppresses raw streaming. The
 status script's `--follow` streams logs from an already running scan and prints
 the result summary when the launcher finishes. Ctrl-C stops that viewer only.
 The 30-second heartbeat also reports utilization and used/total memory per GPU
 from nvidia-smi. Optional progress sidecars record equilibration/sampling steps,
 proxy preparation and batched single-point counts, percentages and measured
-**stage** ETA. Initial model loading/first-call compilation has unknown duration;
+**stage** ETA. The first positive timing sample can include compilation and is
+excluded from ETA prediction; two positive samples are required before estimating
+from recent increments. Initial model loading/first-call compilation has unknown duration;
 ETA says estimating until timed work is available. ETA is not a prediction for
 all remaining stages. Progress is emitted at roughly 10-second intervals and
 stage boundaries, with no extra force evaluations or changes to the sampler.
@@ -77,6 +83,10 @@ For older runs without sidecars, status estimates current-MD time remaining
 from successive frame/time log lines; unmeasured later stages remain unknown.
 Missing telemetry is reported without failing the calculation. Already running
 processes keep their original output behavior until the next run.
+For sampling extensions, the table can show the previous completed run's transfer
+free energy, explicitly labeled `prior`. A `new` value is shown only after the
+host and pure-H insertion/deletion estimates are complete; MD alone cannot give
+a new Widom free energy. This display adds no model calls or estimator changes.
 `--gpu` runs nvidia-smi on the machine where status is invoked. On the login node,
 use an overlapping allocation step for GPU monitoring rather than querying login GPUs.
 
@@ -229,7 +239,13 @@ bash mlp_pipeline/perlmutter_bench.sh --dry-run
 bash mlp_pipeline/perlmutter_bench.sh --minutes 10
 ```
 
-This reuses `tdi/bench.py` and the real lambda engine on the 325-atom H2O+H
+The default `--workflow pwidom` measures direct NVT MD processes/GPU and the
+actual pwidom energy evaluator's structures/batch separately. It validates a
+best observed MD layout and a best observed energy-batch layout across four GPUs;
+MD steps/s and structures/s are never ranked against each other. This is the
+benchmark to use for composition scans or independent replicas of one composition.
+
+`--workflow tdi` reuses `tdi/bench.py` and the real lambda engine on the 325-atom H2O+H
 insertion system (host and full energies per lambda step). It screens 1/2/4/8
 independent processes per GPU on four GPUs concurrently, then 2/4/8/16 batched
 lambda replicas in one process/GPU. Finally it repeats the best observed layout
@@ -239,7 +255,7 @@ preliminary until the whole-node validation finishes. `--system H` or `insH`
 checks the hydrogen reference separately; `--system h2o` checks one-call MD.
 Volumes and P/T come from `--state-json` (default the saved 500-GPa/3000-K file).
 
-Default: five warm-up and 30 timed steps per replica, two TensorFlow CPU threads
+Default: five warm-up and 30 timed steps/calls, two TensorFlow CPU threads
 per process, neighbor subprocess pool disabled, 180-second limit per phase and
 ten-minute global cap (including loading/compilation). All processes warm up
 before synchronized timing. Aggregate rates use total completed lambda steps
@@ -254,6 +270,13 @@ the raw result records its effective max-atoms setting. Larger batches are not
 automatically better. The benchmark changes no MPS settings and refuses an active
 MPS environment or GPUs with more than 512 MiB already allocated. It reports CPU
 affinity/thread settings; CPU preparation can limit throughput despite free VRAM.
+Before packed configurations, a one-worker/GPU calibration records sampled
+device memory and TensorFlow allocator peak. Admission projects independent
+context or batched disconnected-graph memory with a default 1.5 safety factor,
+and reserves at least 20% of VRAM (or --reserve-gib, whichever is larger).
+Layouts that do not fit, or lack calibration/telemetry, are skipped before
+workers start. This reduces OOM risk; it cannot guarantee an unobserved peak
+never exceeds a projection. No intentional run-to-OOM sweep is performed.
 
 Outputs are timestamped `runs/bench_*/` logs, `manifest.json`, `results.jsonl` and
 `summary.json`. `RUN_ORIGIN.txt` identifies Perlmutter, host and Slurm allocation
@@ -261,3 +284,16 @@ in new benchmark and scan directories. The scientific inputs/outputs stay in
 `runs/` for existing analysis; nothing is moved into `perlmutter-runs/`.
 The benchmark writes no production trajectories. CPU toy mode exists only for
 testing the launcher and is never a GPU-performance measurement.
+
+For an eventual 1–50 extra-H scan in a 108-O cell, check H2.5O EOS coverage as
+well: 50 H means H2.463O, beyond the current H2.25O anchor at 27 H. Use
+`--inspect-eos runs/inventory_binned.csv --include-h25` before planning volumes.
+No volume extrapolation or 50-composition production job is started by this
+benchmark. One shared pure-H reference can serve multiple compositions at the
+same P/T/model, with shared-reference covariance retained in later analysis.
+Independent replicas at one composition are another way to fill the node once
+safe processes/GPU are measured. Use distinct seeds and equilibrated starts.
+Future pwidom results include a small `_work.npz` containing frame-grouped
+forward/reverse work arrays and provenance for later pooling. No replica-pooling
+estimator is introduced here: do not average free energies/Kish fractions or
+double-count frames present in both a parent and its extension.

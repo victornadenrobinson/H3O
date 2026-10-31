@@ -89,6 +89,30 @@ training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
 
 ## Layout and workflows
 
+- Top-level `RUNNING.md` is the terminal quick reference, with Perlmutter/Young
+  environment paths, scan/extension commands and links to other calculation
+  entry points. Keep it updated when command interfaces change. Extensions use
+  fresh output directories for parent preservation/concurrent-writer protection;
+  in-place pwidom extension is not implemented. Checkpointed TDI restarts differ.
+
+- Utilization distinction: current pwidom scans have one host process/GPU,
+  sequential host and host+H MD, then batched single points; **no lambda replicas**.
+  The separate TDI throughput benchmark screens multiple independent lambda
+  processes or batched replicas per GPU. Free VRAM is not equivalent to idle GPU
+  compute. User's immediate priority is measured GPU/lambda utilization and total
+  lambda-steps/s, not a viewer for the ongoing run. Future launches use a compact
+  terminal table by default; --verbose retains full logs. Prior free energies are
+  labeled prior, and ETA excludes the first positive sample's compilation cost.
+  perlmutter_bench.sh now defaults to --workflow pwidom (direct MD process
+  throughput and independent energy-batch throughput, validated separately).
+  --workflow tdi explicitly selects lambda profiling. A one-worker/GPU VRAM
+  calibration precedes packing; projected memory has a 1.5 safety factor and
+  >=20% device-memory reserve. Unsafe layouts skip rather than intentionally OOM.
+  Actual GPU results are still needed before choosing processes/GPU for a full
+  composition scan. --inspect-eos ... --include-h25 checks the extra H2.5O anchor
+  needed beyond 27 extra H in a 108-O cell. Future pwidom runs save _work.npz
+  arrays for replica pooling; parent/extension overlap must not be double-counted.
+
 - Cluster result snapshots: `docs/status/README.md` indexes source machines and
   refresh rules. `docs/status/young_tdi_summary_received_2026-10-31.txt` preserves
   the user's full Young summarize.py paste (actual execution date/node/revision

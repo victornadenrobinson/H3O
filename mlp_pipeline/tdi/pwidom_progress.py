@@ -17,6 +17,7 @@ class Progress:
         self.path = Path(path) if path else None
         self.stage = None
         self.started = self.last = 0.0
+        self.samples = []
 
     def update(self, stage, done=0, total=0, unit="items", force=False):
         if self.path is None:
@@ -25,11 +26,23 @@ class Progress:
         changed = stage != self.stage
         if changed:
             self.stage, self.started, self.last = stage, now, -float("inf")
+            self.samples = []
         if not force and now - self.last < 10 and done != total:
             return
         self.last = now
         elapsed = now - self.started
-        eta = elapsed / done * max(0, total - done) if done > 0 and elapsed > 0 else None
+        if done > 0:
+            self.samples.append((done, now))
+            self.samples = self.samples[-5:]
+        # The first positive sample can include XLA compilation. Estimate from
+        # subsequent increments, never extrapolate that first warm-up cost.
+        eta = None
+        if total and done == total:
+            eta = 0.0
+        elif len(self.samples) >= 2:
+            count = self.samples[-1][0] - self.samples[0][0]
+            if count > 0:
+                eta = (self.samples[-1][1] - self.samples[0][1]) / count * max(0, total-done)
         fraction = done / total if total else None
         record = dict(stage=stage, done=done, total=total, unit=unit,
                       fraction=fraction, elapsed_seconds=elapsed,

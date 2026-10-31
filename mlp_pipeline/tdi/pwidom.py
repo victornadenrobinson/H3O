@@ -369,6 +369,14 @@ def cmd_run(a):
     if not B:
         print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
+    workfile = os.path.join(a.out,f"{tag}_{lab}_K{K}_work.npz")
+    np.savez(workfile, forward_work_eV=np.asarray(wf_frame),
+             reverse_work_eV=-np.asarray(wr_frame), T=a.T, P_target=a.P,
+             N_H=NH, model=a.model, model_fp=mfp, proxy=a.proxy,
+             source_frames=os.path.abspath(ff), host_frame_ids=np.array(sfr),
+             full_frame_ids=np.array(dfr), seed=a.seed,
+             convention="BAR uses forward insertion work and negative deletion log-work; do not pool overlapping parent/extension frames as independent")
+    r["work_file"] = workfile
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
     progress.update("complete", 1, 1, "result", force=True)
     print(f"{tag} proxy {lab} K {K}: {len(wf)} insertions ({len(sfr)} frames), {len(wr)} deletions, {model.ncalls} model calls, {(time.time() - t0) / 60:.1f} min")

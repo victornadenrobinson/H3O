@@ -13,6 +13,7 @@ import os
 import re
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -120,6 +121,94 @@ def progress_text(job):
         except (OSError, KeyError):
             pass
         return "initializing; stage ETA estimating"
+
+
+def short_time(seconds):
+    text = duration(seconds)
+    return text[3:] if text.startswith("00:") else text
+
+
+def read_result(job):
+    try:
+        return json.loads(Path(job["result"]).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def transfer_estimates(manifest):
+    """Only completed values; never reinterpret old values as a live estimate."""
+    results = {j["name"]: read_result(j) for j in manifest["jobs"]}
+    previous = {}
+    if manifest.get("extends"):
+        try:
+            old = json.loads((Path(manifest["extends"]) / "manifest.json").read_text())
+            previous = {j["name"]: read_result(j) for j in old["jobs"]}
+        except (OSError, ValueError):
+            pass
+    estimates = {}
+    for job in manifest["jobs"]:
+        name = job["name"]
+        if name == "pureH":
+            estimates[name] = "H reference"; continue
+        for source, label in ((results, "new"), (previous, "prior")):
+            if source.get(name) and source.get("pureH"):
+                value, error = scan.dg(source[name], source["pureH"])
+                estimates[name] = f"{label} dg {value:+.0f} +/-{error:.0f} meV/H"
+                break
+        else:
+            estimates[name] = "dg awaiting probes"
+    return estimates
+
+
+def dashboard(manifest, elapsed=None, exits=None, plain=False, clear=False):
+    """One compact block; full output remains in each host's log."""
+    metrics = gpu_metrics(manifest["jobs"])
+    estimates = transfer_estimates(manifest)
+    if elapsed is None:
+        try:
+            from datetime import datetime
+            elapsed = max(0, time.time()-datetime.fromisoformat(manifest["started"]).timestamp())
+        except (KeyError, ValueError):
+            elapsed = 0
+    remaining_cap = max(0, manifest["minutes"]*60-elapsed)
+    from pwidom_dashboard import render
+    rows = []
+    for job in manifest["jobs"]:
+        name = job["name"]
+        code = (exits or {}).get(name, job.get("exit_code"))
+        if code is not None:
+            stage = "DONE" if code == 0 else f"FAILED({code})"
+            fraction, timing = (1.0 if code == 0 else None), "--"
+        else:
+            try:
+                p = json.loads(Path(job["progress"]).read_text())
+                stage = p["stage"].replace("MD host + 1 H", "Host+H").replace("MD host", "Host").replace("equilibration", "eq").replace("sampling", "MD")
+                fraction = p["fraction"]
+                left = short_time(p["eta_seconds"]) if p["eta_seconds"] is not None else "--:--"
+                timing = f"[{short_time(p.get('elapsed_seconds',0))}/{left} ETA]"
+                age = max(0, time.time()-p["updated"])
+                if age > 40:
+                    stage += f" stale {age:.0f}s"
+            except (OSError, ValueError, KeyError):
+                stage, fraction, timing = "Initializing", None, "--"
+                # Preserve useful frame-derived ETA for pre-sidecar runs.
+                legacy = progress_text(job)
+                match = re.search(r"MD (.*?): (\d+)/(\d+) frames; elapsed (\S+) / remaining (\S+)",legacy)
+                if match:
+                    stage = "MD "+match[1]
+                    fraction = int(match[2])/int(match[3])
+                    timing = f"[{match[4]}/{match[5]} ETA]"
+        gpu = metrics.get(job["gpu"], "GPU n/a" if job["gpu"] else "CPU")
+        gpu = gpu.replace("GPU ", "GPU").replace(": ", " ").replace(" util, ", " ")
+        rows.append(dict(name=name,phase=stage,fraction=fraction,timing=timing,gpu=gpu,free_energy=estimates[name]))
+    tty = sys.stdout.isatty()
+    color = tty and not plain and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+    if clear and tty and not plain:
+        print("\033[H\033[2J",end="")
+    text = render(f"Perlmutter pwidom | {manifest['P']:g} GPa / {manifest['T']:g} K | allocation {manifest.get('allocation','-')}",
+                  f"Elapsed {short_time(elapsed)}   Wall cap left {short_time(remaining_cap)}   State: {manifest['status']}",
+                  rows, width=shutil.get_terminal_size((140,40)).columns, color=color, plain=plain)
+    print(text,flush=True)
 
 
 def plan(a):
@@ -289,8 +378,8 @@ def run(a):
     if a.inspect_eos:
         inspect_eos(a)
         return
-    if a.save_eos:
-        raise ValueError("--save-eos requires --inspect-eos CSV")
+    if a.save_eos or a.include_h25:
+        raise ValueError("--save-eos/--include-h25 require --inspect-eos CSV")
     out, manifest = plan(a)
     print(f"Four-host scan: {a.P:g} GPa / {a.T:g} K; {a.ps:g} ps + {a.equil_ps:g} ps equil per MD; wall cap {a.minutes:g} min")
     print(f"Model: {manifest['model']}\nOutput: {out}")
@@ -301,7 +390,9 @@ def run(a):
     if a.extend_run:
         print(f"EXTENDING {a.extend_run}: add {a.ps:g} ps per ensemble, re-equilibrate {a.equil_ps:g} ps with fresh thermal velocities; retain old frames. Recompute insertion estimates on combined frames.")
     for r in manifest["jobs"]:
-        print(f"{r['name']}: GPU {r['gpu'] or 'CPU'}, {r['atoms']} host atoms\n  {shlex.join(r['command'])}")
+        print(f"{r['name']}: GPU {r['gpu'] or 'CPU'}, {r['atoms']} host atoms")
+        if a.dry_run or a.verbose:
+            print("  " + shlex.join(r["command"]))
     if a.dry_run:
         return
     out.mkdir(parents=True, exist_ok=False)
@@ -340,18 +431,13 @@ def run(a):
         last = -30.0
         while any(p.poll() is None for _, p in children):
             elapsed = time.monotonic() - started
-            if not a.quiet:
+            if a.verbose and not a.quiet:
                 logs.drain()
             if stopped or elapsed >= a.minutes * 60:
                 stopped = stopped or "wall-time cap"
                 break
-            if elapsed - last >= 30:
-                print(f"elapsed {duration(elapsed)} / cap {duration(a.minutes * 60)}; cap remaining {duration(a.minutes * 60 - elapsed)} | " + " | ".join(
-                    f"{r['name']}: " + ("running" if p.poll() is None else f"exit {p.returncode}") for r, p in children))
-                metrics = gpu_metrics(manifest["jobs"])
-                for r, p in children:
-                    print(f"  {r['name']} | {metrics.get(r['gpu'], 'GPU telemetry unavailable' if r['gpu'] else 'CPU')} | "
-                          + (progress_text(r) if p.poll() is None else f"exit {p.returncode}"), flush=True)
+            if elapsed - last >= a.interval:
+                dashboard(manifest, elapsed, {r['name']:p.poll() for r,p in children}, plain=a.plain, clear=not a.verbose)
                 last = elapsed
             time.sleep(0.5)
     finally:
@@ -375,7 +461,7 @@ def run(a):
             p.returncode == 0 and Path(r["result"]).is_file() for r, p in children)
         manifest["status"] = "complete" if complete else (stopped or "failed")
         save(out / "manifest.json", manifest)
-        if not a.quiet:
+        if a.verbose and not a.quiet:
             logs.drain(final=True)
         logs.close()
     print(f"{manifest['status']}: {out}; unfinished MD is not checkpointed")
@@ -392,7 +478,10 @@ def inspect_eos(a):
     eos = import_module("17_eos_md")
     pressures = [a.P * .97, a.P, a.P * 1.03]
     inputs = dict(P=a.P, T=a.T)
-    for key, comp in (("ice", "h2o"), ("h225", "h2.25o"), ("H", "h")):
+    compositions = [("ice", "h2o"), ("h225", "h2.25o"), ("H", "h")]
+    if a.include_h25:
+        compositions.append(("h25", "h2.5o"))
+    for key, comp in compositions:
         d = df[(df.comp_snap == comp) & (df.T_bin == a.T)]
         if key != "H":
             d = d[d.Path.str.contains("fcc", case=False) &
@@ -405,7 +494,7 @@ def inspect_eos(a):
             v = [eos.h_vpa(a.inspect_eos, a.T, p) for p in pressures]
         else:
             v = eos.dft_vpa(a.inspect_eos, "fcc", a.T, pressures,
-                            hper=2 if key == "ice" else 2.25, max_extrap=0)
+                            hper={"ice":2,"h225":2.25,"h25":2.5}[key], max_extrap=0)
         if not np.isfinite(v).all() or v[2] >= v[0]:
             print("  EOS does not cover the slope interval; no volume/B recommended.")
             continue
@@ -415,7 +504,7 @@ def inspect_eos(a):
             source=f"{Path(a.inspect_eos).resolve()}; {len(d)} exact-{a.T:g}K runs; existing ln P(V) fit and P +/-3% finite difference; generated {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
             **({"natoms":250} if key == "H" else {"nrep":3}))
     if a.save_eos:
-        if not all(k in inputs for k in ("ice", "h225", "H")):
+        if not all(k in inputs for k,_ in compositions):
             raise ValueError("Incomplete EOS coverage: no configuration saved")
         path = Path(a.save_eos)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -502,6 +591,7 @@ def main():
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
     r.add_argument("--inspect-eos", metavar="CSV", help="read-only exact-temperature-bin DFT EOS report; no GPU/run")
     r.add_argument("--save-eos", metavar="JSON", help="with --inspect-eos: save all three EOS inputs to a fresh file; no MD")
+    r.add_argument("--include-h25",action="store_true",help="with --inspect-eos: also require/report H2.5O coverage for scans beyond 27 extra H")
     r.add_argument("--out")
     r.add_argument("--model", default="grace-ft:runs/grace/ft_m2")
     r.add_argument("--ice-proxy", default="runs/pwidom_fit/proxy_ice.json")
@@ -509,13 +599,20 @@ def main():
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--cpu", action="store_true", help="local toy checks only")
     r.add_argument("--quiet", action="store_true", help="show summaries only; full host output remains in logs")
+    r.add_argument("--verbose", action="store_true", help="also stream every host log line; default is compact dashboard")
+    r.add_argument("--interval", type=float, default=30, help="dashboard refresh seconds")
+    r.add_argument("--plain", action="store_true", help="ASCII dashboard without color/screen clearing")
     r.add_argument("--candidate-dir", help="optional shared unlabeled extxyz queue for later DFT review")
     r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic pairs per host")
     s = sub.add_parser("status")
     s.add_argument("out", help="exact output directory printed by the launcher")
     s.add_argument("--gpu", action="store_true", help="also run nvidia-smi on this machine")
     s.add_argument("--follow", action="store_true", help="stream full host logs until completion; Ctrl-C stops viewer only")
+    s.add_argument("--interval", type=float, default=30, help="dashboard refresh seconds")
+    s.add_argument("--plain", action="store_true", help="ASCII dashboard without color/screen clearing")
     a = ap.parse_args()
+    if a.interval <= 0:
+        ap.error("--interval must be positive")
     try:
         (run if a.action == "run" else status)(a)
     except (ValueError, OSError, KeyError) as ex:

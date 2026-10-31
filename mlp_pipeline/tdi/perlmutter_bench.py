@@ -6,6 +6,7 @@ from rates, but included in the wall cap. No MPS daemon/settings are changed.
 import argparse
 import csv
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -52,8 +53,20 @@ def timed_summary(results):
     if not results or any(r["timed_ended"] <= r["timed_started"] for r in results):
         raise ValueError("Missing/invalid measured timing intervals")
     span = max(r["timed_ended"] for r in results)-min(r["timed_started"] for r in results)
-    steps = sum(r["lambda_steps"] for r in results)
-    return dict(lambda_steps=steps, measured_seconds=span, lambda_steps_s=steps/span)
+    steps = sum(r.get("work_units",r.get("lambda_steps",0)) for r in results)
+    return dict(lambda_steps=steps, measured_seconds=span, lambda_steps_s=steps/span,
+                work_units=steps,work_units_s=steps/span,unit=results[0].get("unit","lambda-steps"))
+
+
+def memory_projection(mode, size, profile, safety):
+    """Conservative disconnected-graph scaling from a one-worker calibration."""
+    if mode in ("engine","pwmd"):
+        return size * profile["process_MiB"] * safety
+    # Lambda insertion batches contain a full system AND its host per replica.
+    graphs = size * (profile["graphs_per_lambda"] if mode == "batch" else 1)
+    if profile.get("tensor_MiB"):
+        return (profile["context_MiB"] + graphs*profile["tensor_MiB"]) * safety
+    return graphs*profile["process_MiB"]*safety
 
 
 def phase(a, name, layouts, out, common, deadline, interrupted):
@@ -61,14 +74,26 @@ def phase(a, name, layouts, out, common, deadline, interrupted):
     barrier = out / f"{name}.go"
     cases = []; all_workers = []; started = time.monotonic(); released = False
     try:
+        available = {} if a.cpu else telemetry()
         for gpu, mode, size in layouts:
             case = dict(phase=name, gpu=gpu, mode=mode, size=size, workers=[], samples=[], error=None)
             cases.append(case)
-            for rank in range(size if mode == "engine" else 1):
+            if not a.cpu and name != "memory_calibration":
+                profile = getattr(a,"_memory_profile",None)
+                metric = available.get(gpu)
+                if profile is None or metric is None:
+                    case.update(error="memory calibration/telemetry missing; not admitted",skipped=True)
+                    continue
+                projected = memory_projection(mode,size,profile,a.memory_safety)
+                reserve = max(a.reserve_gib*1024,.2*metric["total_MiB"])
+                if projected+reserve+metric["memory_MiB"] > metric["total_MiB"]:
+                    case.update(error=f"projected {projected/1024:.1f} GiB + reserve {reserve/1024:.1f} GiB exceeds free VRAM",skipped=True)
+                    continue
+            for rank in range(size if mode in ("engine","pwmd") else 1):
                 log = out / f"{name}_gpu{gpu}_{mode}{size}_{rank}.log"
                 cmd = [sys.executable, "-u", "mlp_pipeline/tdi/bench.py", mode, a.system,
                        *common, "--barrier", str(barrier)]
-                if mode == "batch": cmd += ["--nrep", str(size)]
+                if mode in ("batch","pwsp"): cmd += ["--nrep", str(size)]
                 env = dict(os.environ, CUDA_VISIBLE_DEVICES="" if a.cpu else gpu,
                     OMP_NUM_THREADS=str(a.threads), OPENBLAS_NUM_THREADS="1",
                     TF_NUM_INTRAOP_THREADS=str(a.threads), TF_NUM_INTEROP_THREADS="1",
@@ -111,8 +136,10 @@ def phase(a, name, layouts, out, common, deadline, interrupted):
                 for c in cases:
                     if c["samples"]:
                         m = c["samples"][-1]
+                        active = sum(w["process"].poll() is None for w in c["workers"])
                         print(f"    GPU {c['gpu']}: {m['utilization']:.0f}% util, "
-                              f"{m['memory_MiB']/1024:.1f}/{m['total_MiB']/1024:.1f} GiB", flush=True)
+                              f"{m['memory_MiB']/1024:.1f}/{m['total_MiB']/1024:.1f} GiB; "
+                              f"size {c['size']} ({c['mode']}), {active} live processes", flush=True)
                 last = now
             time.sleep(.2)
     finally:
@@ -134,16 +161,17 @@ def phase(a, name, layouts, out, common, deadline, interrupted):
             else:
                 c["error"] = c["error"] or f"missing result/failed worker: {w['log']}"
         row = dict(phase=name, gpu=c["gpu"], mode=c["mode"], size=c["size"],
-                   status="failed" if c["error"] else "complete", error=c["error"],
+                   status="skipped" if c.get("skipped") else "failed" if c["error"] else "complete", error=c["error"],
                    workers=results, logs=[str(w["log"]) for w in c["workers"]],
                    worker_pids=[w["process"].pid for w in c["workers"]],
+                   configured_size=c["size"],
                    sampled_peak_MiB=max((s["memory_MiB"] for s in c["samples"]), default=None))
         if not c["error"]:
             row.update(timed_summary(results))
-            print(f"RESULT GPU {c['gpu']} {c['mode']} {c['size']}: {row['lambda_steps_s']:.2f} lambda-steps/s; "
+            print(f"RESULT GPU {c['gpu']} {c['mode']} {c['size']}: {row['work_units_s']:.2f} {row['unit']}/s; "
                   f"sampled peak {row['sampled_peak_MiB']} MiB", flush=True)
         else:
-            print(f"FAILED GPU {c['gpu']} {c['mode']} {c['size']}: {c['error']}", flush=True)
+            print(f"{row['status'].upper()} GPU {c['gpu']} {c['mode']} {c['size']}: {c['error']}", flush=True)
         rows.append(row)
         with (out / "results.jsonl").open("a") as fh: fh.write(json.dumps(row)+"\n")
     return rows
@@ -151,9 +179,11 @@ def phase(a, name, layouts, out, common, deadline, interrupted):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--workflow",choices=["pwidom","tdi"],default="pwidom",
+                    help="pwidom: direct MD + energy batches; tdi: independent/batched lambda engines")
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2")
     ap.add_argument("--state-json", default="envs/pwidom_500GPa_3000K.json")
-    ap.add_argument("--system", choices=["ins", "h2o", "H", "insH"], default="ins")
+    ap.add_argument("--system", choices=["ins", "h2o", "H", "insH"], default=None)
     ap.add_argument("--processes", nargs="+", type=int, default=[1,2,4,8])
     ap.add_argument("--replicas", nargs="+", type=int, default=[2,4,8,16])
     ap.add_argument("--steps", type=int, default=30)
@@ -161,11 +191,19 @@ def main():
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--minutes", type=float, default=10)
     ap.add_argument("--stage-seconds", type=float, default=180)
+    ap.add_argument("--reserve-gib",type=float,default=12,help="minimum VRAM reserve (also reserve at least 20% of device memory)")
+    ap.add_argument("--memory-safety",type=float,default=1.5,help="multiplier on calibrated VRAM projections")
     ap.add_argument("--out")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--cpu", action="store_true", help="tiny toy workflow check only")
     a = ap.parse_args()
+    if not all(math.isfinite(v) for v in (a.minutes,a.stage_seconds,a.reserve_gib,a.memory_safety)):
+        raise ValueError("Time limits and VRAM guard settings must be finite")
+    a.system = a.system or ("h2o" if a.workflow == "pwidom" else "ins")
+    if a.workflow == "pwidom" and a.system not in ("h2o","H"):
+        raise ValueError("pwidom benchmark system must be h2o or H (no lambda insertion path)")
     if (a.steps <= 0 or a.warm < 0 or a.threads <= 0 or a.minutes <= 0 or a.stage_seconds <= 0
+            or a.reserve_gib < 0 or a.memory_safety < 1
             or not a.processes or not a.replicas or max(len(a.processes),len(a.replicas)) > 4
             or min(a.processes+a.replicas) < 1):
         raise ValueError("Need 1-4 positive sizes per sweep, positive limits/steps/threads and nonnegative warm-up")
@@ -178,7 +216,7 @@ def main():
     data = json.loads(Path(a.state_json).read_text())
     key = "H" if a.system in ("H","insH") else "ice"
     vpa = float(data[key]["vpa"])
-    if not vpa > 0:
+    if not math.isfinite(vpa) or not vpa > 0:
         raise ValueError("Invalid benchmark volume")
     if a.model.startswith("grace-ft:"):
         path = Path(a.model.split(":",1)[1]).expanduser().resolve()
@@ -204,7 +242,7 @@ def main():
     cpus = len(os.sched_getaffinity(0))
     print(f"Benchmark: {a.system}, {data['P']:g} GPa / {data['T']:g} K, vpa={vpa:g}; {a.model}")
     print(f"4 GPUs; {cpus} available CPU threads; TF threads/process {a.threads}; neighbor worker pool disabled")
-    print(f"Screen processes/GPU {a.processes}, then batched lambdas/GPU {a.replicas}; validate best observed layout on all four GPUs")
+    print(f"Workflow {a.workflow}: processes/GPU {a.processes}; batch sizes/GPU {a.replicas}; whole-node validation follows")
     print(f"{a.warm} warm-up + {a.steps} timed MD steps; {a.minutes:g}-minute global cap; outputs {out}; no MPS changes")
     if a.cpu: print("TOY WORKFLOW TEST: rates are not GPU performance measurements")
     if a.dry_run: return
@@ -222,19 +260,50 @@ def main():
         signal.signal(sig, lambda *_: interrupted.__setitem__(0, True))
     deadline = time.monotonic()+a.minutes*60
     rows = []
-    for name, mode, sizes in (("process_screen","engine",a.processes),("batch_screen","batch",a.replicas)):
+    if not a.cpu:
+        mode = "pwmd" if a.workflow == "pwidom" else "engine"
+        calibration = phase(a,"memory_calibration",[(g,mode,1) for g in gpus],out,common,deadline,lambda:interrupted[0])
+        good = [r for r in calibration if r["status"] == "complete"]
+        if not good:
+            raise ValueError("No valid memory calibration; larger layouts were not launched")
+        process_peak = max(r["sampled_peak_MiB"] or 0 for r in good)
+        tensor_peak = max(w.get("tensorflow_peak_MiB",0) for r in good for w in r["workers"])
+        process_peak = max(process_peak,tensor_peak+2048)
+        a._memory_profile = dict(process_MiB=process_peak,tensor_MiB=tensor_peak,
+            context_MiB=max(2048,process_peak-tensor_peak),
+            graphs_per_lambda=2 if a.system in ("ins","insH") else 1)
+        save(out/"memory_calibration.json",a._memory_profile)
+        print(f"VRAM guard: baseline {process_peak/1024:.1f} GiB/worker; safety x{a.memory_safety:g}; reserve >=20% or {a.reserve_gib:g} GiB. Unsafe layouts are skipped.",flush=True)
+    phases = (("process_screen","engine",a.processes),("batch_screen","batch",a.replicas)) if a.workflow == "tdi" else (
+        ("md_screen","pwmd",a.processes),("energy_screen","pwsp",a.replicas))
+    for name, mode, sizes in phases:
         if interrupted[0] or time.monotonic() >= deadline: break
         rows += phase(a,name,[(g,mode,n) for g,n in zip(gpus,sizes)],out,common,deadline,lambda:interrupted[0])
     valid = [r for r in rows if r["status"] == "complete"]
-    winner = max(valid,key=lambda r:r["lambda_steps_s"]) if valid else None
+    winner = max(valid,key=lambda r:r["lambda_steps_s"]) if valid and a.workflow == "tdi" else None
+    winners = {}
+    if a.workflow == "pwidom":
+        for mode in ("pwmd","pwsp"):
+            candidates = [r for r in valid if r["mode"] == mode]
+            if candidates: winners[mode] = max(candidates,key=lambda r:r["work_units_s"])
+    elif winner:
+        winners["tdi"] = winner
     validation = []
-    if winner and not interrupted[0] and time.monotonic() < deadline:
-        validation = phase(a,"node_validation",[(g,winner["mode"],winner["size"]) for g in gpus],
-                           out,common,deadline,lambda:interrupted[0])
+    totals = {}
+    for key, best in winners.items():
+        if interrupted[0] or time.monotonic() >= deadline: break
+        name = "node_validation" if a.workflow == "tdi" else key+"_node_validation"
+        group = phase(a,name,[(g,best["mode"],best["size"]) for g in gpus],out,common,deadline,lambda:interrupted[0])
+        validation += group
+        if len(group)==4 and all(r["status"] == "complete" for r in group):
+            totals[key] = timed_summary([w for r in group for w in r["workers"]])
+            print(f"MEASURED FOUR-GPU {key}: {totals[key]['work_units_s']:.2f} {totals[key]['unit']}/s; size {best['size']}/GPU",flush=True)
+    required = 1 if a.workflow == "tdi" else 2
     summary = dict(best_observed_screen=winner, validation=validation,
-                   complete_node_validation=len(validation)==4 and all(r["status"]=="complete" for r in validation),
+                   workflow=a.workflow,best_by_mode=winners,whole_node_by_mode=totals,
+                   complete_node_validation=len(totals)==required,
                    interpretation="Short hardware benchmark, not thermodynamic sampling; screening configurations share node CPU resources")
-    if summary["complete_node_validation"]:
+    if summary["complete_node_validation"] and a.workflow == "tdi":
         total = timed_summary([w for r in validation for w in r["workers"]])
         summary["whole_node"] = total
         print(f"\nMEASURED FOUR-GPU TOTAL: {total['lambda_steps_s']:.2f} lambda-steps/s; {winner['mode']} {winner['size']}/GPU", flush=True)

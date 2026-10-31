@@ -37,8 +37,9 @@ def test_toy_scan_and_readonly_status(campaign):
     env, args, out = campaign
     queue = out.parent / "candidates"
     r = shell("perlmutter_pwidom.sh", [*args, "--out", str(out),
-              "--candidate-dir", str(queue), "--candidate-limit", "2"], env)
+              "--candidate-dir", str(queue), "--candidate-limit", "2", "--verbose"], env)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "╔" in r.stdout and "Elapsed / left ETA" in r.stdout
     assert "[H2O]" in r.stdout and "[pureH]" in r.stdout
     assert "proxy candidate" in r.stdout
     m = json.loads((out / "manifest.json").read_text())
@@ -49,6 +50,9 @@ def test_toy_scan_and_readonly_status(campaign):
     for job in m["jobs"]:
         result = json.loads(Path(job["result"]).read_text())
         assert job["exit_code"] == 0 and result["n_ins"] == 5
+        with np.load(result["work_file"]) as work:
+            assert work["forward_work_eV"].shape == (5,1)
+            assert work["reverse_work_eV"].shape == (5,1)
         assert result["proxy_gap_std_kT_ins"] < 1e-8
         progress = json.loads(Path(job["progress"]).read_text())
         assert progress["stage"] == "complete" and progress["fraction"] == 1
@@ -241,8 +245,11 @@ def test_progress_eta_uses_stage_timing(monkeypatch, tmp_path):
     assert json.loads(path.read_text())["eta_seconds"] is None
     clock[0] += 20
     reporter.update("MD host sampling", 25, 100)
-    assert json.loads(path.read_text())["eta_seconds"] == 60
+    assert json.loads(path.read_text())["eta_seconds"] is None  # first interval may include compilation
     assert json.loads(path.read_text())["elapsed_seconds"] == 20
+    clock[0] += 20
+    reporter.update("MD host sampling", 50, 100)
+    assert json.loads(path.read_text())["eta_seconds"] == 40
     reporter.update("single points", 0, 40)
     assert json.loads(path.read_text())["eta_seconds"] is None
 
@@ -252,6 +259,7 @@ def test_progress_does_not_change_toy_md(monkeypatch, tmp_path):
     import numpy as np
     from ase import Atoms
     monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline"))
     monkeypatch.setenv("TOYICE_FIT", str(ROOT / "docs/data/toyfit_t4.json"))
     from pwidom import Model, md_frames
     from pwidom_progress import Progress
@@ -296,3 +304,20 @@ def test_extend_run_adds_frames_without_modifying_parent(campaign):
             assert new["segments"] == 2 and new["segment_seed"] > old["segment_seed"]
             np.testing.assert_array_equal(old["host"], new["host"][:5])
     assert before == {p: p.read_bytes() for p in out.iterdir()}
+
+
+def test_terminal_dashboard_plain_and_color(monkeypatch, capsys):
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    import pwidom_dashboard as display
+    rows = [dict(name="H2O", phase="Host MD", fraction=.5, timing="[02:00/02:00 ETA]",
+                 gpu="GPU0 62% 2.5/80.0 GiB", free_energy="prior dg -1147 +/-90 meV/H")]
+    rendered = display.render("Perlmutter pwidom", "Elapsed 02:00", rows)
+    assert "╔" in rendered and "████░░░░" in rendered
+    assert "2.5/80.0 GiB" in rendered and "prior dg" in rendered
+    assert "\033[" not in rendered
+    assert "\033[" in display.render("Title", "Time", rows, color=True)
+    plain = display.render("Title", "Time", rows, plain=True)
+    assert "╔" not in plain and "####----" in plain
+    assert "\033[" not in plain
+    narrow = display.render("Title", "Time", rows, width=80)
+    assert "prior dg -1147" in narrow

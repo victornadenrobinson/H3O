@@ -41,6 +41,13 @@ def comps_single(run_real, c, kE):
 
 def result(**d):
     d.update(host=os.uname().nodename, pid=os.getpid(), mps=bool(os.environ.get("CUDA_MPS_PIPE_DIRECTORY")), t=time.strftime("%Y-%m-%d %H:%M:%S"))
+    tf = sys.modules.get("tensorflow")
+    if tf is not None:
+        try:
+            memory = tf.config.experimental.get_memory_info("GPU:0")
+            d["tensorflow_peak_MiB"] = memory["peak"] / (1024*1024)
+        except (ValueError, RuntimeError):
+            pass
     print("RESULT " + json.dumps(d), flush=True)
 
 
@@ -55,6 +62,63 @@ def mode_engine(b):
     t = time.monotonic(); r.advance(b.steps); end = time.monotonic(); el = end - t
     result(mode="engine", system=b.system, natoms=len(c["at0"]), steps=b.steps, seconds=el, steps_per_s=b.steps / el, ms_per_step=1000 * el / b.steps,
            timed_started=t, timed_ended=end, lambda_steps=b.steps)
+
+
+def wait_for_benchmark(b):
+    if b.barrier:
+        print("READY", flush=True)
+        while not os.path.exists(b.barrier):
+            time.sleep(.2)
+
+
+def mode_pwmd(b):
+    """The direct ASE Langevin MD used by pwidom: one full-model force call/step."""
+    from importlib import import_module
+    from ase import units
+    from ase.md.langevin import Langevin
+    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+    from pwidom import build_host, Model
+    phase = "H" if b.system == "H" else "fcc"
+    args = argparse.Namespace(phase=phase, vpa=b.vpa, nrep=b.cell_nrep or (5 if phase == "H" else 3),
+                              hper=2., natoms=0, seed=3)
+    at = build_host(args)
+    at.calc = Model(b.model,b.device,1).calc
+    rng = np.random.default_rng(3)
+    MaxwellBoltzmannDistribution(at, temperature_K=b.T or 3000, rng=rng)
+    md = Langevin(at,b.dt*units.fs,temperature_K=b.T or 3000,friction=.01,rng=rng)
+    at.get_forces(); md.run(b.warm); wait_for_benchmark(b)
+    start = time.monotonic(); md.run(b.steps); end = time.monotonic()
+    result(mode="pwmd",system=b.system,natoms=len(at),steps=b.steps,seconds=end-start,
+           work_units=b.steps,unit="MD steps",timed_started=start,timed_ended=end)
+
+
+def mode_pwsp(b):
+    """The pwidom energy evaluator on independent host/host+H structures."""
+    from pwidom import build_host, Model
+    from tdi.run_real import add_ghosts
+    phase = "H" if b.system == "H" else "fcc"
+    args = argparse.Namespace(phase=phase, vpa=b.vpa, nrep=b.cell_nrep or (5 if phase == "H" else 3),
+                              hper=2., natoms=0, seed=3)
+    host = build_host(args); full = add_ghosts(host,1,10)
+    rng = np.random.default_rng(5); structures = []
+    for i in range(b.nrep):
+        at = (host if i%2==0 else full).copy()
+        at.positions += rng.normal(0,.01,at.positions.shape); structures.append(at)
+    model = Model(b.model,b.device,b.nrep)
+    # Model.energies self-checks batched against single calls on its first call.
+    def evaluate():
+        # In particular B=1 must not benchmark ASE's cached result on the same
+        # geometry. Reset calculator results while retaining the loaded model.
+        model.calc.reset()
+        return model.energies(structures)
+    for _ in range(max(1,b.warm)): evaluate()
+    wait_for_benchmark(b)
+    start = time.monotonic()
+    for _ in range(b.steps): evaluate()
+    end = time.monotonic()
+    result(mode="pwsp",system=b.system,natoms=len(host),batch=b.nrep,seconds=end-start,
+           work_units=b.nrep*b.steps,unit="structures",timed_started=start,timed_ended=end,
+           effective_max_atoms=getattr(model.gb,"max_atoms",0))
 
 
 def mode_batch(b):
@@ -158,7 +222,7 @@ def mode_dense(b):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["engine", "batch", "calls", "dense"]); ap.add_argument("system", choices=list(SYSTEMS))
+    ap.add_argument("mode", choices=["engine", "batch", "calls", "dense", "pwmd", "pwsp"]); ap.add_argument("system", choices=list(SYSTEMS))
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--from-dft", default="inventory_binned.csv"); ap.add_argument("--vpa", type=float, default=None)
     ap.add_argument("--P", type=float, default=None); ap.add_argument("--T", type=float, default=None); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--device", default="cuda")
     ap.add_argument("--steps", type=int, default=150); ap.add_argument("--warm", type=int, default=20); ap.add_argument("--lam", type=float, default=0.5); ap.add_argument("--barrier", default=None)
@@ -166,4 +230,5 @@ if __name__ == "__main__":
     ap.add_argument("--cell-nrep", type=int, default=None, help="cell replication override (local toy benchmark checks)")
     ap.add_argument("--workdir", default="runs/bench_tmp", help="isolated benchmark setup directory")
     b = ap.parse_args()
-    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls, "dense": mode_dense}[b.mode](b)
+    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls, "dense": mode_dense,
+     "pwmd":mode_pwmd,"pwsp":mode_pwsp}[b.mode](b)
