@@ -211,7 +211,7 @@ every **0.1 ps coloured by time**:
 ```bash
 "$PY" mlp_pipeline/pwidom_analysis.py time \
   --runs runs/pwidom_300GPa_3000K_reference runs/pwidom_300GPa_3000K_extra \
-  --step-ps 0.1 --reference-mode cumulative \
+  --step-ps 0.1 --reference-mode cumulative --block-ps 0.1 \
   --out runs/plots/pwidom_300GPa_3000K_time_1
 ```
 
@@ -221,10 +221,47 @@ discovery with dependency checks. Both forms are CPU-only; no GPU allocation,
 model calls or MD is required. Use a fresh output directory for every report.
 
 The time command writes `mu_G_dg_vs_time.png/.pdf`,
+`drift_components_vs_time.png/.pdf` (changes in excess BAR and pressure terms),
 `hulls_coloured_by_time.png/.pdf`, `time_series.csv`, `time_hulls.csv` and
 `prefix_input.json`. The 300-GPa/3000-K results record work-file paths and 50
 selected frames per ensemble: the 20-fs sampling cadence supports ten snapshots
 from 0.1 to 1.0 ps if the saved files pass the reconstruction checks.
+
+To redraw an existing time report with the current plot layout, reuse its
+`prefix_input.json` instead of reconstructing BAR from work arrays again:
+
+```bash
+"$PY" mlp_pipeline/pwidom_analysis.py replot-time \
+  --input runs/plots/pwidom_300GPa_3000K_time_1/prefix_input.json \
+  --out runs/plots/pwidom_300GPa_3000K_time_2
+```
+
+The main hull figure separates formation nodes and convex envelopes on the same
+zoomed composition axis. `hull_full_composition.png/.pdf` shows the pure-H
+endpoint separately. Chemical-potential and transfer panels share composition
+colours and an outside legend. Replotting leaves the numerical estimates intact.
+
+Light shading on μH, G_H and transfer dG is **±1 contiguous-block jackknife
+sampling standard error**, computed from the saved works and pressure cache.
+`--block-ps 0.1` deletes all trials in each contiguous 0.1-ps MD block; host
+pressure is recomputed with the same block omitted. Host/N+1 ensembles are
+handled independently. At least three complete blocks are required (change with
+`--min-blocks`, minimum 3), so early prefixes have no band. Band boundaries are
+connected between complete-block sampling cutoffs. No trial-level independence
+or stationarity of these short runs is established.
+
+For transfer dG, the host and reservoir sampling variances are added because the
+MD trajectories are independent. The same reservoir remains shared across host
+compositions: their dG curves are correlated. The bands exclude unvisited work
+tails, model bias, nonstationarity, and partial-volume-parameter uncertainty.
+Vary `--block-ps` (for example 0.05, 0.1, 0.2) to assess block-size sensitivity;
+short runs may not have enough blocks for the larger choice.
+
+Old `prefix_input.json` files contain no sampling errors. Rerun the `time`
+command once to compute them; `replot-time` can restyle old curves but cannot
+recover uncertainty from their final μ values alone. Missing errors stay blank,
+not zero. Estimator disagreements and low Kish remain reasons for caution even
+when a shaded band is narrow.
 
 `cumulative` grows the reservoir prefix at the same sampling cutoff as every
 host; `fixed` uses its final value, matching the older convergence plots above.

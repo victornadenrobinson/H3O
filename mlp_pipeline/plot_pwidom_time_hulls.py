@@ -47,7 +47,9 @@ def prepare(bundle):
             raise ValueError('Need finite, strictly increasing prefix times and finite mu')
         if not np.isclose(mu[-1],scan.mu_P(result,'robust')[0],atol=1e-5,rtol=1e-8):
             raise ValueError(f"{entry['source']}: final prefix does not reproduce robust mu")
-        entry = dict(entry,times=times,mu=mu)
+        se=np.array([row.get('mu_bar_se_meV') if row.get('mu_bar_se_meV') is not None else np.nan for row in rows],float)
+        if np.any(np.isfinite(se)&(se<0)):raise ValueError('Negative sampling SE')
+        entry = dict(entry,times=times,mu=mu,mu_se=se)
         if result['phase']=='H':
             n = result['N_H']; kt = scan.KB*result['T']*1000
             fs = kt*(np.log(n+1)-__import__('math').lgamma(n+1)/n-1)
@@ -95,13 +97,18 @@ def analyse(bundle,out,step_ps=.1,reference_mode='cumulative'):
             gh=at_time(reservoir,t,'G_H') if reference_mode=='cumulative' else float(reservoir['G_H'][-1])
         except ValueError as exc:
             skipped.append(dict(time_ps=t,reason=str(exc)));continue
+        mu_se=np.array([at_time(h,t,'mu_se') for h in hosts])
+        gh_se=at_time(reservoir,t,'mu_se') if reference_mode=='cumulative' else float(reservoir['mu_se'][-1])
+        dg_se=np.sqrt(mu_se**2+gh_se**2)
         dg=mu-gh
+        optional=lambda v:float(v) if np.isfinite(v) else None
         values,_,_=integrate(n,dg)
         x=np.r_[(2+n)/(3+n),1.];g=np.r_[values/(3+n),0.]
         hull=lower_hull(x,g)
         for i,h in enumerate(hosts):
             time_rows.append(dict(time_ps=t,n=n[i],extra_H_per_108_O=n[i]*108,
                 mu_H_meV=mu[i],G_H_meV=gh,dg_meV=dg[i],
+                mu_H_se_meV=optional(mu_se[i]),G_H_se_meV=optional(gh_se),dg_se_meV=optional(dg_se[i]),
                 dg_fixed_final_reference_meV=mu[i]-float(reservoir['G_H'][-1]),source=h['source']))
             hull_rows.append(dict(time_ps=t,n=n[i],x_H=x[i],formation_meV_atom=g[i],
                 on_discrete_hull=i in hull,above_hull_meV_atom=max(0.,g[i]-np.interp(x[i],x[hull],g[hull]))))
@@ -113,44 +120,113 @@ def analyse(bundle,out,step_ps=.1,reference_mode='cumulative'):
                 w=csv.DictWriter(f,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)
     (out/'prefix_input.json').write_text(json.dumps(bundle,indent=1))
     p,temp,fp=state
-    fig,axes=plt.subplots(1,3,figsize=(15,4.6))
-    for h in hosts:
-        label=f"+{h['extra_H_108']:g} H / 108 O"
-        axes[0].plot(h['times'],h['mu'],label=label)
-        rows=[r for r in time_rows if np.isclose(r['n'],h['n'])]
-        axes[2].plot([r['time_ps'] for r in rows],[r['dg_meV'] for r in rows],label=label)
-    axes[1].plot(reservoir['times'],reservoir['G_H'],color='black')
-    axes[0].set_ylabel('Cumulative μH (meV/H)');axes[0].legend(fontsize=7)
-    axes[1].set_ylabel('Cumulative pure-H G reference (meV/H)')
-    axes[2].set_ylabel('Cumulative transfer dG (meV/H)');axes[2].axhline(0,color='.5',lw=.8)
-    for ax in axes:ax.set_xlabel('Cumulative production sampled per ensemble (ps)');ax.grid(alpha=.2)
-    fig.suptitle(f'{p:g} GPa / {temp:g} K — robust pressure correction; {reference_mode} reservoir for dG')
-    fig.text(.5,.015,'Overlapping cumulative prefixes; no independent-sample uncertainty inferred. Time excludes equilibration and extension re-equilibration gaps.',ha='center',fontsize=8)
-    fig.tight_layout(rect=(0,.06,1,.94))
-    for ext in ('pdf','png'):fig.savefig(out/f'mu_G_dg_vs_time.{ext}',dpi=180)
-    plt.close(fig)
-    plotted=sorted(set(r['time_ps'] for r in hull_rows))
-    norm=Normalize(min(plotted),max(plotted) if len(plotted)>1 else min(plotted)+step_ps)
-    cmap=plt.get_cmap('viridis')
-    fig,axes=plt.subplots(1,2,figsize=(11.5,5),layout='constrained')
-    for t in plotted:
-        rows=[r for r in hull_rows if r['time_ps']==t]
-        x=np.r_[[r['x_H'] for r in rows],1.]
-        g=np.r_[[r['formation_meV_atom'] for r in rows],0.]
-        ix=lower_hull(x,g);color=cmap(norm(t))
-        axes[0].plot(x[:-1],g[:-1],'o-',color=color,ms=3,alpha=.85)
-        axes[0].plot(x[ix],g[ix],'--',color=color,alpha=.8)
-        axes[1].plot(x[ix],g[ix],'-',color=color,alpha=.9)
-    axes[0].set_xlim(x[0]-.001,x[-2]+.001)
-    axes[0].set_title('Sampled formation nodes + dashed hull (zoom)')
-    axes[1].set_title('Discrete lower hull including pure H')
-    for ax in axes:
-        ax.set_xlabel('Atomic H fraction');ax.set_ylabel('Provisional formation ΔG (meV/atom)')
-        ax.axhline(0,color='.6',lw=.7);ax.grid(alpha=.2)
-    fig.colorbar(ScalarMappable(norm=norm,cmap=cmap),ax=axes,label='Cumulative production sampled per ensemble (ps)')
-    fig.suptitle(f'{p:g} GPa / {temp:g} K — hull evolution every {step_ps:g} ps\nIntegrated μH − G_H; {reference_mode} reservoir; convergence not established')
-    for ext in ('pdf','png'):fig.savefig(out/f'hulls_coloured_by_time.{ext}',dpi=180)
-    plt.close(fig)
+    # Keep central estimates unchanged; uncertainty metadata is optional.
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.ticker import FormatStrFormatter, MaxNLocator
+    style={'font.size':10,'axes.titlesize':11,'axes.labelsize':10,
+           'axes.spines.top':False,'axes.spines.right':False,
+           'axes.edgecolor':'#b8bdc5','grid.color':'#dfe3e8',
+           'grid.linewidth':.6,'figure.facecolor':'white','savefig.facecolor':'white',
+           'pdf.fonttype':42}
+    def save(fig,name):
+        for ext in ('pdf','png'):fig.savefig(out/f'{name}.{ext}',dpi=220,bbox_inches='tight',facecolor='white')
+        plt.close(fig)
+    def band(ax,t,y,se,color):
+        t,y,se=np.asarray(t),np.asarray(y),np.asarray(se,dtype=float)
+        good=np.isfinite(se)
+        if np.count_nonzero(good)>=2:
+            ax.fill_between(t[good],y[good]-se[good],y[good]+se[good],color=color,alpha=.11,lw=0,zorder=0)
+    def clean(ax):
+        ax.grid(axis='y',alpha=.6);ax.set_axisbelow(True)
+        ax.tick_params(length=3,color='#aab0b8')
+    with plt.rc_context(style):
+        palette=plt.get_cmap('tab10')
+        fig=plt.figure(figsize=(10.5,7.2))
+        grid=fig.add_gridspec(2,2,height_ratios=[1.3,.8],hspace=.44,wspace=.3)
+        axes=[fig.add_subplot(grid[0,0]),fig.add_subplot(grid[0,1]),fig.add_subplot(grid[1,:])]
+        handles=[];labels=[]
+        for i,h in enumerate(hosts):
+            color=palette(i%10)
+            line,=axes[0].plot(h['times'],h['mu'],color=color,lw=1.8)
+            handles.append(line);labels.append(f"{h['extra_H_108']:g}")
+            band(axes[0],h['times'],h['mu'],h['mu_se'],color)
+            rows=[r for r in time_rows if np.isclose(r['n'],h['n'])]
+            axes[1].plot([r['time_ps'] for r in rows],[r['dg_meV'] for r in rows],color=color,lw=1.8)
+            band(axes[1],[r['time_ps'] for r in rows],[r['dg_meV'] for r in rows],
+                 [r['dg_se_meV'] if r['dg_se_meV'] is not None else np.nan for r in rows],color)
+        axes[2].plot(reservoir['times'],reservoir['G_H'],color='#34445c',lw=1.8)
+        band(axes[2],reservoir['times'],reservoir['G_H'],reservoir['mu_se'],'#34445c')
+        for ax,title in zip(axes,['Hydrogen chemical potential','Transfer free energy','Pure-hydrogen reference']):
+            ax.set_title(title,loc='left',pad=10,fontweight='medium');clean(ax)
+            ax.set_xlabel('Production sampled per ensemble (ps)')
+            ax.xaxis.set_major_locator(MaxNLocator(6))
+        axes[0].set_ylabel(r'$\mu_\mathrm{H}$ (meV/H)')
+        axes[1].set_ylabel(r'$\Delta\mu_\mathrm{H}$ (meV/H)');axes[1].axhline(0,color='#888f99',lw=.8,zorder=0)
+        axes[2].set_ylabel(r'$G_\mathrm{H}$ (meV/H)')
+        fig.legend(handles,labels,title='Extra H / 108 O',loc='upper left',
+                   bbox_to_anchor=(.86,.88),frameon=False,labelspacing=.8,handlelength=1.8)
+        fig.subplots_adjust(left=.09,right=.85,bottom=.12,top=.86)
+        fig.suptitle(f'{p:g} GPa  ·  {temp:g} K',x=.09,y=.975,ha='left',fontsize=17)
+        fig.text(.09,.925,f'Cumulative estimates · robust pressure correction · {reference_mode} reservoir',fontsize=10,color='#616974')
+        fig.text(.09,.025,'Shading: ±1 contiguous-block jackknife SE where available. Correlated prefixes; missing-state/model bias excluded.',fontsize=8.5,color='#616974')
+        save(fig,'mu_G_dg_vs_time')
+
+        if all(all('mu_ex_bar_meV' in row and 'pressure_correction_meV' in row for row in e['prefixes']) for e in all_entries):
+            drift,da=plt.subplots(1,2,figsize=(10.5,4.2),sharex=True)
+            for i,h in enumerate(hosts):
+                for ax,field in zip(da,['mu_ex_bar_meV','pressure_correction_meV']):
+                    values=np.array([row[field] for row in h['prefixes']])
+                    ax.plot(h['times'],values-values[0],color=palette(i%10),lw=1.6)
+            for ax,field,title in zip(da,['mu_ex_bar_meV','pressure_correction_meV'],
+                    ['Excess BAR contribution','Pressure-correction contribution']):
+                values=np.array([row[field] for row in reservoir['prefixes']])
+                ax.plot(reservoir['times'],values-values[0],'--',color='#34445c',lw=1.8)
+                ax.set(title=title,xlabel='Production sampled per ensemble (ps)',ylabel='Change since first prefix (meV/H)')
+                ax.axhline(0,color='#969da6',lw=.7);clean(ax)
+            drift.legend(handles+[plt.Line2D([],[],ls='--',color='#34445c')],labels+['Pure H'],
+                         title='Extra H / 108 O',loc='upper left',bbox_to_anchor=(.86,.95),frameon=False,fontsize=8)
+            drift.subplots_adjust(left=.09,right=.85,bottom=.17,top=.77,wspace=.3)
+            drift.suptitle(f'{p:g} GPa · {temp:g} K — what drives the drift?',x=.09,ha='left',fontsize=15)
+            drift.text(.09,.02,'Ideal term is constant. Both contributions can drift; this decomposition does not establish equilibrium.',fontsize=8.5,color='#616974')
+            save(drift,'drift_components_vs_time')
+
+        plotted=sorted(set(r['time_ps'] for r in hull_rows))
+        norm=Normalize(min(plotted),max(plotted) if len(plotted)>1 else min(plotted)+step_ps)
+        cmap=LinearSegmentedColormap.from_list('sampling_time',plt.get_cmap('viridis')(np.linspace(.06,.88,256)))
+        fig,axes=plt.subplots(2,1,figsize=(8.2,7.8),sharex=True,
+                              gridspec_kw={'height_ratios':[1.35,1]},layout='constrained')
+        full,fullax=plt.subplots(figsize=(7.3,4.7),layout='constrained')
+        for j,t in enumerate(plotted):
+            rows=[r for r in hull_rows if r['time_ps']==t]
+            x=np.r_[[r['x_H'] for r in rows],1.]
+            g=np.r_[[r['formation_meV_atom'] for r in rows],0.]
+            ix=lower_hull(x,g);color=cmap(norm(t))
+            last=j==len(plotted)-1;lw=2.1 if last else 1.15;alpha=1. if last else .65
+            axes[0].plot(x[:-1],g[:-1],color=color,lw=lw,alpha=alpha)
+            if last:axes[0].plot(x[:-1],g[:-1],'o',ms=4.2,mfc='white',mec=color,mew=1.3,zorder=5)
+            axes[1].plot(x[ix],g[ix],color=color,lw=lw,alpha=alpha)
+            fullax.plot(x[ix],g[ix],color=color,lw=lw,alpha=alpha)
+        axes[0].set_title('Formation free energy',loc='left',pad=9)
+        axes[1].set_title('Lower convex envelope',loc='left',pad=9)
+        span=x[-2]-x[0];axes[1].set_xlim(x[0]-.035*span,x[-2]+.035*span)
+        for ax in axes:
+            clean(ax);ax.axhline(0,color='#969da6',lw=.7,zorder=0)
+            ax.set_ylabel('ΔG (meV/atom)');ax.xaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        axes[1].set_xlabel('Atomic H fraction')
+        def x_to_extra(v):return 108*(3*np.asarray(v)-2)/(1-np.asarray(v))
+        def extra_to_x(v):return (2+np.asarray(v)/108)/(3+np.asarray(v)/108)
+        top=axes[0].secondary_xaxis('top',functions=(x_to_extra,extra_to_x))
+        top.set_xlabel('Extra H per 108 O',labelpad=7)
+        top.set_xticks([0,9,16,27] if hosts[-1]['extra_H_108']>=27 else [h['extra_H_108'] for h in hosts])
+        fig.colorbar(ScalarMappable(norm=norm,cmap=cmap),ax=axes,pad=.035,shrink=.86,
+                     label='Production sampled per ensemble (ps)',ticks=np.linspace(min(plotted),max(plotted),min(6,len(plotted))))
+        fig.suptitle(f'{p:g} GPa  ·  {temp:g} K\nProvisional formation and hull evolution',fontsize=15)
+        save(fig,'hulls_coloured_by_time')
+        clean(fullax);fullax.axhline(0,color='#969da6',lw=.7,zorder=0)
+        fullax.set(xlabel='Atomic H fraction',ylabel='ΔG (meV/atom)',title=f'{p:g} GPa · {temp:g} K — full composition range')
+        fullax.annotate('Pure H',(1,0),xytext=(-8,9),textcoords='offset points',ha='right',fontsize=9)
+        full.colorbar(ScalarMappable(norm=norm,cmap=cmap),ax=fullax,pad=.035,label='Production sampled per ensemble (ps)')
+        save(full,'hull_full_composition')
     (out/'README.txt').write_text('No absolute crystal G(t) is inferred. Formation ΔG is reconstructed from chemical-potential differences.\nSame compositions, model and reference are used at every snapshot; no pooling of parent/extension datasets.\nCumulative means prefix [0,t], not an independent 0.1-ps block or MD wall time.\nHost and N+1 are independent ensembles; t is sampling effort per ensemble.\nLegacy frame timing comes from the confirmed exporter interval; extension equilibration gaps are excluded.\nPrefix curves and hulls are correlated. No independent-trial confidence intervals or equilibrium stability claims.\nFrames with no exact requested time are skipped as complete snapshots, never filled with later/final values.\nRobust pressure correction uses cumulative host pressure and existing partial-volume assumptions.\n')
     print(f'{len(hosts)} host compositions; {len(plotted)} common snapshots through {max(plotted):g} ps; output {out}')
     return time_rows,hull_rows

@@ -61,3 +61,15 @@ def test_incompatible_or_missing_baseline_refused():
     with pytest.raises(ValueError,match='including H2O'):plot.prepare(b)
     b=bundle();b['records'][0]['prefixes'][-1]['mu_bar_meV']+=10
     with pytest.raises(ValueError,match='does not reproduce'):plot.prepare(b)
+
+
+def test_shared_reference_sampling_se_is_propagated(tmp_path):
+    b=bundle()
+    for entry in b['records']:
+        for row in entry['prefixes']:
+            row['mu_bar_se_meV']=4. if entry['result']['phase']=='H' else 3.
+    rows,_=plot.analyse(b,tmp_path/'errors',.1)
+    for row in rows:
+        assert row['mu_H_se_meV']==3
+        assert row['G_H_se_meV']==4
+        assert row['dg_se_meV']==5

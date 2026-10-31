@@ -41,6 +41,11 @@ python mlp_pipeline/plot_pwidom_time_hulls.py /path/to/prefix_export.json \
   --out /tmp/pwidom_time_hulls --step-ps 0.1 --reference-mode cumulative
 ```
 
+Existing reports can be redrawn with `pwidom_analysis.py replot-time --input
+/path/to/prefix_input.json --out /tmp/fresh_report`; no pressure/work cache reads
+are needed. The zoomed hull report separates formation nodes and lower envelopes;
+`hull_full_composition.pdf` supplies the complete composition range separately.
+
 Outputs include μH(t), the pure-H G reference(t), transfer dG(t), formation
 snapshots, time-coloured discrete hulls, CSVs and an input copy. No absolute
 crystal G is calculated: formation ΔG is the composition integral of transfer
@@ -62,8 +67,18 @@ point uses all production samples up to t, not an independent 0.1-ps block.
 Time means cumulative production sampled per ensemble. Host and N+1 runs are
 independent; elapsed sampling time is not wall time or a synchronized physical
 trajectory. Equilibration and extension re-equilibration gaps are excluded. Do
-not concatenate parent and extension data as independent trajectories. No error
-bands are inferred from individual correlated insertion/deletion trials. Saved
+not concatenate parent and extension data as independent trajectories. Error bands use a stratified delete-one-contiguous-block jackknife on the saved
+work and host pressure data, with all trials from a frame deleted together.
+Default blocks are 0.1 ps; at least three equal complete blocks are required.
+The N and N+1 ensembles are treated independently; pressure and work remain
+coupled within a host block. μH and reservoir G_H have the same sampling SE,
+and transfer-dG variances add the independent host and reservoir contributions.
+Shared-reference covariance across compositions is not removed by plotting
+separate bands. Shades are ±1 sampling SE, not guaranteed confidence intervals;
+missed tails, nonstationarity and model/partial-volume-parameter bias are not
+included. Choose `--block-ps` and inspect block-size sensitivity. Old prefix
+exports without these errors remain unshaded; rerun `time` to populate them.
+No errors are inferred from individual correlated insertion/deletion trials. Saved
 fingerprints/flags do not establish statistical convergence. Melted/other-phase
 inputs are refused explicitly.
 
@@ -74,3 +89,31 @@ reverse exponential diagnostic sign; BAR itself was unchanged. The exporter was
 separately checked against the published e90715a prefix implementation using
 synthetic grouped works with unequal insertion/deletion trial counts. No real
 work arrays or Perlmutter prefix export were available in cloud during this step.
+
+
+## Interpreting drift
+
+BAR has no universal direction of finite-sample drift. Even at equilibrium,
+rare work values and poor overlap can shift a prefix estimate in either direction.
+Forward exponential μ estimates have an upward Jensen bias in expectation and
+reverse exponential estimates a downward one under equilibrium assumptions;
+that does not imply monotone convergence in a particular trajectory, nor does it
+supply a sign prediction for BAR.
+
+Transfer dG is μ_host − G_H. A falling cumulative reservoir increases every
+transfer curve even if host μ is constant. The plotter now separates the changes
+in excess BAR and pressure-correction terms in `drift_components_vs_time` when
+these components are available. The ideal term is constant at fixed V/T/species.
+Pressure relaxation can therefore be distinguished from an excess-work shift,
+but the latter still needs independent-block/ensemble and overlap checks to
+distinguish nonequilibrium MD from rare-event sampling. No plot here certifies
+convergence or supplies uncertainty for unsampled states.
+
+The current Langevin call passes `friction=0.01` in ASE inverse internal-time
+units. With `units.fs ≈ 0.09823`, its damping time is approximately 1.018 ps.
+This is comparable to a 1-ps production segment. It is not an estimate of the
+actual structural/work autocorrelation time, and alone does not establish
+insufficient equilibration. It is a reason to verify stationary temperature,
+pressure and independent block estimates rather than interpreting cumulative
+BAR drift as a universal algorithmic trend. The diagnostics do not modify this
+thermostat convention or any production dynamics.

@@ -14,9 +14,12 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'mlp_pipeline'))
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'mlp_pipeline/tdi'))
 
 
-def export_runs(directories):
+def export_runs(directories,block_ps=.1,min_blocks=3):
     from pwidom_convergence import prefixes
     from pwidom_scan import mu_P
+    from tdi.pwidom_uncertainty import prefix_sampling_se
+    if not np.isfinite(block_ps) or block_ps<=0 or min_blocks<3:
+        raise ValueError("block-ps must be positive and min-blocks at least three")
     entries=[]
     for root in directories:
         root=Path(root)
@@ -57,9 +60,15 @@ def export_runs(directories):
                 with np.load(framepath,allow_pickle=False) as frames:
                     if len(frames['P_host'])!=len(frames['P_full']):raise ValueError('Unequal ensemble lengths need separate timing reconstruction')
                     if ih[-1]>=len(frames['P_host']):raise ValueError('Frame ID outside pressure cache')
+                    pressures=frames['P_host'].copy()
             rows=prefixes(result,command,reference=None,points=len(f))
             if not np.isclose(rows[-1]['mu_bar_meV'],mu_P(result,'robust')[0],atol=1e-5,rtol=1e-8):
                 raise ValueError(f'{source}: full prefix does not reconstruct stored robust mu')
+            block_frames=max(1,int(np.ceil(block_ps*1000/interval-1e-10)))
+            for row in rows:
+                limit=int(round(row['production_ps']*1000/interval))
+                row.update(prefix_sampling_se(result,f,r,ih,ip,pressures,limit,block_frames,min_blocks))
+                row['uncertainty_block_ps']=block_frames*interval/1000
             clean=[{k:v for k,v in row.items() if k!='dg_meV'} for row in rows]
             entries.append(dict(source=str(source),result=result,prefixes=clean,
                                 ensemble_frame_ids_match=True,frame_interval_fs=interval,timing_basis=basis))
@@ -71,9 +80,11 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('runs',nargs='+',type=Path)
     p.add_argument('--out',required=True,type=Path)
+    p.add_argument('--block-ps',type=float,default=.1)
+    p.add_argument('--min-blocks',type=int,default=3)
     a=p.parse_args()
     if a.out.exists():raise ValueError('Choose a fresh export path')
-    data=export_runs(a.runs)
+    data=export_runs(a.runs,a.block_ps,a.min_blocks)
     with a.out.open('x') as f:json.dump(data,f,allow_nan=False)
     print(f'Exported {len(data["records"])} series to {a.out}; no MD/model calls')
 

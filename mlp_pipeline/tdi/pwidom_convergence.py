@@ -55,7 +55,9 @@ def prefixes(result, command, reference=None, points=30):
         rows.append(dict(production_ps=limit*interval/1000,
             frames=int(count), insertion_trials=len(f), deletion_trials=len(r),
             candidate_sites=int(count)*result["K"], kish_fraction=effective/len(f),
-            kish_effective_count=effective, mu_widom_meV=mu+(mw-mb)*1000,
+            kish_effective_count=effective, mu_ex_bar_meV=mb*1000,
+            P_host_GPa=mean, pressure_correction_meV=mu-(mb*1000+result["ideal_meV"]),
+            mu_widom_meV=mu+(mw-mb)*1000,
             mu_delete_meV=mu+(md-mb)*1000, mu_bar_meV=mu,
             dg_meV=scan.dg(prefix,reference)[0] if reference is not None else float("nan")))
     return rows
