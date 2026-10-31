@@ -61,6 +61,58 @@ def test_toy_scan_and_readonly_status(campaign):
     assert status.returncode == 0, status.stderr
     assert "Pure-H minimum" in status.stdout and "H2O: dg" in status.stdout
     assert before == {p: p.read_bytes() for p in out.iterdir()}
+    eos = out.parent / "composition_eos.json"
+    eos.write_text(json.dumps(dict(P=500, T=3000,
+        ice=dict(vpa=3., B_GPa=1400., nrep=3, source="test"),
+        h225=dict(vpa=3., B_GPa=1400., nrep=3, source="test"),
+        H=dict(vpa=3., B_GPa=1400., natoms=8, source="test"))))
+    custom_args = args[:args.index("--roots")] + args[args.index("--roots")+2:]
+    custom = shell("perlmutter_pwidom.sh", [*custom_args,
+        "--state-json", str(eos), "--reference-run", str(out),
+        "--extra-h", "5", "11", "16", "22", "--dry-run",
+        "--out", str(out.parent/"custom")], env)
+    assert custom.returncode == 0, custom.stderr
+    assert "Reusing completed pure-H reference" in custom.stdout
+    for name, atoms in (("Hplus5",329),("Hplus11",335),("Hplus16",340),("Hplus22",346)):
+        assert f"{name}: GPU CPU, {atoms} host atoms" in custom.stdout
+    assert not (out.parent/"custom").exists()
+    bad = shell("perlmutter_pwidom.sh", [*custom_args,
+        "--state-json", str(eos), "--reference-run", str(out),
+        "--extra-h", "5", "11", "16", "28", "--dry-run"], env)
+    assert bad.returncode != 0 and "H2.25O anchor" in bad.stderr
+    config = json.loads(eos.read_text())
+    config["ice"]["nrep"] = config["h225"]["nrep"] = 2
+    eos.write_text(json.dumps(config))
+    denseout = out.parent / "dense"
+    dense = shell("perlmutter_pwidom.sh", [*custom_args,
+        "--state-json", str(eos), "--reference-run", str(out),
+        "--extra-h", "1", "3", "5", "6", "--out", str(denseout)], env)
+    assert dense.returncode == 0, dense.stdout + dense.stderr
+    densemanifest = json.loads((denseout/"manifest.json").read_text())
+    assert densemanifest["status"] == "complete"
+    assert all(j["name"] != "pureH" for j in densemanifest["jobs"])
+    report = shell("perlmutter_pwidom_status.sh", [str(denseout)], env)
+    assert report.returncode == 0, report.stderr
+    assert "Shared pure-H reference" in report.stdout and "Hplus3: dg" in report.stdout
+    extended = shell("perlmutter_pwidom.sh", ["--cpu", "--extend-run", str(denseout),
+        "--ps", "0.1", "--equil-ps", "0", "--dry-run",
+        "--out", str(out.parent/"dense_extension")], env)
+    assert extended.returncode == 0, extended.stdout + extended.stderr
+    assert extended.stdout.count("--extend-from") == 4
+    comparison = out.parent / "comparison"
+    curves = shell("perlmutter_proxy_compare.sh", ["--run-dir", str(denseout),
+        "--out", str(comparison), "--ice", "docs/data/toyfit_t4.json",
+        "--H", "docs/data/toyfit_t4.json"], env)
+    assert curves.returncode == 0, curves.stderr
+    caches = {p: p.read_bytes() for p in denseout.glob("*_frames.npz")}
+    replay = subprocess.run(["bash", str(comparison/"replay_old.sh")],
+        cwd=ROOT, env=env, text=True, capture_output=True, timeout=60)
+    assert replay.returncode == 0, replay.stdout + replay.stderr
+    assert caches == {p: p.read_bytes() for p in caches}
+    for job in densemanifest["jobs"]:
+        new = json.loads(Path(job["result"]).read_text())
+        old = json.loads(Path(job["result"].replace("_candidate_K", "_old_dft_K")).read_text())
+        assert old["kish_frac_ins"] == new["kish_frac_ins"]
     follow = shell("perlmutter_pwidom_status.sh", [str(out), "--follow"], env)
     assert follow.returncode == 0, follow.stderr
     assert "[H2O]" in follow.stdout and "proxy candidate" in follow.stdout

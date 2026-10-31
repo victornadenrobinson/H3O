@@ -74,6 +74,18 @@ comparison figure is docs/figures/pwidom_pm_500GPa_3000K_extension1_comparison.p
 Extension1 contains the original frames, so these curves are not independent.
 Extension2 extended the original parent and was killed during MD by allocation
 60620660's time limit; no completed extension2 estimate was reported.
+For a four-composition scan, `perlmutter_pwidom.sh --extra-h 5 11 16 22
+--state-json envs/pwidom_500GPa_3000K.json --reference-run
+runs/pwidom_500GPa_3000K_extension1` uses 108 O, one worker/GPU and the saved
+pure-H reference, with matching P/T/model checks. The counts give n =
+0.046296, 0.101852, 0.148148, 0.203704; volumes use existing per-O interpolation.
+It accepts only four distinct positive integer counts within the H2.25O anchor.
+The reference result is snapshotted in the manifest; its uncertainty is shared.
+Use proxy_compare.py's cached-frame replay for old/new Kish comparisons, not
+separate MD ensembles. Probe-stage memory reached 50.5/80 GiB for H2.25O, so
+low MD-stage memory alone is insufficient for admitting concurrent workers.
+These custom scans also support fresh-directory `--extend-run`; in-place
+extensions and periodic MD checkpoints remain unimplemented.
 pwidom_formation.py makes a
 provisional integral (not a validated equilibrium hull), with conservative
 maximal-positive-correlation statistical sigma bounds; sampling/model bias omitted.

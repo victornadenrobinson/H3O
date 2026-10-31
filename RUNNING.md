@@ -65,6 +65,36 @@ No fit coverage means no configuration saved. Pure-H coverage at 3000 K starts
 near 380 GPa, so this lookup cannot currently supply a 300-GPa reference.
 Add `--include-h25` to inspect the H2.5O anchor before proposing 1–50 extra-H scans.
 
+**Four intermediate compositions**, near n = 0.05, 0.10, 0.15, 0.20 at 500 GPa /
+3000 K: 5, 11, 16, 22 extra H in the 108-O cell. One worker per GPU, reusing
+extension1's completed pure-H result (shared reference uncertainty):
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh \
+  --state-json envs/pwidom_500GPa_3000K.json \
+  --extra-h 5 11 16 22 --reference-run runs/pwidom_500GPa_3000K_extension1 \
+  --ps 1.0 --equil-ps 0.2 --minutes 30 \
+  --out runs/pwidom_500GPa_3000K_nscan1 --candidate-dir runs/dft_candidates --dry-run
+```
+
+Review, then remove `--dry-run` to execute inside an allocation with sufficient
+time. This uses the existing per-O volume interpolation and ice bulk modulus,
+and refuses counts outside the H2.25O anchor. It changes no estimator settings.
+After completion, compare old/new proxies on identical cached ensembles:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom_status.sh runs/pwidom_500GPa_3000K_nscan1
+bash mlp_pipeline/perlmutter_proxy_compare.sh \
+  --run-dir runs/pwidom_500GPa_3000K_nscan1 --out runs/proxy_compare_nscan1
+bash runs/proxy_compare_nscan1/replay_old.sh
+rg 'proxy quality:' runs/pwidom_500GPa_3000K_nscan1/*.log
+```
+
+The replay uses the original DFT-fit pair proxy `docs/data/toyfit_t4.json` and the
+same K/selection/deletion counts and seed. It performs GPU single points only;
+allow up to ten extra minutes. MD remains GRACE in both cases. Compare each
+composition with itself; the four jobs share the existing H reference.
+
 **Additional sampling** from the known completed 500-GPa run:
 
 ```bash

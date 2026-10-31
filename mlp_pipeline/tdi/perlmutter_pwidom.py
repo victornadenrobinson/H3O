@@ -135,14 +135,23 @@ def read_result(job):
         return None
 
 
+def shared_reference(manifest):
+    ref = manifest.get("reference")
+    return (ref.get("snapshot") or json.loads(Path(ref["result"]).read_text())) if ref else None
+
+
 def transfer_estimates(manifest):
     """Only completed values; never reinterpret old values as a live estimate."""
     results = {j["name"]: read_result(j) for j in manifest["jobs"]}
+    if manifest.get("reference"):
+        results["pureH"] = shared_reference(manifest)
     previous = {}
     if manifest.get("extends"):
         try:
             old = json.loads((Path(manifest["extends"]) / "manifest.json").read_text())
             previous = {j["name"]: read_result(j) for j in old["jobs"]}
+            if old.get("reference"):
+                previous["pureH"] = shared_reference(old)
         except (OSError, ValueError):
             pass
     estimates = {}
@@ -213,6 +222,10 @@ def dashboard(manifest, elapsed=None, exits=None, plain=False, clear=False):
 
 def plan(a):
     parent = None
+    if a.extra_h is not None and (a.extend_run or not a.state_json or not a.reference_run):
+        raise ValueError("--extra-h requires --state-json and --reference-run; cannot combine with --extend-run")
+    if a.reference_run and a.extra_h is None:
+        raise ValueError("--reference-run requires --extra-h")
     if a.extend_run:
         parent = json.loads((Path(a.extend_run) / "manifest.json").read_text())
         if parent["status"] != "complete":
@@ -220,18 +233,26 @@ def plan(a):
         if a.state_json or a.roots:
             raise ValueError("--extend-run inherits its state; omit --state-json/--roots")
         byname = {j["name"]: j for j in parent["jobs"]}
-        for name in ("H2O", "H2p083O", "H2p25O", "pureH"):
+        custom_parent = parent.get("extra_h") is not None
+        expected = [f"Hplus{k}" for k in parent["extra_h"]] if custom_parent else ["H2O", "H2p083O", "H2p25O", "pureH"]
+        for name in expected:
             if name not in byname:
                 raise ValueError(f"Parent run missing {name}")
         a.P, a.T, a.model = parent["P"], parent["T"], parent["model"]
         def option(name, key):
             cmd = byname[name]["command"]
             return cmd[cmd.index(key)+1]
-        a.ice_proxy, a.h_proxy = option("H2O", "--proxy"), option("pureH", "--proxy")
+        first = expected[0]
+        a.ice_proxy = option(first, "--proxy")
+        a.h_proxy = parent["reference"]["snapshot"]["proxy"] if custom_parent else option("pureH", "--proxy")
         for key in ("K", "sel", "ndel", "batch"):
-            setattr(a, key, int(option("H2O", "--"+key)))
+            setattr(a, key, int(option(first, "--"+key)))
         explicit = dict(P=a.P, T=a.T)
-        for key, name in (("ice", "H2O"), ("h225", "H2p25O"), ("H", "pureH")):
+        if custom_parent:
+            explicit = parent["eos_inputs"]
+            a.extra_h = parent["extra_h"]
+            a.reference_run = parent["reference"]["run"]
+        for key, name in (() if custom_parent else (("ice", "H2O"), ("h225", "H2p25O"), ("H", "pureH"))):
             size = "natoms" if key == "H" else "nrep"
             explicit[key] = dict(vpa=float(option(name,"--vpa")),
                                  B_GPa=float(option(name,"--bulk-gpa")),
@@ -324,6 +345,38 @@ def plan(a):
         jobs = [("H2O", args("ice"), a.ice_proxy), ("H2p083O", mid, a.ice_proxy),
                 ("H2p25O", args("h225", 2.25), a.ice_proxy),
                 ("pureH", args("H"), a.h_proxy)]
+        if a.extra_h is not None:
+            counts = a.extra_h
+            oxygen = 4 * ice["nrep"]**3
+            if len(counts) != 4 or len(set(counts)) != 4 or any(k <= 0 or k/oxygen > .25 for k in counts):
+                raise ValueError("--extra-h needs four distinct positive integer counts within the H2.25O anchor")
+            jobs = []
+            for count in counts:
+                hp = 2 + count/oxygen
+                cmdargs = args("ice", hp)
+                cmdargs[cmdargs.index("--vpa")+1] = str((3*ice["vpa"] + (hp-2)/.25 *
+                    (3.25*rich["vpa"]-3*ice["vpa"]))/(hp+1))
+                jobs.append((f"Hplus{count}", cmdargs, a.ice_proxy))
+    reference = None
+    if a.reference_run:
+        refdir = Path(a.reference_run).resolve()
+        refmanifest = json.loads((refdir/"manifest.json").read_text())
+        if refmanifest.get("status") != "complete":
+            raise ValueError("Shared reference run must be complete")
+        refs = [j for j in refmanifest["jobs"] if j["name"] == "pureH"]
+        if len(refs) != 1:
+            raise ValueError("Reference run must contain one pureH result")
+        resultpath = Path(refs[0]["result"]).resolve()
+        ref = json.loads(resultpath.read_text())
+        from pwidom import model_fingerprint
+        if (ref.get("T") != a.T or ref.get("P_target") != a.P or ref.get("phase") != "H"
+                or ref.get("model_fp") != model_fingerprint(model)):
+            raise ValueError("Reference P/T/phase/model fingerprint do not match")
+        frames = refdir / f"{ref['tag']}_frames.npz"
+        if not frames.exists() or scan.min_hh(str(frames)) < .25:
+            raise ValueError("Reference frame archive missing or pure H collapsed")
+        reference = dict(run=str(refdir), result=str(resultpath), frames=str(frames),
+                         snapshot=ref)
     # All validation and command construction precedes output creation or child startup.
     out = Path(a.out or time.strftime("runs/pwidom_pm_%Y%m%d_%H%M%S"))
     if out.exists():
@@ -368,7 +421,8 @@ def plan(a):
                             progress=str(out / f"{name}_progress.json"),
                             result=str(out / f"{tag}_candidate_K{a.K}.json")))
     return out, dict(model=model, stage0=state, eos_inputs=explicit,
-                     state_json=a.state_json, extends=a.extend_run, P=a.P, T=a.T, ps=a.ps,
+                     state_json=a.state_json, extends=a.extend_run, reference=reference,
+                     extra_h=a.extra_h, P=a.P, T=a.T, ps=a.ps,
                      equil_ps=a.equil_ps, minutes=a.minutes, jobs=records,
                      allocation=os.environ.get("SLURM_JOB_ID"),
                      git=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip())
@@ -387,6 +441,8 @@ def run(a):
     if a.T == 3000:
         print("3000 K is outside the supplied fit-label temperatures: this is an extrapolation check.")
     print("Intermediate volume uses the existing per-O interpolation; no refitting or scheduler submission.")
+    if manifest.get("reference"):
+        print(f"Reusing completed pure-H reference: {manifest['reference']['result']}; shared uncertainty across compositions.")
     if a.extend_run:
         print(f"EXTENDING {a.extend_run}: add {a.ps:g} ps per ensemble, re-equilibrate {a.equil_ps:g} ps with fresh thermal velocities; retain old frames. Recompute insertion estimates on combined frames.")
     for r in manifest["jobs"]:
@@ -553,9 +609,12 @@ def status(a):
             log = Path(r["log"])
             if log.exists():
                 print("\n".join(log.read_text(errors="replace").splitlines()[-4:]))
+    if m.get("reference"):
+        results["pureH"] = shared_reference(m)
+        print(f"\nShared pure-H reference: {m['reference']['result']}")
     if "pureH" in results:
         h = results["pureH"]
-        frames = out / f"{h['tag']}_frames.npz"
+        frames = Path(m["reference"]["frames"]) if m.get("reference") else out / f"{h['tag']}_frames.npz"
         hh = scan.min_hh(str(frames))
         print(f"\nPure-H minimum sampled H-H separation: {hh:.3f} A" + ("; COLLAPSE" if hh < 0.25 else ""))
         for name, w in results.items():
@@ -589,6 +648,8 @@ def main():
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
+    r.add_argument("--extra-h", nargs=4, type=int, help="four extra-H counts in the ice cell; requires explicit EOS and completed shared H reference")
+    r.add_argument("--reference-run", help="completed four-host scan whose pureH result is reused with --extra-h")
     r.add_argument("--inspect-eos", metavar="CSV", help="read-only exact-temperature-bin DFT EOS report; no GPU/run")
     r.add_argument("--save-eos", metavar="JSON", help="with --inspect-eos: save all three EOS inputs to a fresh file; no MD")
     r.add_argument("--include-h25",action="store_true",help="with --inspect-eos: also require/report H2.5O coverage for scans beyond 27 extra H")
