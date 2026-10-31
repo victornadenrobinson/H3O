@@ -1,0 +1,8 @@
+#!/bin/bash -l
+# gq: Young GPU queue (Slurm) status (mlp_pipeline/young_gpu_queue.py). Alias:   alias gq='bash -l /lustre/scratch/mmm0037/H3O/mlp_pipeline/gq'      gq --watch 30
+# Run it on the GPU-side (Slurm) login node. Python: the GPU venv ~/grace-venv (has rich) if it runs here, else the system python3 in plain text.
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+for PY in "${GQ_PYTHON:-}" "$HOME/grace-venv/bin/python"; do
+  [ -n "$PY" ] && [ -x "$PY" ] && "$PY" -c "import rich" >/dev/null 2>&1 && exec "$PY" "$HERE/young_gpu_queue.py" "$@"
+done
+exec python3 "$HERE/young_gpu_queue.py" --plain "$@"
