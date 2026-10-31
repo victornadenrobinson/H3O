@@ -41,6 +41,22 @@ is discovered successfully. Exact-3000K DFT EOS counts are 382 H2O, 178 H2.25O,
 envs/pwidom_500GPa_3000K.json. Use `--state-json` with that file, then --dry-run
 before the short GPU scan. Environment discovery is verified remotely for the
 analysis dependencies; a full four-GPU scan remains unverified here.
+New output directories retain the existing `runs/` layout and include a small
+RUN_ORIGIN.txt identifying Perlmutter/hostname/allocation. perlmutter-runs/ was
+empty in the user's listing and is not the active output root. The known parent
+for extension is runs/pwidom_pm_20261031_105811 (500 GPa / 3000 K), not an
+unspecified 400-GPa directory. User later pasted commands from Young's
+mmm0037@login21:/lustre/scratch/mmm0037/H3O shell: distinguish that from the
+victornr Perlmutter GPU shell before giving run commands. A 3-ps + .5-ps
+extension is roughly 40-45 min MD at the observed rate, not a ten-minute scan;
+the proposed 60-min cap was supplied as a dry-run only, not a launched job.
+User's Perlmutter dry-run for the 3-ps + .5-ps 500-GPa extension subsequently
+passed, including all four fingerprinted source caches. No extension completion
+has been supplied yet. The quick throughput benchmark is perlmutter_bench.sh:
+process/GPU and batched-lambda screening followed by four-GPU validation of the
+best observed layout; run only after other GPU tasks finish. Results/logs stay
+under runs/bench_*/ with RUN_ORIGIN.txt. Local toy checks validate orchestration,
+not actual A100 throughput; no benchmark result has been supplied remotely yet.
 User confirmed Perlmutter dry-run resolves ft_m2/seed/1/final_model and launched
 the four-GPU scan in runs/pwidom_pm_20261031_105811; last supplied status had all
 four hosts running. Outcome not yet supplied. Next launcher version streams full
@@ -72,6 +88,12 @@ correction with overlap diagnostics. VASP 5.4.4 CPU modules exist per user's lis
 training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
 
 ## Layout and workflows
+
+- Cluster result snapshots: `docs/status/README.md` indexes source machines and
+  refresh rules. `docs/status/young_tdi_summary_received_2026-10-31.txt` preserves
+  the user's full Young summarize.py paste (actual execution date/node/revision
+  unknown). Refresh periodically after new results or analysis changes; it is
+  not current queue state. Perlmutter results are tracked separately.
 
 - `h3o_mlp/`, `scripts/`: earlier inventory/extraction/benchmark package.
 - `mlp_pipeline/00-03*`, `10_check_snapshots.py`, `11_bundle.py`, `build_all.sh`:
