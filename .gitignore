@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 docs/papers/*.pdf
 H3O_bundle_*.tar.gz
+perlmutter-runs/
