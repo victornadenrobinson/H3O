@@ -43,3 +43,26 @@ def test_split_and_cmd(tmp_path):
     write(p, [molecule("H2O") for _ in range(10)], format="extxyz")
     assert split(p, tmp_path / "t.xyz", tmp_path / "v.xyz") == (8, 2)
     assert "--forces_weight=100.0" in mace_command("t", "v")
+
+
+def test_insertion_G_per_added_H_same_in_both_modes(tmp_path):
+    """run_real.py insertion (toy model, 8 host H + 1 inserted H): the all-in-one process and the separate stage0 / node / collect route must report the same G per added H
+    (the all-in-one path once divided by all 9 atoms instead of the added H: -186 instead of -1677 meV)"""
+    import json
+    import os
+    import subprocess
+    import sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); rr = os.path.join(root, "mlp_pipeline", "tdi", "run_real.py"); col = os.path.join(root, "mlp_pipeline", "tdi", "collect.py")
+    args = ["toyice", "--phase", "insert", "--host-phase", "H", "--natoms", "8", "--vpa", "1.3", "--T", "3000", "--P", "400", "--bulk-gpa", "1000", "--nodes", "2", "--ps", "0.1",
+            "--chunk-ps", "0.05", "--equil-ps", "0.05", "--ps1", "0.5", "--device", "cpu"]
+    env = dict(os.environ, ALLOW_NOGPU="1"); one, nodes = str(tmp_path / "one"), str(tmp_path / "nodes")
+    run = lambda *a: subprocess.run([sys.executable, *a], check=True, capture_output=True, text=True, env=env)
+    run(rr, *args, "--outdir", one)
+    run(rr, *args, "--outdir", nodes, "--stage0")
+    for k in (0, 1):
+        run(rr, *args, "--outdir", nodes, "--node", str(k))
+    tag = [f[:-len("_stage0.json")] for f in os.listdir(nodes) if f.endswith("_stage0.json")][0]
+    run(col, nodes, tag, "--every-ps", "0.05")
+    a, b = (json.load(open(os.path.join(d, f"tdi_{tag}.json"))) for d in (one, nodes))
+    assert a["N"] == b["N"] == 1 and a["N_atoms_total"] == 9   # per added H, not per atom
+    assert abs(a["G_meV_atom"] - b["G_meV_atom"]) < 1e-6 * abs(b["G_meV_atom"]), (a["G_meV_atom"], b["G_meV_atom"])

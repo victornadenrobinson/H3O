@@ -771,7 +771,7 @@ if __name__ == "__main__":
         st = json.load(open(os.path.join(a.outdir, f"{c['tag']}_stage0.json")))
         sys.exit(run_batched(c, st, [int(x) for x in a.batch_nodes.replace(",", " ").split()], run_node))
     # all in one process
-    st = stage0(c); t0 = time.time(); lam, w, N = c["lam"], c["w"], c["N"]
+    st = stage0(c); t0 = time.time(); lam, w = c["lam"], c["w"]   # G is per st["N"]: all atoms, or the added H for insertion (collect.py does the same)
     comps = {"full": c["full"], "E": E_component(c, st["kE"])}
     runs = [LambdaRun(c["at0"], comps, float(l), a.T, c["iO"], a.dt, a.tau, a.seed + 1 + k, a.every, c["steps"](a.equil_ps)) for k, l in enumerate(lam)]
     neq, per = c["steps"](a.equil_ps), c["steps"](a.chunk_ps); nchunk = int(round(a.ps / a.chunk_ps)); tot = len(runs) * (neq + nchunk * per)
@@ -783,7 +783,7 @@ if __name__ == "__main__":
         for k, r in enumerate(runs):
             tl = time.time(); r.advance(per)
             print(f"     chunk {ch} lambda {k} = {r.lam:.2e}  {r.diag(last=n_per)}  {(time.time() - t0) / 60:.1f} min{prog(t0, len(runs) * neq + ((ch - 1) * len(runs) + k + 1) * per, tot, tl, per)}", flush=True)
-        G, Ge, dF, m, s = G_from_nodes(st, lam, w, [r.series for r in runs], N)
+        G, Ge, dF, m, s = G_from_nodes(st, lam, w, [r.series for r in runs], st["N"])
         hist.append(dict(t_ps=ch * a.chunk_ps, G_meV_atom=G, G_err_meV_atom=Ge, dF_meV_atom=dF))
         print(f"   {ch * a.chunk_ps:6.2f}      {G:12.2f} +- {Ge:5.2f}   {dF:12.2f}        {(time.time() - t0) / 60:7.1f}", flush=True)
         json.dump(dict(st, lam=lam.tolist(), weights=w.tolist(), dudl_mean=m.tolist(), dudl_sem=s.tolist(), hist=hist, G_meV_atom=G, G_err_meV_atom=Ge), open(os.path.join(a.outdir, f"tdi_{c['tag']}.json"), "w"), indent=1)

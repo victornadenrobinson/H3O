@@ -5,8 +5,9 @@
 #   2. fit ice-like hosts and pure H separately; the production state is held OUT of the fit (HOLD_ICE / HOLD_H), so the proxy has never seen its frames  -> $FIT/proxy_{ice,H}.json / .png
 #      (read the "held-out sources" lines and the per-source table first: old vs new std(dU - phi) in kT, Kish fraction)
 #   3. pwidom on the production frames (runs/pwidom, reused) with the new and the old proxy, dg of both (PROD=0 skips)
-# Cost: label is PER_SOURCE x (NSEL + NUNI + 1) single points per source, ~150 sources x 250 = ~40k GRACE calls batched (est. 1-2 h; PER_SOURCE=5 halves it); fit is seconds; step 3 ~10-20 min.
+# Cost: label is PER_SOURCE x (NSEL + NUNI + 1) single points per source, ~150 sources x 250 = ~40k structures (est. 15-60 min at the ~23 GRACE calls/s of docs/PERFORMANCE.md; PER_SOURCE=5 halves it); fit is seconds; step 3 ~10-20 min.
 # usage (repo root on Young):  sbatch mlp_pipeline/young_proxy_fit.sbatch
+#   or in an interactive GPU job (the #SBATCH lines are comments; label is resumable):  PROD=0 bash mlp_pipeline/young_proxy_fit.sbatch 2>&1 | tee runs/proxyfit.log
 #   knobs: SRC (glob, default "runs/pwidom*/pw_*_frames.npz") PER_SOURCE (10) NSEL (16) NUNI (8) TEMPER (2) K (4000) BATCH (16) BASE (docs/data/toyfit_t4.json) FIT (runs/pwidom_fit) OUT (runs/pwidom)
 #   ICE / HFL (stage0.json of the production insertion runs) HOLD_ICE (pwidom__pw_fcc_500GPa_6000K) HOLD_H (pwidom__pw_H_500GPa_6000K) MODEL (default: the model of $ICE) PROD (1) PY
 #SBATCH --job-name=proxyfit
@@ -30,7 +31,7 @@ mkdir -p $FIT $OUT; echo "== proxy refit on $(hostname) $(date) code $(git rev-p
 export OMP_NUM_THREADS=2 TF_CPP_MIN_LOG_LEVEL=2 TF_FORCE_GPU_ALLOW_GROWTH=true
 pf() { $PY mlp_pipeline/tdi/proxy_fit.py "$@"; }
 # 1. probe energies of the real model (resumable)
-pf label $FILES --model $MODEL --batch $BATCH --proxy $BASE --per-source $PER_SOURCE --nsel $NSEL --nuni $NUNI --temper $TEMPER -o $FIT 2>&1 | tee $FIT/label.log | tail -n 5
+pf label $FILES --model $MODEL --batch $BATCH --proxy $BASE --per-source $PER_SOURCE --nsel $NSEL --nuni $NUNI --temper $TEMPER -o $FIT 2>&1 | tee $FIT/label.log
 # 2. fits: ice-like hosts and pure H separately, the production state held out
 echo "---- ice"; pf fit $FIT/*_probes.npz --base $BASE --skip pureH pw_H_ --hold $HOLD_ICE -o $FIT/proxy_ice --plot 2>&1 | tee $FIT/fit_ice.log
 echo "---- pure H"; pf fit $FIT/*_probes.npz --base $BASE --only pureH pw_H_ --hold $HOLD_H -o $FIT/proxy_H --plot 2>&1 | tee $FIT/fit_H.log
