@@ -35,6 +35,12 @@ known scratch/local/conda paths, then `conda run -n grace-env`. H3O_ENV_INIT can
 source the user's existing site module/activation recipe. No installation or
 guessed module versions. The actual Perlmutter environment path is still unknown
 in this cloud checkout; `(grace-env)` alone is not its location.
+Update: user terminal evidence now confirms `/pscratch/sd/v/victornr/grace-env/bin/python`
+is discovered successfully. Exact-3000K DFT EOS counts are 382 H2O, 178 H2.25O,
+109 pure H. The printed volumes/B values are saved with provenance in
+envs/pwidom_500GPa_3000K.json. Use `--state-json` with that file, then --dry-run
+before the short GPU scan. Environment discovery is verified remotely for the
+analysis dependencies; a full four-GPU scan remains unverified here.
 
 ## Layout and workflows
 

@@ -93,3 +93,19 @@ bash mlp_pipeline/perlmutter_pwidom.sh --inspect-eos runs/inventory_binned.csv
 This prints volume/B estimates at P and P +/- 3%, or reports insufficient
 coverage. It writes no files and needs no GPU. Check that the inventory path
 exists on Perlmutter; the cloud checkout does not include it.
+
+The user's Perlmutter report on 2026-10-31 confirmed the interpreter at
+`$SCRATCH/grace-env/bin/python` and sufficient exact-3000K EOS coverage for all
+three hosts. Those printed values are recorded with provenance in
+`envs/pwidom_500GPa_3000K.json` (108-O crystals, 250-atom pure-H reference):
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh --state-json envs/pwidom_500GPa_3000K.json --dry-run
+bash mlp_pipeline/perlmutter_pwidom.sh --state-json envs/pwidom_500GPa_3000K.json
+```
+
+These use the existing environment discovery; manual activation is unnecessary
+for this standard environment. `export GRACE_ENV="$SCRATCH/grace-env"` pins it
+explicitly for both wrappers if desired. The saved EOS values are rounded to the
+precision of the supplied terminal report. This is a DFT-volume starting point:
+check actual GRACE pressures and phase stability in the run results.

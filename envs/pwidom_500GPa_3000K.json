@@ -1,0 +1,22 @@
+{
+  "P": 500,
+  "T": 3000,
+  "ice": {
+    "vpa": 2.0890799,
+    "B_GPa": 1473.8938,
+    "nrep": 3,
+    "source": "Perlmutter runs/inventory_binned.csv; user-supplied --inspect-eos output 2026-10-31; 382 exact-3000K fcc runs; existing ln P(V) fit; B from P +/-3%; pressure already includes N kT/V"
+  },
+  "h225": {
+    "vpa": 2.0280026,
+    "B_GPa": 1429.4607,
+    "nrep": 3,
+    "source": "Perlmutter runs/inventory_binned.csv; user-supplied --inspect-eos output 2026-10-31; 178 exact-3000K fcc H2.25O runs; existing ln P(V) fit; B from P +/-3%; pressure already includes N kT/V"
+  },
+  "H": {
+    "vpa": 1.2173057,
+    "B_GPa": 1154.1702,
+    "natoms": 250,
+    "source": "Perlmutter runs/inventory_binned.csv; user-supplied --inspect-eos output 2026-10-31; 109 exact-3000K pure-H runs; existing ln P(V) fit; B from P +/-3%; pressure already includes N kT/V"
+  }
+}
