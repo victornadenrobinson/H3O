@@ -51,15 +51,15 @@ victornr Perlmutter GPU shell before giving run commands. A 3-ps + .5-ps
 extension is roughly 40-45 min MD at the observed rate, not a ten-minute scan;
 the proposed 60-min cap was supplied as a dry-run only, not a launched job.
 User's Perlmutter dry-run for the 3-ps + .5-ps 500-GPa extension subsequently
-passed, including all four fingerprinted source caches. No extension completion
-has been supplied yet. The quick throughput benchmark is perlmutter_bench.sh:
-process/GPU and batched-lambda screening followed by four-GPU validation of the
-best observed layout; run only after other GPU tasks finish. Results/logs stay
-under runs/bench_*/ with RUN_ORIGIN.txt. Local toy checks validate orchestration,
-not actual A100 throughput; no benchmark result has been supplied remotely yet.
+passed, including all four fingerprinted source caches; extension1 subsequently
+completed (reported results below). The quick throughput benchmark is
+perlmutter_bench.sh: default pwidom MD packing/probe-batch screening, or explicit
+--workflow tdi for lambdas, followed by four-GPU validation. Run only on idle
+allocated GPUs. Results/logs stay under runs/bench_*/ with RUN_ORIGIN.txt.
+Two real H2O A100 benchmark reports are summarized below.
 User confirmed Perlmutter dry-run resolves ft_m2/seed/1/final_model and launched
-the four-GPU scan in runs/pwidom_pm_20261031_105811; last supplied status had all
-four hosts running. Outcome not yet supplied. Next launcher version streams full
+the four-GPU scan in runs/pwidom_pm_20261031_105811, which subsequently completed.
+The launcher can stream full
 prefixed logs, GPU utilization/memory and progress sidecars with stage-specific
 ETA. It does not retrofit an already running process. Status --follow or tail -F
 views existing logs without stopping the calculation. Project continuity lives
@@ -112,6 +112,41 @@ correction with overlap diagnostics. VASP 5.4.4 CPU modules exist per user's lis
 training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
 
 ## Layout and workflows
+
+Real Perlmutter benchmark results (2026-10-31) are summarized in
+docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md: four MD workers/GPU gave
+77–80 total MD steps/s across four GPUs (~9.8 GiB/GPU). Probe batches 8 and 16
+plateaued near 9 structures/s/GPU, using ~24.5 vs 40.5 GiB. Batch 8 is the
+earlier provisional choice for the tested H2O cell; this is not a
+validated memory budget for every composition or a production task scheduler.
+Latest benchmark continuation completes bench_20261031_133031: eight MD
+workers/GPU gave 79.98 steps/s/node, similar to four-worker runs; probe batch 4
+gave 34.99 structures/s/node with 8.5 GiB/GPU. Prefer four MD workers and probe
+batch 4 as efficient H2O starting points; batches 4/8/16 have similar throughput,
+but memory grows sharply. This supersedes the provisional batch-8 suggestion.
+All three reports/plot are under docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md
+and docs/figures/perlmutter_pwidom_benchmarks_20261031.png. Plotting command:
+mlp_pipeline/tdi/plot_pwidom_benchmark.py (benchmark dirs, transcripts or CSV).
+User favors multiple independent MD trajectories per composition feeding one
+probe worker/GPU. Fixed probe batching bounds per-call VRAM as total snapshots
+grow, but current all-structures-in-RAM preparation scales CPU memory with total
+trials. Replica pooling/streaming is not implemented. Pool only compatible
+ensembles within each composition and deduplicate shared extension parents;
+different compositions may share a queue, not one chemical-potential estimate.
+
+Completed nscan1 (allocation 60626365) adds extra-H counts 5/11/16/22:
+dg=-628.7/-355.2/+129.3/+414.7 meV/H, errors 37.5/73.3/59.2/59.1,
+Kish .097/.067/.071/.042. Hplus5 has no scan flags (not proof of convergence);
+others unconverged, Hplus22 low Kish. Combined CSV/figure use extension1 endpoints
+and its shared pure-H reference; the nonmonotonic .083/.102 points show unresolved
+sampling sensitivity. New pasted telemetry reports 40 GiB/GPU, 2.5 GiB during MD
+and 26.5 GiB during probes; do not assume every allocation has 80-GiB devices.
+`pwidom_telemetry.py` plots sampled memory/utilization/stage progress with stage
+shading from new telemetry.jsonl or saved compact transcripts. New launches
+record every five seconds, no extra model calls. `pwidom_convergence.py` uses
+saved grouped works and pressure frames for cumulative-production-time μ/Δμ,
+evaluated trial counts and Kish weight counts; no Widom accept/reject moves.
+Running curves cannot be recovered from final reported numbers alone.
 
 - Top-level `RUNNING.md` is the terminal quick reference, with Perlmutter/Young
   environment paths, scan/extension commands and links to other calculation

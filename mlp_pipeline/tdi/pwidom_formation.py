@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--T", type=float, default=3000)
     ap.add_argument("--out", required=True, help="fresh filename prefix for PNG/PDF/integral CSV")
     ap.add_argument("--compare", help="earlier reported CSV, shown for comparison only; not pooled")
+    ap.add_argument("--compare-label", default="Original short scan (shared parent)")
     ap.add_argument("--label", default="Current scan", help="legend label for the primary dataset")
     a = ap.parse_args()
     with open(a.data) as file:
@@ -72,15 +73,15 @@ def main():
         pn, pm, pe = (np.array([float(r[k]) for r in previous]) for k in ("n", "dg_meV", "err_meV"))
         pv, pg, pi = integrate(pn, pm)
         axes[0].errorbar(pn, pm, yerr=pe, fmt="o--", color="0.6", mfc="white",
-                         capsize=3, alpha=.7, label="Original short scan (shared parent)")
+                         capsize=3, alpha=.7, label=a.compare_label)
         axes[1].plot(pg, pi/(3+pg), "--", color="0.6", alpha=.7,
-                     label="Original short scan (shared parent)")
+                     label=a.compare_label)
         axes[1].errorbar(pn, pv/(3+pn), yerr=statistical_error_bound(pn, pe),
                          fmt="o", color="0.6", mfc="white", capsize=3, alpha=.7)
     for i, r in enumerate(rows):
         axes[0].errorbar(n[i], mu[i], yerr=err[i], fmt="s", color=color,
                         mfc=color if r["flag"] == "ok" else "white", capsize=4)
-    axes[0].plot(n, mu, "--", color=color, alpha=.7, label=f"{a.label}; open points unconverged")
+    axes[0].plot(n, mu, "--", color=color, alpha=.7, label=f"{a.label}; convergence not established")
     axes[0].set_title(f"{a.P:g} GPa, {a.T:g} K — GRACE ft_m2, fitted proxies")
     axes[0].set_ylabel(r"$\Delta\mu_H = \mu_H^{\mathrm{mixture}} - \mu_H^{\mathrm{pure\ H}}$ (meV / H)")
     axes[0].legend(loc="upper left", fontsize=8)
@@ -88,7 +89,9 @@ def main():
                  label="Integral of interpolated transfer costs (provisional)")
     axes[1].errorbar(n, values/(3+n), yerr=error_bound, fmt="s", mfc="white",
                     color=color, capsize=4, label="Statistical error bound (maximal positive correlation)")
-    for nn, value in zip(n[1:], (values/(3+n))[1:]):
+    annotation_indices = range(1,len(n)) if len(n) <= 4 else sorted({int(np.argmin(values/(3+n))),len(n)-1})
+    for index in annotation_indices:
+        nn, value = n[index], (values/(3+n))[index]
         axes[1].annotate(f"{value:.1f} meV/atom", (nn, value), xytext=(-5, 12),
                          textcoords="offset points", ha="right", fontsize=9)
     axes[1].set_ylabel("Provisional formation free energy (meV / atom)")
@@ -99,7 +102,7 @@ def main():
         ax.set_xlim(-.01, n[-1]+.03)
     sec = axes[0].secondary_xaxis("top", functions=(lambda x: x*108, lambda k:k/108))
     sec.set_xlabel("Extra H per 108-O cell"); sec.set_xticks([0, 9, 18, 27])
-    fig.text(.5, .015, "Exploratory curve; all ice estimates unconverged. Bars omit sampling/model bias.\n"
+    fig.text(.5, .015, "Exploratory curve; convergence is not established. Bars omit sampling/model bias.\n"
              "Lower bars bound propagated statistical sigma; shared-reference covariance is unavailable.",
              ha="center", fontsize=9)
     fig.tight_layout(rect=(0, .07, 1, 1))

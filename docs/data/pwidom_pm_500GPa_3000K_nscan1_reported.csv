@@ -1,0 +1,6 @@
+# User-reported completed runs/pwidom_500GPa_3000K_nscan1; allocation 60626365; GRACE ft_m2; fitted proposal; shared pure-H reference from extension1. Errors statistical only; flags are scan diagnostics, not proof of convergence.
+P_GPa,T_K,n,dg_meV,err_meV,kish,flag
+500,3000,0.046296296296296294,-628.7,37.5,0.097,no_scan_flags
+500,3000,0.10185185185185185,-355.2,73.3,0.067,unconverged
+500,3000,0.14814814814814814,129.3,59.2,0.071,unconverged
+500,3000,0.2037037037037037,414.7,59.1,0.042,unconverged

@@ -423,7 +423,7 @@ def cmd_run(a):
              reverse_work_eV=-np.asarray(wr_frame), T=a.T, P_target=a.P,
              N_H=NH, model=a.model, model_fp=mfp, proxy=a.proxy,
              source_frames=os.path.abspath(ff), host_frame_ids=np.array(sfr),
-             full_frame_ids=np.array(dfr), seed=a.seed,
+             full_frame_ids=np.array(dfr), seed=a.seed, frame_interval_fs=a.every_fs,
              convention="BAR uses forward insertion work and negative deletion log-work; do not pool overlapping parent/extension frames as independent")
     r["work_file"] = workfile
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
