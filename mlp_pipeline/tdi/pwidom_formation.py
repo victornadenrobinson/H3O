@@ -82,7 +82,7 @@ def main():
                         mfc=color if r["flag"] == "ok" else "white", capsize=4)
     axes[0].plot(n, mu, "--", color=color, alpha=.7, label=f"{a.label}; open points unconverged")
     axes[0].set_title(f"{a.P:g} GPa, {a.T:g} K — GRACE ft_m2, fitted proxies")
-    axes[0].set_ylabel("Next-H transfer cost (meV / added H)")
+    axes[0].set_ylabel(r"$\Delta\mu_H = \mu_H^{\mathrm{mixture}} - \mu_H^{\mathrm{pure\ H}}$ (meV / H)")
     axes[0].legend(loc="upper left", fontsize=8)
     axes[1].plot(grid, integral/(3+grid), "--", color=color,
                  label="Integral of interpolated transfer costs (provisional)")
