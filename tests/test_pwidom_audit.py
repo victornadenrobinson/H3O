@@ -58,7 +58,9 @@ def test_foreign_species_and_false_labels_excluded(tmp_path):
 def test_bar_unequal_samples_and_reconstruction(tmp_path):
     # Exact constant-work Crooks pair, with eight vs four trials per frame.
     f = np.full((20,8), 1.7); r = np.full((13,4), -1.7)
-    assert conv.diagnose(f,r,2000)['mu_ex_bar_meV'] == pytest.approx(1700)
+    diagnostic=conv.diagnose(f,r,2000)
+    for key in ('mu_ex_bar_meV','forward_exp_meV','reverse_exp_meV'):
+        assert diagnostic[key] == pytest.approx(1700)
     p = tmp_path/'run_work.npz'; np.savez(p,forward_work_eV=f,reverse_work_eV=r,T=2000)
     p.with_name('run.json').write_text(json.dumps(dict(mu_ex_bar_meV=1700)))
     rows = conv.analyse(p,tmp_path/'plots',4,3)

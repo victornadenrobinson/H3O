@@ -30,7 +30,7 @@ def diagnose(forward, reverse, temperature):
     q = np.exp(-(f - f.min()) / kt)
     return dict(mu_ex_bar_meV=1000 * mu,
                 forward_exp_meV=-1000 * kt * (logsumexp(-f/kt)-np.log(len(f))),
-                reverse_exp_meV=-1000 * kt * (logsumexp(-r/kt)-np.log(len(r))),
+                reverse_exp_meV=1000 * kt * (logsumexp(-r/kt)-np.log(len(r))),
                 overlap=float(af.mean()+ar.mean()),
                 forward_acceptance=float(af.mean()), reverse_acceptance=float(ar.mean()),
                 kish_fraction=float(q.sum()**2 / np.dot(q, q) / len(q)),
