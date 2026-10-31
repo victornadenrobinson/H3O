@@ -222,6 +222,8 @@ def dashboard(manifest, elapsed=None, exits=None, plain=False, clear=False):
 
 def plan(a):
     parent = None
+    if a.in_place and not a.extend_run:
+        raise ValueError("--in-place requires --extend-run")
     if a.extra_h is not None and (a.extend_run or not a.state_json or not a.reference_run):
         raise ValueError("--extra-h requires --state-json and --reference-run; cannot combine with --extend-run")
     if a.reference_run and a.extra_h is None:
@@ -378,8 +380,10 @@ def plan(a):
         reference = dict(run=str(refdir), result=str(resultpath), frames=str(frames),
                          snapshot=ref)
     # All validation and command construction precedes output creation or child startup.
-    out = Path(a.out or time.strftime("runs/pwidom_pm_%Y%m%d_%H%M%S"))
-    if out.exists():
+    out = Path(a.out or (a.extend_run if a.in_place else time.strftime("runs/pwidom_pm_%Y%m%d_%H%M%S")))
+    if a.in_place and out.resolve() != Path(a.extend_run).resolve():
+        raise ValueError("--in-place output must be the directory being extended")
+    if out.exists() and not a.in_place:
         raise ValueError(f"Output already exists: {out}; choose a fresh --out (no overwrite/resume)")
     records = []
     from pwidom import build_host
@@ -428,7 +432,86 @@ def plan(a):
                      git=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip())
 
 
+def archive_in_place(out, manifest):
+    """Snapshot completed outputs before replacing any managed file.
+
+    The caller holds the directory lock. A failed/interrupted extension can be
+    restarted from the archived completed run; uncheckpointed MD is not retained.
+    """
+    import uuid
+    root = out.resolve()
+    history = root / "_history" / (time.strftime("%Y%m%d_%H%M%S")+"_"+uuid.uuid4().hex[:8])
+    history.mkdir(parents=True, exist_ok=False)
+    previous = json.loads((root/"manifest.json").read_text())
+    roots = [str(root), str(out)]
+
+    def relocate(value):
+        if isinstance(value, dict): return {k: relocate(v) for k,v in value.items()}
+        if isinstance(value, list): return [relocate(v) for v in value]
+        if isinstance(value, str):
+            for prefix in roots:
+                if value.startswith(prefix+"/_history/"):
+                    return value
+                if value == prefix or value.startswith(prefix+"/"):
+                    return str(history)+value[len(prefix):]
+        return value
+
+    # Copy first: an error during backup leaves all current outputs usable.
+    for file in root.iterdir():
+        if file.is_file() and file.name != ".pwidom_extend.lock":
+            shutil.copy2(file, history/file.name)
+    # Historical commands/results must refer to the historical caches.
+    for file in history.glob("*.json"):
+        try:
+            payload = json.loads(file.read_text())
+        except ValueError:
+            continue
+        save(file, relocate(payload))
+    # Work arrays retain their values; relocate their frame provenance too.
+    import numpy as np
+    for file in history.glob("*_work.npz"):
+        with np.load(file) as data:
+            payload = {k: data[k] for k in data.files}
+        if "source_frames" in payload:
+            payload["source_frames"] = relocate(str(payload["source_frames"]))
+            np.savez(file, **payload)
+    save(history/"ARCHIVE.json", dict(source=str(root), completed=True,
+         note="Completed parent before in-place extension; archived paths relocated"))
+    for job in manifest["jobs"]:
+        cmd = job["command"]
+        index = cmd.index("--extend-from")+1
+        cmd[index] = str(history / Path(cmd[index]).name)
+    manifest["extends"] = str(history)
+    manifest["in_place"] = True
+    manifest["parent_archive"] = str(history)
+    # Remove obsolete estimates, including old-proxy replays tied to old frames.
+    managed = {"manifest.json", "RUN_ORIGIN.txt"}
+    for job in previous["jobs"]:
+        cmd = job["command"]
+        tag = cmd[cmd.index("--tag")+1]
+        managed.update(p.name for p in root.glob(tag+"*") if p.is_file())
+        managed.update((Path(job["log"]).name, Path(job["progress"]).name))
+        managed.update(p.name for p in root.glob(job["name"]+"_old_dft.log"))
+    for name in managed:
+        (root/name).unlink(missing_ok=True)
+    print(f"Completed parent preserved in {history}", flush=True)
+
+
 def run(a):
+    if a.in_place and not a.dry_run:
+        import fcntl
+        if not a.extend_run:
+            raise ValueError("--in-place requires --extend-run")
+        with open(Path(a.extend_run)/".pwidom_extend.lock", "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError("An in-place extension already holds this directory's lock")
+            return run_unlocked(a)
+    return run_unlocked(a)
+
+
+def run_unlocked(a):
     if a.inspect_eos:
         inspect_eos(a)
         return
@@ -451,11 +534,14 @@ def run(a):
             print("  " + shlex.join(r["command"]))
     if a.dry_run:
         return
-    out.mkdir(parents=True, exist_ok=False)
+    if a.in_place:
+        archive_in_place(out, manifest)
+    else:
+        out.mkdir(parents=True, exist_ok=False)
     manifest["started"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     manifest["status"] = "running"
     save(out / "manifest.json", manifest)
-    write_origin(out, toy=a.cpu, parent=a.extend_run)
+    write_origin(out, toy=a.cpu, parent=manifest["extends"])
     children = []
     stopped = None
     logs = HostLogs(manifest["jobs"])
@@ -648,6 +734,7 @@ def main():
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
+    r.add_argument("--in-place", action="store_true", help="extend in the same directory; archive completed parent under _history and lock against concurrent extensions")
     r.add_argument("--extra-h", nargs=4, type=int, help="four extra-H counts in the ice cell; requires explicit EOS and completed shared H reference")
     r.add_argument("--reference-run", help="completed four-host scan whose pureH result is reused with --extra-h")
     r.add_argument("--inspect-eos", metavar="CSV", help="read-only exact-temperature-bin DFT EOS report; no GPU/run")
@@ -655,8 +742,8 @@ def main():
     r.add_argument("--include-h25",action="store_true",help="with --inspect-eos: also require/report H2.5O coverage for scans beyond 27 extra H")
     r.add_argument("--out")
     r.add_argument("--model", default="grace-ft:runs/grace/ft_m2")
-    r.add_argument("--ice-proxy", default="runs/pwidom_fit/proxy_ice.json")
-    r.add_argument("--h-proxy", default="runs/pwidom_fit/proxy_H.json")
+    r.add_argument("--ice-proxy", default="runs/pwidom_fit/proxy_ice.json", help="H/O probe proposal pair potential; GRACE target and MD are unchanged")
+    r.add_argument("--h-proxy", default="runs/pwidom_fit/proxy_H.json", help="pure-H probe proposal pair potential; distinct from the thermodynamic H reference")
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--cpu", action="store_true", help="local toy checks only")
     r.add_argument("--quiet", action="store_true", help="show summaries only; full host output remains in logs")

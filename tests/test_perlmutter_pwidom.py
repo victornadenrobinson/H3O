@@ -373,3 +373,41 @@ def test_terminal_dashboard_plain_and_color(monkeypatch, capsys):
     assert "\033[" not in plain
     narrow = display.render("Title", "Time", rows, width=80)
     assert "prior dg -1147" in narrow
+
+
+def test_in_place_extension_archives_and_locks(campaign):
+    import fcntl
+    env, args, out = campaign
+    initial = shell("perlmutter_pwidom.sh", [*args, "--out", str(out)], env)
+    assert initial.returncode == 0, initial.stderr
+    before = {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
+    extargs = ["--cpu", "--extend-run", str(out), "--in-place",
+               "--ps", "0.1", "--equil-ps", "0"]
+    dry = shell("perlmutter_pwidom.sh", [*extargs, "--dry-run"], env)
+    assert dry.returncode == 0, dry.stderr
+    assert before == {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
+    with open(out/".pwidom_extend.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        blocked = shell("perlmutter_pwidom.sh", extargs, env)
+        assert blocked.returncode != 0 and "already holds" in blocked.stderr
+    for iteration in (1,2):
+        result = shell("perlmutter_pwidom.sh", extargs, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        manifest = json.loads((out/"manifest.json").read_text())
+        history = Path(manifest["parent_archive"])
+        assert manifest["status"] == "complete" and manifest["extends"] == str(history)
+        assert history.parent == out/"_history"
+        oldmanifest = json.loads((history/"manifest.json").read_text())
+        assert oldmanifest["status"] == "complete"
+        for job in manifest["jobs"]:
+            data = json.loads(Path(job["result"]).read_text())
+            assert data["n_frames_host"] == 5*(iteration+1)
+            oldjob = next(j for j in oldmanifest["jobs"] if j["name"] == job["name"])
+            assert Path(oldjob["result"]).parent == history
+            tag = job["command"][job["command"].index("--tag")+1]
+            with np.load(history/f"{tag}_frames.npz") as old, np.load(out/f"{tag}_frames.npz") as new:
+                np.testing.assert_array_equal(old["host"], new["host"][:len(old["host"])])
+            if iteration == 1:
+                assert (history/f"{tag}_frames.npz").read_bytes() == before[f"{tag}_frames.npz"]
+        report = shell("perlmutter_pwidom_status.sh", [str(out)], env)
+        assert report.returncode == 0, report.stderr

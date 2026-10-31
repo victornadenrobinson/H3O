@@ -41,6 +41,14 @@ See [environment details](envs/README.md). MACE/MatterSim need separate environm
 
 One host and one host+H MD trajectory per composition, then proxy-selected
 insertion/deletion energies. `--minutes` limits real time; `--ps` is MD sampling.
+`--ice-proxy PATH` chooses the proposal pair potential for H/O hosts;
+`--h-proxy PATH` chooses it for a newly sampled pure-H host. The default fitted
+JSONs are under `runs/pwidom_fit/`; the old DFT fit is `docs/data/toyfit_t4.json`.
+These guide probe selection and importance weights, not GRACE MD. Correctly
+reweighted, converged estimates target the same GRACE free energy; finite
+sampling/overlap can cause substantial differences. The direct `pwidom.py run`
+command calls this option `--proxy`. This is distinct from the pure-H
+thermodynamic reference selected by `--reference-run`.
 
 **Fresh 500 GPa / 3000 K test**, four hosts on four GPUs:
 
@@ -110,11 +118,29 @@ recomputes estimates on the combined frames. It is not exact trajectory
 continuation. A 3-ps + 0.5-ps extension needs roughly an hour allocation/cap,
 not ten minutes; inspect `--dry-run` before choosing its runtime.
 
-Extensions use a new directory to preserve the completed parent and prevent
-two writers from racing over caches/results. Do not combine parent and extension
-as independent data: the extension already includes the parent's frames. An
-in-place mode would need locking, atomic replacement and a preserved prior version;
-it is not implemented. By contrast, `run_real.py` TDI supports checkpoint restarts.
+To extend **in the same directory**, add `--in-place` and omit `--out`:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh \
+  --extend-run runs/pwidom_500GPa_3000K_nscan1 --in-place \
+  --ps 1.0 --equil-ps 0.2 --minutes 30
+```
+
+The directory must contain a completed run. The launcher holds an exclusive lock,
+copies the completed outputs into `_history/<timestamp>_<id>/` before replacing
+any managed file, then writes the combined old+new results at the usual paths.
+Historical manifest/JSON paths are relocated to their archived copies. Previous
+old-proxy replays are archived too: replay them again on the new combined frames.
+This consumes backup disk space. A failed extension remains marked incomplete;
+the last completed parent can be recovered with `--extend-run <parent_archive>`
+and a fresh output directory. Do not delete `_history` while its provenance/caches
+are referenced. `--dry-run` makes no archive or changes.
+
+Without `--in-place`, extensions retain the existing fresh-directory behavior.
+Do not combine parent and extension as independent data: the extension already
+includes the parent's frames. Periodic MD checkpointing is still absent; this
+option does not recover MD interrupted mid-stage. `run_real.py` TDI separately
+supports checkpoint restarts.
 
 Compact progress/GPU tables are default; `--verbose` streams full logs and
 `--plain` uses plain ASCII. Full logs are always in the run directory. For a log

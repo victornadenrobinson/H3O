@@ -84,8 +84,14 @@ The reference result is snapshotted in the manifest; its uncertainty is shared.
 Use proxy_compare.py's cached-frame replay for old/new Kish comparisons, not
 separate MD ensembles. Probe-stage memory reached 50.5/80 GiB for H2.25O, so
 low MD-stage memory alone is insufficient for admitting concurrent workers.
-These custom scans also support fresh-directory `--extend-run`; in-place
-extensions and periodic MD checkpoints remain unimplemented.
+Custom scans support `--extend-run`. Add `--in-place` (omit `--out`) to archive
+completed outputs under the same directory's `_history/<timestamp>_<id>/`, hold
+an exclusive directory lock and replace managed outputs with the combined run.
+Old-proxy replays are archived/invalidate with old frames. Backup completes
+before managed files are removed; historical JSON/command paths are relocated.
+Interrupted extensions remain incomplete; recover from the completed parent
+archive into a fresh directory. Keep referenced history directories. Periodic
+MD checkpoints remain unimplemented; in-place mode is not exact MD restart.
 pwidom_formation.py makes a
 provisional integral (not a validated equilibrium hull), with conservative
 maximal-positive-correlation statistical sigma bounds; sampling/model bias omitted.
@@ -110,8 +116,8 @@ training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
 - Top-level `RUNNING.md` is the terminal quick reference, with Perlmutter/Young
   environment paths, scan/extension commands and links to other calculation
   entry points. Keep it updated when command interfaces change. Extensions use
-  fresh output directories for parent preservation/concurrent-writer protection;
-  in-place pwidom extension is not implemented. Checkpointed TDI restarts differ.
+  fresh output directories by default, or `--in-place` with a completed-parent
+  archive and an exclusive lock. Checkpointed TDI restarts differ.
 
 - Utilization distinction: current pwidom scans have one host process/GPU,
   sequential host and host+H MD, then batched single points; **no lambda replicas**.
