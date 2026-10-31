@@ -49,7 +49,7 @@ def md_frames(model, at0, a, seed, label):
     suffix = '_host_md.npz' if label == 'host' else '_full_md.npz'
     destination = Path(a._checkpoint_prefix + suffix)
     source = Path(a.resume_from + suffix) if a.resume_from else None
-    if destination.exists():
+    if destination.exists() and not (getattr(a, "resume_in_place", False) and source and destination.resolve() == source.resolve()):
         raise ValueError(f'Checkpoint exists: {destination}; resume into a fresh --out')
     eq = int(a.equil_ps*1000/a.dt)
     every = max(1, int(round(a.every_fs/a.dt)))

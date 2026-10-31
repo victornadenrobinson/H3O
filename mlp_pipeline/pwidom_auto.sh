@@ -14,6 +14,7 @@ CHECKPOINT_SECONDS=300
 SCAN_OPTIONS=0
 RESUME_RUN=""
 RESUME_OUT=""
+IN_PLACE=0
 CANDIDATES="runs/dft_candidates"
 DRY_RUN=0
 INVENTORY="${PWIDOM_INVENTORY:-runs/inventory_binned.csv}"
@@ -30,6 +31,7 @@ Options:
   --ps VALUE             Production sampling, ps (default 1.0)
   --equil-ps VALUE       Equilibration, ps (default 0.4)
   --resume-run DIR       Resume one prior stage (inherits its inputs)
+  --in-place             With --resume-run: update source directory safely
   --out NEW_DIR          Required fresh output with --resume-run
   --checkpoint-seconds N  MD checkpoint wall interval (default 300)
   --minutes VALUE        Existing launcher limit (default 30)
@@ -99,6 +101,10 @@ while (($#)); do
             EQUIL_PS="${2:?Missing --equil-ps value}"
             shift 2
             ;;
+        --in-place)
+            IN_PLACE=1
+            shift
+            ;;
         --resume-run)
             RESUME_RUN="${2:?Missing previous run}"
             shift 2
@@ -156,16 +162,18 @@ if [[ -n "$RESUME_RUN" ]]; then
         echo "ERROR: --resume-run inherits scan inputs; omit P/T/n/ps/equil/inventory/candidate options" >&2
         exit 2
     fi
-    if [[ -z "$RESUME_OUT" ]]; then
+    if [[ -z "$RESUME_OUT" ]] && (( !IN_PLACE )); then
         echo "ERROR: --resume-run requires --out NEW_DIR" >&2
         exit 2
     fi
     RESUME_COMMAND=(bash mlp_pipeline/perlmutter_pwidom.sh
-        --resume-run "$RESUME_RUN" --out "$RESUME_OUT"
+        --resume-run "$RESUME_RUN"
         --minutes "$MINUTES" --checkpoint-seconds "$CHECKPOINT_SECONDS")
+    if [[ -n "$RESUME_OUT" ]]; then RESUME_COMMAND+=(--out "$RESUME_OUT"); fi
+    if ((IN_PLACE)); then RESUME_COMMAND+=(--in-place); fi
     if ((DRY_RUN)); then RESUME_COMMAND+=(--dry-run); fi
     exec "${RESUME_COMMAND[@]}"
-elif [[ -n "$RESUME_OUT" ]]; then
+elif [[ -n "$RESUME_OUT" ]] || ((IN_PLACE)); then
     echo "ERROR: --out is only supported with --resume-run" >&2
     exit 2
 fi

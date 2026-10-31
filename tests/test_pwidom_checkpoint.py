@@ -134,3 +134,19 @@ def test_failed_atomic_write_retains_previous_checkpoint(tmp_path,monkeypatch):
     with pytest.raises(OSError): cp.atomic_npz(path,step=2)
     assert path.read_bytes()==original
     assert len(list(tmp_path.iterdir()))==1
+
+
+def test_in_place_md_resume_no_duplicate_frames(tmp_path,monkeypatch):
+    model,atoms,args=setup(tmp_path)
+    expected=cp.md_frames(model,atoms,args,3,'host')
+    args._checkpoint_prefix=str(tmp_path/'inplace')
+    original=cp.atomic_npz
+    def interrupt(path,**payload):
+        original(path,**payload)
+        if payload['step']==7: raise SystemExit(143)
+    monkeypatch.setattr(cp,'atomic_npz',interrupt)
+    with pytest.raises(SystemExit): cp.md_frames(model,atoms,args,3,'host')
+    monkeypatch.setattr(cp,'atomic_npz',original)
+    args.resume_from=args._checkpoint_prefix; args.resume_in_place=True
+    actual=cp.md_frames(model,atoms,args,3,'host')
+    for x,y in zip(actual,expected): np.testing.assert_array_equal(x,y)

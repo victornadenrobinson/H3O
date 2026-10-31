@@ -122,7 +122,7 @@ class Model:
                     digest.update(np.ascontiguousarray(array).tobytes())
             fingerprint = digest.hexdigest()
             source = getattr(self, "energy_resume", None)
-            if os.path.exists(cache):
+            if os.path.exists(cache) and not (getattr(self, "resume_in_place", False) and source and os.path.realpath(cache) == os.path.realpath(source)):
                 raise ValueError(f"Energy checkpoint exists: {cache}; choose fresh output")
             if source and os.path.isfile(source):
                 with np.load(source, allow_pickle=False) as z:
@@ -240,11 +240,13 @@ def cmd_run(a):
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
-    if a.extend_from and os.path.exists(ff):
+    if a.extend_from and os.path.exists(ff) and not a.resume_in_place:
         raise SystemExit("--extend-from requires a fresh output cache; refusing to overwrite/reuse an existing one")
-    if a.resume_from and os.path.exists(ff):
+    if a.resume_from and os.path.exists(ff) and not a.resume_in_place:
         raise SystemExit("--resume-from requires a fresh output")
     a._checkpoint_prefix = os.path.join(a.out, tag)
+    if a.resume_in_place and (not a.resume_from or os.path.realpath(a.resume_from) != os.path.realpath(a._checkpoint_prefix)):
+        raise SystemExit("--resume-in-place requires --resume-from matching output/tag")
     source_ff = a.resume_from + "_frames.npz" if a.resume_from else ff
     if a.resume_from and not any(os.path.isfile(a.resume_from + suffix) for suffix in
                                 ("_frames.npz", "_host_md.npz", "_full_md.npz")):
@@ -261,7 +263,8 @@ def cmd_run(a):
             if "model_fp" not in z.files or not np.array_equal(z["numbers"], host.numbers) or not np.array_equal(z["cell"], cell):
                 raise SystemExit("Resume requires fingerprinted frames with matching species/cell")
             from tdi.pwidom_checkpoint import atomic_npz
-            atomic_npz(ff, **{k: z[k] for k in z.files})
+            if not a.resume_in_place:
+                atomic_npz(ff, **{k: z[k] for k in z.files})
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
     elif a.extend_from:
         with np.load(a.extend_from) as old:
@@ -357,6 +360,7 @@ def cmd_run(a):
     energy_suffix = f"_{energy_label}_K{K}_energies.npz"
     model.energy_checkpoint = a._checkpoint_prefix + energy_suffix
     model.energy_resume = a.resume_from + energy_suffix if a.resume_from else None
+    model.resume_in_place = a.resume_in_place
     model.checkpoint_model_fp = mfp
     E = model.energies(S0 + S1 + D0 + D1, progress=progress); n0, n1, m0 = len(S0), len(S1), len(D0)
     progress.update("analysis", force=True)
@@ -465,6 +469,7 @@ def main():
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
     r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints (default 300)")
+    r.add_argument("--resume-in-place", action="store_true", help="allow atomic checkpoint updates in the original output; normally use the locked launcher")
     r.add_argument("--resume-from", help="previous output/tag prefix; continue MD into fresh --out without re-equilibration")
     r.add_argument("--extend-from", help="cached frames: append a restarted MD segment in fresh --out; new thermal velocities and re-equilibration")
     r.add_argument("--candidate-dir", default=None, help="optional unlabeled extxyz diagnostic queue; no DFT submission")

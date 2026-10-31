@@ -224,12 +224,12 @@ def plan(a):
     parent = None
     a.resume_run = getattr(a, "resume_run", None)
     a.checkpoint_seconds = getattr(a, "checkpoint_seconds", 300)
-    if a.resume_run and (a.extend_run or a.in_place or a.extra_h or a.reference_run):
+    if a.resume_run and (a.extend_run or a.extra_h or a.reference_run):
         raise ValueError("--resume-run inherits the run; do not combine with extension/extra-H/reference options")
     if not math.isfinite(a.checkpoint_seconds) or a.checkpoint_seconds <= 0:
         raise ValueError("checkpoint-seconds must be finite and positive")
-    if a.in_place and not a.extend_run:
-        raise ValueError("--in-place requires --extend-run")
+    if a.in_place and not (a.extend_run or a.resume_run):
+        raise ValueError("--in-place requires --extend-run or --resume-run")
     if a.extra_h is not None and (a.extend_run or not a.state_json or not a.reference_run):
         raise ValueError("--extra-h requires --state-json and --reference-run; cannot combine with --extend-run")
     if a.reference_run and a.extra_h is None:
@@ -389,9 +389,9 @@ def plan(a):
         reference = dict(run=str(refdir), result=str(resultpath), frames=str(frames),
                          snapshot=ref)
     # All validation and command construction precedes output creation or child startup.
-    out = Path(a.out or (a.extend_run if a.in_place else time.strftime("runs/pwidom_pm_%Y%m%d_%H%M%S")))
-    if a.in_place and out.resolve() != Path(a.extend_run).resolve():
-        raise ValueError("--in-place output must be the directory being extended")
+    out = Path(a.out or ((a.extend_run or a.resume_run) if a.in_place else time.strftime("runs/pwidom_pm_%Y%m%d_%H%M%S")))
+    if a.in_place and out.resolve() != Path(a.extend_run or a.resume_run).resolve():
+        raise ValueError("--in-place output must be the source directory")
     if out.exists() and not a.in_place:
         raise ValueError(f"Output already exists: {out}; choose a fresh --out (no overwrite/resume)")
     records = []
@@ -438,6 +438,8 @@ def plan(a):
                 print(f"{name}: no checkpoint/cache; starting this host from its initial state", flush=True)
             else:
                 cmd += ["--resume-from", str(prefix.resolve())]
+                if a.in_place:
+                    cmd += ["--resume-in-place"]
             if "--extend-from" in oldcmd:
                 cmd += ["--extend-from", oldcmd[oldcmd.index("--extend-from")+1]]
         records.append(dict(name=name, gpu=gpu, atoms=len(host), command=cmd,
@@ -520,15 +522,20 @@ def archive_in_place(out, manifest):
 def run(a):
     if a.in_place and not a.dry_run:
         import fcntl
-        if not a.extend_run:
-            raise ValueError("--in-place requires --extend-run")
-        with open(Path(a.extend_run)/".pwidom_extend.lock", "a") as lock:
+        source = a.extend_run or getattr(a, "resume_run", None)
+        if not source:
+            raise ValueError("--in-place requires --extend-run or --resume-run")
+        with open(Path(source)/".pwidom_extend.lock", "a") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError("An in-place extension already holds this directory's lock")
             return run_unlocked(a)
-    return run_unlocked(a)
+    try:
+        return run_unlocked(a)
+    finally:
+        if getattr(a, "_run_lock", None):
+            a._run_lock.close()
 
 
 def run_unlocked(a):
@@ -554,10 +561,23 @@ def run_unlocked(a):
             print("  " + shlex.join(r["command"]))
     if a.dry_run:
         return
-    if a.in_place:
+    if a.in_place and a.resume_run:
+        # Preserve reviewable prior outputs; MD checkpoints update atomically.
+        import uuid
+        history = out / "_resume_history" / (time.strftime("%Y%m%d_%H%M%S")+"_"+uuid.uuid4().hex[:8])
+        history.mkdir(parents=True, exist_ok=False)
+        for file in out.iterdir():
+            if file.is_file() and (file.suffix == ".json" or file.name.endswith("_work.npz") or file.name == "RUN_ORIGIN.txt"):
+                shutil.copy2(file, history/file.name)
+        manifest["resume_history"] = str(history)
+        manifest["in_place"] = True
+    elif a.in_place:
         archive_in_place(out, manifest)
     else:
         out.mkdir(parents=True, exist_ok=False)
+        import fcntl
+        a._run_lock = open(out / ".pwidom_extend.lock", "a")
+        fcntl.flock(a._run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     manifest["started"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     manifest["status"] = "running"
     save(out / "manifest.json", manifest)
@@ -583,7 +603,9 @@ def run_unlocked(a):
                        PW_PROGRESS_FILE=os.path.abspath(r["progress"]))
             # Each GPU is independent; do not inherit another launcher's serialization lock.
             env.pop("PW_GPU_LOCK", None)
-            with open(r["log"], "x") as log:
+            with open(r["log"], "a" if a.resume_run and a.in_place else "x") as log:
+                if a.resume_run and a.in_place:
+                    log.write("\n=== IN-PLACE RESUME " + manifest["started"] + " ===\n")
                 log.write(shlex.join(r["command"]) + "\n"); log.flush()
                 p = subprocess.Popen(r["command"], env=env, stdout=log,
                                      stderr=subprocess.STDOUT, start_new_session=True)
@@ -756,7 +778,7 @@ def main():
     r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints")
     r.add_argument("--resume-run", help="previous run directory: inherit inputs and continue saved MD into fresh --out")
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
-    r.add_argument("--in-place", action="store_true", help="extend in the same directory; archive completed parent under _history and lock against concurrent extensions")
+    r.add_argument("--in-place", action="store_true", help="resume or extend in the source directory; preserve history and lock against concurrent in-place operations")
     r.add_argument("--extra-h", nargs=4, type=int, help="four extra-H counts in the ice cell; requires explicit EOS and completed shared H reference")
     r.add_argument("--reference-run", help="completed four-host scan whose pureH result is reused with --extra-h")
     r.add_argument("--inspect-eos", metavar="CSV", help="read-only exact-temperature-bin DFT EOS report; no GPU/run")

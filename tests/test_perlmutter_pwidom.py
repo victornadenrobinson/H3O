@@ -443,3 +443,60 @@ def test_resume_run_from_md_checkpoints_preserves_parent(campaign):
         expected=json.loads((out/Path(job['result']).name).read_text())
         actual=json.loads(Path(job['result']).read_text())
         assert actual['mu_ex_bar_meV']==expected['mu_ex_bar_meV']
+
+
+def test_in_place_resume_appends_logs_preserves_history_and_locks(campaign):
+    import fcntl
+    env,args,out=campaign
+    first=shell('perlmutter_pwidom.sh',[*args,'--out',str(out)],env)
+    assert first.returncode==0,first.stdout+first.stderr
+    manifest_before=(out/'manifest.json').read_bytes()
+    old=json.loads(manifest_before)
+    logs={Path(j['log']):Path(j['log']).read_bytes() for j in old['jobs']}
+    results={Path(j['result']):Path(j['result']).read_bytes() for j in old['jobs']}
+    caches={p:p.read_bytes() for p in out.glob('*_frames.npz')}
+    command=['--cpu','--resume-run',str(out),'--in-place','--verbose']
+    with open(out/'.pwidom_extend.lock','a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        blocked=shell('perlmutter_pwidom.sh',command,env)
+        assert blocked.returncode!=0 and 'lock' in blocked.stderr
+    resumed=shell('perlmutter_pwidom.sh',command,env)
+    assert resumed.returncode==0,resumed.stdout+resumed.stderr
+    new=json.loads((out/'manifest.json').read_text())
+    assert new['status']=='complete' and new['in_place']
+    history=Path(new['resume_history'])
+    assert (history/'manifest.json').read_bytes()==manifest_before
+    for p,before in logs.items():
+        assert p.read_bytes().startswith(before)
+        assert b'IN-PLACE RESUME' in p.read_bytes()[len(before):]
+    for p,before in results.items(): assert (history/p.name).read_bytes()==before
+    assert caches=={p:p.read_bytes() for p in caches}
+    for job in new['jobs']:
+        actual=json.loads(Path(job['result']).read_text())
+        expected=json.loads(results[Path(job['result'])])
+        assert actual['mu_ex_bar_meV']==expected['mu_ex_bar_meV']
+
+
+def test_legacy_in_place_restart_without_checkpoint(campaign):
+    env,args,out=campaign
+    # Plan only; emulate old interrupted run with manifest and logs but no state.
+    dry=shell('perlmutter_pwidom.sh',[*args,'--out',str(out),'--dry-run'],env)
+    assert dry.returncode==0,dry.stderr
+    # Build the old manifest through the same preflight, without starting MD.
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('pm_legacy',ROOT/'mlp_pipeline/tdi/perlmutter_pwidom.py')
+    pm=importlib.util.module_from_spec(spec);spec.loader.exec_module(pm)
+    from argparse import Namespace
+    a=Namespace(P=500,T=3000,ps=.1,equil_ps=0,minutes=1,K=16,sel=1,ndel=1,batch=1,
+        roots=[args[args.index('--roots')+1]],state_json=None,extend_run=None,in_place=False,
+        extra_h=None,reference_run=None,model='toyice',ice_proxy='docs/data/toyfit_t4.json',
+        h_proxy='docs/data/toyfit_t4.json',cpu=True,dry_run=True,out=str(out),candidate_dir=None)
+    _,manifest=pm.plan(a)
+    out.mkdir();manifest['status']='running'
+    (out/'manifest.json').write_text(json.dumps(manifest))
+    for j in manifest['jobs']: Path(j['log']).write_text('old interrupted log\n')
+    result=shell('perlmutter_pwidom.sh',['--cpu','--resume-run',str(out),'--in-place'],env)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert result.stdout.count('no checkpoint/cache; starting this host')==4
+    assert json.loads((out/'manifest.json').read_text())['status']=='complete'
+    for j in manifest['jobs']: assert Path(j['log']).read_text().startswith('old interrupted log\n')

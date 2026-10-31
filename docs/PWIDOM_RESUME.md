@@ -35,11 +35,40 @@ and model fingerprint. Existing Langevin friction and center-of-mass behavior
 are preserved. GPU floating-point nondeterminism means bitwise identity is not
 promised for GRACE; GPU continuation still requires Perlmutter validation.
 
+## Resume or restart in the same directory
+
+After verifying the previous processes have stopped, this explicit mode keeps
+all files under the original run directory:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh \
+  --resume-run runs/OLD_RUN --in-place \
+  --minutes 50 --checkpoint-seconds 300 --dry-run
+# Then repeat without --dry-run.
+```
+
+`pwidom_auto.sh` accepts the same `--resume-run ... --in-place` form. Logs append
+with a timestamped boundary. Previous manifests, result JSONs and work arrays
+are copied to `_resume_history/<timestamp>/` before restarting. Those copies are
+historical records whose paths may still refer to the live directory, not
+independent relocated runs. Checkpoints update by atomic replacement; sampled
+frames resume from the saved step without duplicates. Completed combined frame
+caches are reused unchanged. Result/work files are recomputed after their prior
+versions have been preserved. Unknown files are left untouched. This is not
+blindly concatenating coordinate or NPZ files, which would corrupt them.
+
+A directory lock protects new launcher runs and in-place operations from each
+other. Older running launchers did not hold that lock: verify their processes
+have stopped before using this mode. As with fresh-output resume, hosts without
+any saved state restart from their original initial conditions, with an explicit
+message. The former logs remain. No production directory is modified by these
+development tests.
+
 ## Resume safely
 
 First ensure the previous allocation/processes have actually stopped (`squeue`
 and the status viewer). A manifest can still say `running` after SIGKILL.
-Resume **into a fresh directory**; do not delete or overwrite the old run:
+The default resume writes **into a fresh directory**; the explicit in-place mode above is also supported:
 
 ```bash
 # In a NEW four-GPU Perlmutter allocation, with the existing GRACE environment:
@@ -122,7 +151,7 @@ Storage must support atomic same-directory rename and durable writes; fsync does
 not guarantee survival of every distributed-filesystem failure. Filesystem costs
 scale with sampled trajectory size; checkpoint time is wall time, not MD time.
 
-Each resume preserves the source. Do not treat overlapping source/resume frames
+Fresh-output resume preserves the source; in-place resume preserves historical results and updates live checkpoints. Do not treat overlapping source/resume frames
 as independent datasets in convergence analysis. No checkpoints or production
 outputs were created on Perlmutter during development. This implementation covers
 the PWidom workflow, not other TDI/EOS MD scripts in the repository.
@@ -143,7 +172,7 @@ python -m pytest -q tests/test_pwidom_checkpoint.py tests/test_pwidom_audit.py \
   tests/test_pwidom_diagnostics.py tests/test_perlmutter_pwidom.py
 ```
 
-Result: **43 passed** on the restored CPU environment. ASE emitted deprecation
+Result: **46 passed** on the restored CPU environment. ASE emitted deprecation
 warnings for the pre-existing Maxwell/Langevin center-of-mass API; the integrator
 convention was intentionally kept unchanged. Shell syntax, Python compilation
 and whitespace checks also passed. No GRACE/GPU or Slurm runtime tests ran.
