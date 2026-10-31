@@ -29,6 +29,12 @@ no MD started. The state may be new. Use the new perlmutter_pwidom.sh
 `--inspect-eos <inventory.csv>` report to check exact-bin DFT coverage, then
 provide reviewed volume/B inputs with `--state-json` rather than assuming TDI
 metadata exists. Four-GPU launcher/status commands are in mlp_pipeline/README.md.
+Fresh Perlmutter allocations may have no python on PATH. Both wrappers now use
+perlmutter_python.sh: explicit PY, GRACE_ENV directory, active interpreters,
+known scratch/local/conda paths, then `conda run -n grace-env`. H3O_ENV_INIT can
+source the user's existing site module/activation recipe. No installation or
+guessed module versions. The actual Perlmutter environment path is still unknown
+in this cloud checkout; `(grace-env)` alone is not its location.
 
 ## Layout and workflows
 

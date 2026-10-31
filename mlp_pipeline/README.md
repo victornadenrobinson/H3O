@@ -25,7 +25,23 @@ bash mlp_pipeline/perlmutter_pwidom.sh
 bash mlp_pipeline/perlmutter_pwidom_status.sh runs/<output-directory> --gpu
 ```
 
-`PY=/path/to/python` selects an interpreter; otherwise the active `python` is used.
+Both shell entry points check the environment before starting. `PY=/path/to/python`
+is authoritative; otherwise `GRACE_ENV=/path/to/grace-env` selects its interpreter.
+Without either, they try active venv/conda interpreters, python/python3, known
+Perlmutter scratch paths (including `$SCRATCH/h3o/grace-venv`), local `grace-env`/
+`.venv` and common conda paths, then `conda run -n grace-env` when available.
+They print the selected interpreter, check Python >=3.11 and analysis packages,
+and check TensorFlow/tensorpotential/matscipy for actual GRACE launches. Inspection,
+status, help and dry-run do not require the GPU packages. This checks package
+availability; real GRACE/model/GPU checks still happen in the existing evaluator.
+There is no automatic package installation or guessed module load.
+
+For site-specific module/conda activation, save your **existing working recipe**
+outside Git and set `H3O_ENV_INIT=/path/to/setup.sh`. The scripts source it before
+discovery; it can load modules and activate the environment. Set `GRACE_ENV` or
+`H3O_ENV_INIT` once in your shell setup to reuse it on future allocations.
+An explicit broken PY/GRACE_ENV produces an error rather than silently selecting
+another environment. Standard venvs can be used directly without activation.
 The launcher submits no job. Defaults: 500 GPa, 3000 K, H2O/H2.083O/H2.25O/pure-H,
 one process per GPU, 0.4 ps sampling + 0.2 ps equilibration per MD, K=2000,
 8 insertions and 4 deletions per frame, batch 8, a 10-minute wall cap.

@@ -115,3 +115,74 @@ def test_inspect_eos_reports_values_without_running(campaign):
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.count("vpa=") == 3 and "Read-only report" in r.stdout
     assert not out.exists()
+
+
+def discovery_env(tmp_path):
+    """A fresh login-like shell with no active venv or python on PATH."""
+    env = dict(os.environ, HOME=str(tmp_path / "home"), SCRATCH=str(tmp_path / "scratch"),
+               PATH="/usr/bin:/bin")
+    for key in ("PY", "VIRTUAL_ENV", "CONDA_PREFIX", "GRACE_ENV", "H3O_ENV_INIT"):
+        env.pop(key, None)
+    Path(env["HOME"]).mkdir()
+    Path(env["SCRATCH"]).mkdir()
+    return env
+
+
+def interpreter_wrapper(path):
+    import shlex
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/bash\nexec {shlex.quote(sys.executable)} "$@"\n')
+    path.chmod(0o755)
+
+
+def test_discovers_scratch_environment_without_activation(tmp_path):
+    env = discovery_env(tmp_path)
+    interpreter_wrapper(Path(env["SCRATCH"]) / "h3o/grace-venv/bin/python")
+    r = shell("perlmutter_pwidom.sh", ["--help"], env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Perlmutter Python:" in r.stderr and "--inspect-eos" in r.stdout
+    # Status uses the same discovery before validating its run path.
+    r = shell("perlmutter_pwidom_status.sh", [str(tmp_path / "missing")], env)
+    assert r.returncode != 0 and "Perlmutter Python:" in r.stderr
+    assert "manifest.json" in r.stderr
+
+
+def test_explicit_bad_python_does_not_fall_back(tmp_path):
+    env = discovery_env(tmp_path)
+    env["PY"] = str(tmp_path / "missing-python")
+    interpreter_wrapper(Path(env["SCRATCH"]) / "h3o/grace-venv/bin/python")
+    r = shell("perlmutter_pwidom.sh", ["--help"], env)
+    assert r.returncode != 0 and "PY is explicit" in r.stderr
+    assert "usage:" not in r.stdout
+
+
+def test_explicit_initialization_recipe(tmp_path):
+    import shlex
+    env = discovery_env(tmp_path)
+    init = tmp_path / "activate.sh"
+    init.write_text(f"export PY={shlex.quote(sys.executable)}\n")
+    env["H3O_ENV_INIT"] = str(init)
+    r = shell("perlmutter_pwidom.sh", ["--help"], env)
+    assert r.returncode == 0 and "Perlmutter Python:" in r.stderr, r.stderr
+
+
+def test_conda_named_environment_fallback(tmp_path):
+    import shlex
+    env = discovery_env(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    conda = bin_dir / "conda"
+    conda.write_text('#!/bin/bash\n'
+                     '[[ "$1 $2 $3 $4 $5" == "run --no-capture-output -n grace-env python" ]] || exit 1\n'
+                     f'shift 5\nexec {shlex.quote(sys.executable)} "$@"\n')
+    conda.chmod(0o755)
+    env["PATH"] = str(bin_dir) + ":" + env["PATH"]
+    r = shell("perlmutter_pwidom.sh", ["--help"], env)
+    assert r.returncode == 0 and "Perlmutter Python:" in r.stderr, r.stderr
+
+
+def test_missing_environment_has_actionable_error(tmp_path):
+    env = discovery_env(tmp_path)
+    r = shell("perlmutter_pwidom.sh", ["--help"], env)
+    assert r.returncode != 0 and "Set GRACE_ENV=" in r.stderr
+    assert "No environment was installed" in r.stderr
