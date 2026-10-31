@@ -2,7 +2,7 @@
 # Proxy refit on ARCHER2 CPU nodes (no GPU): the GRACE insertion energies of tdi/proxy_fit.py `label` are independent single points, so one node runs NPROC independent
 # shards (each with OMP threads), then the numpy fit. Needs, under /work (compute nodes do not see /home): the repo, a venv with tensorflow-cpu + tensorpotential, the cached
 # pwidom frames (runs/pwidom*/pw_*_frames.npz) and the GRACE checkpoint (MODEL=grace-ft:<absolute path>).
-# usage (login node, repo root):  ACCT=<your budget code> PY=<venv>/bin/python MODEL=grace-ft:$PWD/runs/grace/ft_m2 sbatch mlp_pipeline/archer2_proxy_label.sbatch
+# usage (login node, repo root):  PY=<venv>/bin/python MODEL=grace-ft:$PWD/runs/grace/ft_m2 sbatch -A <your budget code> mlp_pipeline/archer2_proxy_label.sbatch
 #   knobs: NPROC (16) THREADS (8) PER_SOURCE (5) SELECT ("500GPa_6000K 500GPa_5000K 600GPa_5000K 600GPa_6000K"; "" = all sources) NSEL (16) NUNI (8) FIT (runs/pwidom_fit)
 #          BASE (docs/data/toyfit_t4.json) HOLD_ICE / HOLD_H (production state held out of the fit) SRC (glob)
 # check the partition / qos / time names in the ARCHER2 docs; label is resumable (finished sources are skipped), so resubmit if it hits the time limit.
