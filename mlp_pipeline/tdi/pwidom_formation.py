@@ -1,7 +1,8 @@
 """Plot reported transfer costs and their provisional composition integral.
 
 This is not an equilibrium convex hull: interpolation and unconverged input can
-dominate. No fitted solubility or integral uncertainty is inferred.
+dominate. Statistical propagation bounds omit sampling and model bias; no
+validated equilibrium solubility is inferred.
 """
 import argparse
 import csv
@@ -43,6 +44,8 @@ def main():
     ap.add_argument("--P", type=float, default=500)
     ap.add_argument("--T", type=float, default=3000)
     ap.add_argument("--out", required=True, help="fresh filename prefix for PNG/PDF/integral CSV")
+    ap.add_argument("--compare", help="earlier reported CSV, shown for comparison only; not pooled")
+    ap.add_argument("--label", default="Current scan", help="legend label for the primary dataset")
     a = ap.parse_args()
     with open(a.data) as file:
         rows = [r for r in csv.DictReader(line for line in file if not line.startswith("#"))
@@ -61,10 +64,23 @@ def main():
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
     color = "#ce477f"
+    if a.compare:
+        with open(a.compare) as file:
+            previous = [r for r in csv.DictReader(line for line in file if not line.startswith("#"))
+                        if float(r["P_GPa"]) == a.P and float(r["T_K"]) == a.T]
+        previous.sort(key=lambda r: float(r["n"]))
+        pn, pm, pe = (np.array([float(r[k]) for r in previous]) for k in ("n", "dg_meV", "err_meV"))
+        pv, pg, pi = integrate(pn, pm)
+        axes[0].errorbar(pn, pm, yerr=pe, fmt="o--", color="0.6", mfc="white",
+                         capsize=3, alpha=.7, label="Original short scan (shared parent)")
+        axes[1].plot(pg, pi/(3+pg), "--", color="0.6", alpha=.7,
+                     label="Original short scan (shared parent)")
+        axes[1].errorbar(pn, pv/(3+pn), yerr=statistical_error_bound(pn, pe),
+                         fmt="o", color="0.6", mfc="white", capsize=3, alpha=.7)
     for i, r in enumerate(rows):
         axes[0].errorbar(n[i], mu[i], yerr=err[i], fmt="s", color=color,
                         mfc=color if r["flag"] == "ok" else "white", capsize=4)
-    axes[0].plot(n, mu, "--", color=color, alpha=.7, label="Linear interpolation; open points unconverged")
+    axes[0].plot(n, mu, "--", color=color, alpha=.7, label=f"{a.label}; open points unconverged")
     axes[0].set_title(f"{a.P:g} GPa, {a.T:g} K — GRACE ft_m2, fitted proxies")
     axes[0].set_ylabel("Next-H transfer cost (meV / added H)")
     axes[0].legend(loc="upper left", fontsize=8)

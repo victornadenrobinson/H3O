@@ -1,0 +1,5 @@
+# User-reported completed Perlmutter run runs/pwidom_500GPa_3000K_extension1, allocation 60620660; GRACE ft_m2, candidate proxies, robust scan pressure correction. Includes original frames; not independent of original scan. All ice estimates unconverged, low Kish. Errors statistical only. Extension2 was interrupted and is excluded.
+P_GPa,T_K,n,dg_meV,err_meV,kish,flag
+500,3000,0,-759.3,40.4,0.004,unconverged
+500,3000,0.08333333333333333,-132.7,69.1,0.031,unconverged
+500,3000,0.25,854.4,82.5,0.027,unconverged

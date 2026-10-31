@@ -68,7 +68,13 @@ Update: 500-GPa/3000-K run completed, allocation 60620660. All three ice-host
 estimates flagged UNCONVERGED; H2O Kish .021, H2.083O .146, H2.25O .097; pure-H
 Kish .530 and insertion/deletion agree. Reported robust dg -1146.5 +-89.6,
 -738.5 +-105.0, +185.7 +-109.4 meV/H. Small table committed as
-docs/data/pwidom_pm_500GPa_3000K_reported.csv. pwidom_formation.py makes a
+docs/data/pwidom_pm_500GPa_3000K_reported.csv. Completed extension1's user-reported
+values are in docs/data/pwidom_pm_500GPa_3000K_extension1_reported.csv; its
+comparison figure is docs/figures/pwidom_pm_500GPa_3000K_extension1_comparison.png.
+Extension1 contains the original frames, so these curves are not independent.
+Extension2 extended the original parent and was killed during MD by allocation
+60620660's time limit; no completed extension2 estimate was reported.
+pwidom_formation.py makes a
 provisional integral (not a validated equilibrium hull), with conservative
 maximal-positive-correlation statistical sigma bounds; sampling/model bias omitted.
 Old-proxy 500-GPa/3000-K production Kish remains unknown. proxy_compare.py plots
