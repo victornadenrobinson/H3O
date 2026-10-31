@@ -1,0 +1,9 @@
+# Exploratory composition integral: extension1 endpoints and nscan1 intermediates, all using extension1 pure-H reference. Different sampling lengths; correlated reference. Original short and interrupted extension2 excluded. Errors statistical only; no validated equilibrium hull.
+P_GPa,T_K,n,dg_meV,err_meV,kish,flag
+500,3000,0,-759.3,40.4,0.004,unconverged
+500,3000,0.046296296296296294,-628.7,37.5,0.097,no_scan_flags
+500,3000,0.08333333333333333,-132.7,69.1,0.031,unconverged
+500,3000,0.10185185185185185,-355.2,73.3,0.067,unconverged
+500,3000,0.14814814814814814,129.3,59.2,0.071,unconverged
+500,3000,0.2037037037037037,414.7,59.1,0.042,unconverged
+500,3000,0.25,854.4,82.5,0.027,unconverged

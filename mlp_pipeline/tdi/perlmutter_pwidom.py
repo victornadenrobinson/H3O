@@ -70,7 +70,7 @@ class HostLogs:
             file.close()
 
 
-def gpu_metrics(jobs):
+def gpu_metrics(jobs, raw=False):
     ids = [job["gpu"] for job in jobs if job["gpu"]]
     if not ids:
         return {}
@@ -85,10 +85,37 @@ def gpu_metrics(jobs):
             text = f"GPU {index}: {util}% util, {float(used) / 1024:.1f}/{float(total) / 1024:.1f} GiB"
             for gpu in ids:
                 if gpu == index or uuid.startswith(gpu):
-                    metrics[gpu] = text
+                    metrics[gpu] = (dict(utilization=float(util), memory_MiB=float(used),
+                                         total_MiB=float(total)) if raw else text)
         return metrics
     except (OSError, ValueError, subprocess.SubprocessError):
         return {}
+
+
+def record_telemetry(manifest, elapsed, exits):
+    """Sample monitoring only; no model evaluations or sampler changes."""
+    metrics = gpu_metrics(manifest["jobs"], raw=True)
+    rows = []
+    for job in manifest["jobs"]:
+        code = exits.get(job["name"])
+        try:
+            progress = json.loads(Path(job["progress"]).read_text())
+        except (OSError, ValueError):
+            progress = {}
+        rss = None
+        try:
+            text = Path(f"/proc/{job['pid']}/status").read_text()
+            match = re.search(r"^VmRSS:\s+(\d+) kB", text, re.M)
+            if match: rss = int(match[1])/1024
+        except (OSError, KeyError):
+            pass
+        rows.append(dict(name=job["name"], gpu=job["gpu"],
+            stage=("complete" if code == 0 else f"failed ({code})") if code is not None else progress.get("stage", "initializing"),
+            fraction=1. if code == 0 else progress.get("fraction"), rss_MiB=rss,
+            **metrics.get(job["gpu"], {})))
+    path = Path(manifest["jobs"][0]["log"]).parent/"telemetry.jsonl"
+    with path.open("a") as file:
+        file.write(json.dumps(dict(timestamp=time.time(), elapsed_seconds=elapsed, hosts=rows))+"\n")
 
 
 def progress_text(job):
@@ -485,7 +512,7 @@ def archive_in_place(out, manifest):
     manifest["in_place"] = True
     manifest["parent_archive"] = str(history)
     # Remove obsolete estimates, including old-proxy replays tied to old frames.
-    managed = {"manifest.json", "RUN_ORIGIN.txt"}
+    managed = {"manifest.json", "RUN_ORIGIN.txt", "telemetry.jsonl"}
     for job in previous["jobs"]:
         cmd = job["command"]
         tag = cmd[cmd.index("--tag")+1]
@@ -571,8 +598,12 @@ def run_unlocked(a):
             children.append((r, p))
             save(out / "manifest.json", manifest)
         last = -30.0
+        last_sample = -5.0
         while any(p.poll() is None for _, p in children):
             elapsed = time.monotonic() - started
+            if elapsed-last_sample >= 5:
+                record_telemetry(manifest, elapsed, {r['name']:p.poll() for r,p in children})
+                last_sample = elapsed
             if a.verbose and not a.quiet:
                 logs.drain()
             if stopped or elapsed >= a.minutes * 60:
@@ -603,6 +634,7 @@ def run_unlocked(a):
             p.returncode == 0 and Path(r["result"]).is_file() for r, p in children)
         manifest["status"] = "complete" if complete else (stopped or "failed")
         save(out / "manifest.json", manifest)
+        record_telemetry(manifest, time.monotonic()-started, {r['name']:p.returncode for r,p in children})
         if a.verbose and not a.quiet:
             logs.drain(final=True)
         logs.close()

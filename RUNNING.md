@@ -147,6 +147,37 @@ Compact progress/GPU tables are default; `--verbose` streams full logs and
 stream: `tail -n 20 -F runs/<scan>/*.log`. Prior free energies are labeled prior;
 new free energies require completed insertion/deletion estimates.
 
+New launcher runs also save `telemetry.jsonl` every five seconds: GPU memory,
+capacity, utilization, stage/progress and main-process CPU RSS. Plot a completed
+or running trace (use a fresh output prefix):
+
+```bash
+"$PY" mlp_pipeline/tdi/pwidom_telemetry.py runs/pwidom_500GPa_3000K_nscan1 \
+  --out runs/nscan1_resources
+```
+
+Older runs need a saved compact terminal transcript instead of the run path.
+Only recorded intervals can be plotted. Stage shading has sampling uncertainty;
+instantaneous utilization can miss short GPU bursts. In-place extensions archive
+the old telemetry and start a new trace. Capacity comes from the device: one
+reported scan had 40-GiB GPUs, while the earlier benchmarks had 80 GiB.
+
+Retrospective running chemical potentials, transfer costs and insertion counts
+use the completed run's `_work.npz` and frame archives, with no GPU calls:
+
+```bash
+"$PY" mlp_pipeline/tdi/pwidom_convergence.py runs/pwidom_500GPa_3000K_nscan1 \
+  --out runs/nscan1_convergence
+```
+
+These plot cumulative **production MD time**, not wall time; both host and host+H
+prefixes grow while the completed pure-H reference is held fixed. Curves are
+correlated diagnostics, not independent estimates or confidence bands. Widom
+does not accept/reject MD insertions: counts show evaluated insertion trials and
+Kish effective weight counts, with candidate-site totals in the CSV. The latter
+are not independent ESS. Older results without `_work.npz` cannot reconstruct
+running chemical potentials from final summaries alone.
+
 ## Other calculations
 
 Use `$PY`/`$MODEL` from the source computer's setup above. Inspect `--help` before

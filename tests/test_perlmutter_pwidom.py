@@ -113,6 +113,11 @@ def test_toy_scan_and_readonly_status(campaign):
         new = json.loads(Path(job["result"]).read_text())
         old = json.loads(Path(job["result"].replace("_candidate_K", "_old_dft_K")).read_text())
         assert old["kish_frac_ins"] == new["kish_frac_ins"]
+    convergence = out.parent/"convergence"
+    plotted = subprocess.run([sys.executable,str(ROOT/"mlp_pipeline/tdi/pwidom_convergence.py"),
+        str(denseout),"--out",str(convergence)],cwd=ROOT,env=env,text=True,capture_output=True,timeout=30)
+    assert plotted.returncode == 0, plotted.stdout + plotted.stderr
+    assert convergence.with_suffix(".png").stat().st_size > 1000
     follow = shell("perlmutter_pwidom_status.sh", [str(out), "--follow"], env)
     assert follow.returncode == 0, follow.stderr
     assert "[H2O]" in follow.stdout and "proxy candidate" in follow.stdout
