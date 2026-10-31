@@ -83,7 +83,8 @@ def test_skew_mic_and_full_coordinates(tmp_path):
     with pytest.raises(ValueError): rdf.get_cells(dict(V=512),1,False)
 
 
-def test_auto_dry_run_missing_inventory_and_argument_support():
+def test_auto_dry_run_missing_inventory_and_argument_support(monkeypatch):
+    monkeypatch.setenv("PY", sys.executable)
     r = subprocess.run(['bash','mlp_pipeline/pwidom_auto.sh','--dry-run','--inventory','/missing',
                         '--P','500','--T','2000','4000'],cwd=ROOT,capture_output=True,text=True)
     assert r.returncode == 0, r.stderr
@@ -135,3 +136,28 @@ def test_rosenbluth_extended_space_identity():
         reverse+=np.exp(-u[site]/kt)/(2*z)*.5*np.exp(work/kt)
     assert forward==pytest.approx(z)
     assert reverse==pytest.approx(1/z)
+
+
+def test_auto_respects_explicit_bad_python(monkeypatch):
+    monkeypatch.setenv("PWIDOM_PYTHON", "/missing/python")
+    r = subprocess.run(['bash','mlp_pipeline/pwidom_auto.sh','--dry-run'],
+                       cwd=ROOT,capture_output=True,text=True)
+    assert r.returncode != 0 and "PY is explicit" in r.stderr
+
+
+def test_auto_validates_existing_eos_in_dry_run(tmp_path, monkeypatch):
+    import shutil
+    # Isolated checkout-shaped fixture; never alter real envs/runs.
+    shutil.copytree(ROOT/'mlp_pipeline',tmp_path/'mlp_pipeline')
+    shutil.copy2(ROOT/'build_eos_2000.py',tmp_path/'build_eos_2000.py')
+    (tmp_path/'envs').mkdir()
+    state=dict(P=500,T=2000,
+        ice=dict(vpa=float('inf'),B_GPa=1000,nrep=3,source='synthetic'),
+        h225=dict(vpa=2,B_GPa=1000,nrep=3,source='synthetic'),
+        H=dict(vpa=2,B_GPa=1000,natoms=250,source='synthetic'))
+    (tmp_path/'envs/pwidom_500GPa_2000K.json').write_text(json.dumps(state))
+    monkeypatch.setenv("PY",sys.executable)
+    r=subprocess.run(['bash',str(tmp_path/'mlp_pipeline/pwidom_auto.sh'),'--dry-run'],
+                     capture_output=True,text=True)
+    assert r.returncode != 0 and 'must be finite and positive' in r.stderr
+    assert not (tmp_path/'runs').exists()

@@ -115,7 +115,16 @@ while (($#)); do
     esac
 done
 
-python3 - "${PS[*]}" "${TS[*]}" "$SAMPLE_PS" "$EQUIL_PS" "$MINUTES" <<'PYVALID'
+# Share interpreter discovery and explicit overrides with the underlying launcher.
+source mlp_pipeline/perlmutter_python.sh
+if [[ -n "${PWIDOM_PYTHON:-}" ]]; then
+    export PY="$PWIDOM_PYTHON"
+fi
+h3o_select_python run --dry-run
+PYTHON="$("${H3O_PYTHON[@]}" -c 'import sys; print(sys.executable)')"
+export PY="$PYTHON"
+
+"$PYTHON" - "${PS[*]}" "${TS[*]}" "$SAMPLE_PS" "$EQUIL_PS" "$MINUTES" <<'PYVALID'
 import math, sys
 p, t, ps, eq, minutes = sys.argv[1:]
 values = [float(x) for x in (p + " " + t).split()]
@@ -153,19 +162,6 @@ for N in "${NS[@]}"; do
 
     SEEN_N[$N]=1
 done
-
-# Use the same Python environment as the working
-# Perlmutter installation.
-PYTHON="${PWIDOM_PYTHON:-/pscratch/sd/v/victornr/grace-env/bin/python}"
-
-if [[ ! -x "$PYTHON" ]]; then
-    PYTHON="$(command -v python3)"
-fi
-
-if [[ ! -x "$PYTHON" ]]; then
-    echo "ERROR: Python interpreter unavailable" >&2
-    exit 1
-fi
 
 if [[ ! -f "build_eos_2000.py" ]]; then
     echo "ERROR: build_eos_2000.py missing" >&2
@@ -282,9 +278,10 @@ for P in "${PS[@]}"; do
         fi
 
         # Check the state matches this requested condition.
-        if ((!DRY_RUN)); then
+        if [[ -f "$STATE_JSON" ]]; then
             "$PYTHON" - "$STATE_JSON" "$P" "$T" <<'PY'
 import json
+import math
 import sys
 
 filename, pressure, temperature = sys.argv[1:]
@@ -298,12 +295,16 @@ assert abs(float(state["P"]) - pressure) < 1e-6
 assert abs(float(state["T"]) - temperature) < 1e-6
 
 for key in ("ice", "h225", "H"):
-    assert float(state[key]["vpa"]) > 0
-    assert float(state[key]["B_GPa"]) > 0
+    for field in ("vpa", "B_GPa"):
+        value = float(state[key][field])
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"Invalid {key}.{field}: must be finite and positive")
+    if not state[key].get("source"):
+        raise ValueError(f"Missing {key}.source")
 
-assert int(state["ice"]["nrep"]) == 3
-assert int(state["h225"]["nrep"]) == 3
-assert int(state["H"]["natoms"]) == 250
+for key, field, expected in (("ice", "nrep", 3), ("h225", "nrep", 3), ("H", "natoms", 250)):
+    if type(state[key][field]) is not int or state[key][field] != expected:
+        raise ValueError(f"Invalid {key}.{field}: expected integer {expected}")
 
 print(f"EOS validated: {filename}")
 PY

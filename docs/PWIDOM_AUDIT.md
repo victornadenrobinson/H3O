@@ -46,7 +46,8 @@ were performed. Tests use synthetic inputs, dry runs and existing CPU diagnostic
    results retain method metadata. Fits are empirical and do not certify phases.
 5. **Automatic orchestration:** removed unconditional inventory requirement when
    EOS already exists; added configurable inventory, finite P/T/time preflight,
-   positive canonical H counts, and checks for completed result files and matching
+   positive canonical H counts, shared interpreter discovery with explicit-override
+   errors, validation of existing EOS even in dry runs, and checks for completed result files and matching
    state/counts before skipping. Existing incomplete or running directories are
    refused. This is safe rerunning of completed stages, **not automatic recovery
    of partial MD**. A stale running manifest is not proof a process is alive.
@@ -137,7 +138,7 @@ bash -n mlp_pipeline/pwidom_auto.sh
 git diff --check
 ```
 
-Results: 13 tests passed in the first group, 11 passed/6 deselected in the
+Results: 15 tests passed in the first group, 11 passed/6 deselected in the
 second; shell syntax and whitespace checks passed. Only an external pytest
 plugin deprecation warning. MD tests intentionally excluded. Real inventory
 EOS residuals/phase coverage, legacy cell provenance, actual result reconstruction,
