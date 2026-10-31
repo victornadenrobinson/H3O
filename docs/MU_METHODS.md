@@ -77,6 +77,13 @@ So about 45 min of one GPU per host, and dg needs ice and pure H. The insertion 
 The script prints both diagnostics. The pair fit has force RMSE 1.5 eV/A against DFT, so on GRACE the gap is likely 1-3 kT at 6000 K. If it is larger, a better proxy
 (refit the pairs to the first ~200 GRACE dU values; a fixed proxy chosen before the production sampling keeps the estimator unbiased) or a larger K helps.
 
+**Refitting the proxy to GRACE insertion energies: `tdi/proxy_fit.py`** (docstring has the four commands). `label` evaluates dU = U(frame + H at x) - U(frame) with the real model at probe points
+(Rosenbluth-selected on the starting proxy at `--temper` x T, plus uniform points) on host frames that are NOT the production frames (`pwidom.py --frames-only --seed <other>`, or extxyz
+trajectories); `fit` solves one weighted least squares for the OH and HH spline coefficients (dU is linear in them; weight exp(-(dU - ref)/(wT kT)) so the fit is good where the sampler looks)
+and reports std(dU - phi) and the Kish fraction of the old and new proxy on held-out frame blocks. The output json is a toy_fit json (OO, K, rc from `--base`) for `pwidom.py --proxy`.
+Toy check only (sandbox, analytic pair truth, 50 frames of 96 atoms, 1250 single points): held-out selected-probe gap 4.2 kT -> 0.14 kT; this just shows the pipeline works, because a pair
+potential can fit a pair truth. On GRACE the held-out gap is the number that decides whether it helps; many-body effects set the floor.
+
 **Failure modes.**
 - The proxy misses favourable regions that GRACE has (e.g. H2 or H3+-like local states): then insertion is low-biased at finite sample and deletion is high-biased; they disagree, and BAR is still consistent if the overlap is nonzero.
 - Rare host cavities: the frame-to-frame scatter of W needs a long host MD. On the toy, 4 -> 12 ps moved plain BAR by 80 meV, but here W is computed exactly per frame with K candidates, so only the host sampling is left.
