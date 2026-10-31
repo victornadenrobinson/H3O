@@ -188,6 +188,7 @@ choosing scientific parameters. Commands containing `<...>` need real paths/tags
 | One GRACE energy/force check | `"$PY" mlp_pipeline/04_benchmark.py "$MODEL" valid_m.extxyz --n 1 --device cuda` |
 | CPU toy calculation | `"$PY" mlp_pipeline/04_benchmark.py toyice valid_m.extxyz --n 1 --device cpu` (checks software only, not GRACE) |
 | GPU packing benchmark | `bash mlp_pipeline/perlmutter_bench.sh --workflow pwidom --minutes 10` (after other GPU work finishes) |
+| Plot reported benchmark runs | `"$PY" mlp_pipeline/tdi/plot_pwidom_benchmark.py docs/data/perlmutter_pwidom_benchmarks_20261031.csv --out runs/benchmark_comparison` (also accepts actual benchmark directories) |
 | TDI lambda throughput | `bash mlp_pipeline/perlmutter_bench.sh --workflow tdi --minutes 10` |
 | Benchmark against DFT frames | `"$PY" mlp_pipeline/04_benchmark.py "$MODEL" valid_m.extxyz --n 30 --device cuda` |
 | Free NVT EOS/phase MD | `"$PY" mlp_pipeline/17_eos_md.py "$MODEL" --phase fcc --T 3000 --P 500 --from-dft inventory_binned.csv --ps 0.4 --equil-ps 0.2 --outdir runs/eos_test_new --tag fcc_test` |

@@ -117,8 +117,22 @@ Real Perlmutter benchmark results (2026-10-31) are summarized in
 docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md: four MD workers/GPU gave
 77–80 total MD steps/s across four GPUs (~9.8 GiB/GPU). Probe batches 8 and 16
 plateaued near 9 structures/s/GPU, using ~24.5 vs 40.5 GiB. Batch 8 is the
-provisional memory-efficient choice for the tested H2O cell; this is not a
+earlier provisional choice for the tested H2O cell; this is not a
 validated memory budget for every composition or a production task scheduler.
+Latest benchmark continuation completes bench_20261031_133031: eight MD
+workers/GPU gave 79.98 steps/s/node, similar to four-worker runs; probe batch 4
+gave 34.99 structures/s/node with 8.5 GiB/GPU. Prefer four MD workers and probe
+batch 4 as efficient H2O starting points; batches 4/8/16 have similar throughput,
+but memory grows sharply. This supersedes the provisional batch-8 suggestion.
+All three reports/plot are under docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md
+and docs/figures/perlmutter_pwidom_benchmarks_20261031.png. Plotting command:
+mlp_pipeline/tdi/plot_pwidom_benchmark.py (benchmark dirs, transcripts or CSV).
+User favors multiple independent MD trajectories per composition feeding one
+probe worker/GPU. Fixed probe batching bounds per-call VRAM as total snapshots
+grow, but current all-structures-in-RAM preparation scales CPU memory with total
+trials. Replica pooling/streaming is not implemented. Pool only compatible
+ensembles within each composition and deduplicate shared extension parents;
+different compositions may share a queue, not one chemical-potential estimate.
 
 Completed nscan1 (allocation 60626365) adds extra-H counts 5/11/16/22:
 dg=-628.7/-355.2/+129.3/+414.7 meV/H, errors 37.5/73.3/59.2/59.1,
