@@ -36,6 +36,22 @@ def lse(x, axis=None):
     m = np.max(x, axis=axis, keepdims=True); return np.squeeze(m, axis=axis) + np.log(np.sum(np.exp(x - m), axis=axis))
 
 
+def model_fingerprint(spec):
+    """short hash of the resolved Hamiltonian: the model kind plus, for grace-ft: / mace-ft: checkpoints, the file names and first 16 MB of every file (the same weights hash the same on another machine);
+    toyice: the TOYICE_FIT file. Cached MD frames and pressures belong to ONE Hamiltonian: another model's frames are not an equilibrium ensemble of this one."""
+    import hashlib
+    kind, _, rest = spec.partition(":"); h = hashlib.sha256(kind.encode())
+    if kind.endswith("-ft") and rest and os.path.exists(rest):
+        root = rest if os.path.isdir(rest) else os.path.dirname(rest)
+        for f in ([rest] if os.path.isfile(rest) else sorted(os.path.join(d, x) for d, _, fs in os.walk(rest) for x in fs))[:200]:
+            h.update(os.path.relpath(f, root).encode()); h.update(open(f, "rb").read(1 << 24))
+    elif kind == "toyice" and os.environ.get("TOYICE_FIT") and os.path.exists(os.environ["TOYICE_FIT"]):
+        h.update(open(os.environ["TOYICE_FIT"], "rb").read())
+    else:
+        h.update(rest.encode())
+    return h.hexdigest()[:16]
+
+
 def build_host(a):
     from importlib import import_module
     if a.phase == "H":
@@ -174,15 +190,20 @@ def cmd_run(a):
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
-    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17)
+    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
     if os.path.exists(ff):
         z = np.load(ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
+        if "model_fp" in z.files:
+            if str(z["model_fp"]) != mfp:
+                raise SystemExit(f"{ff}: frames and pressures were made with another Hamiltonian (fingerprint {z['model_fp']} vs {mfp} for {a.model}): they are not an equilibrium ensemble of this model; use another --out or --tag")
+        else:
+            print(f"WARNING: {ff} has no model fingerprint (made before the check): the model is NOT verified", flush=True)
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
     else:
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model)
+        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp)   # both branches added fields: keep all (cell + model name, and the model fingerprint)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
@@ -259,7 +280,10 @@ def cmd_run(a):
              proxy_gap_std_kT_ins=float(np.std(gap_ins) / kT), proxy_gap_std_kT_del=float(np.std(gap_del) / kT), kish_frac_ins=kish,
              ideal_meV=ideal * 1e3, P_host_GPa=ph, P_host_err_GPa=eph, P_full_GPa=pf, P_full_err_GPa=epf, B_GPa=B, dG_P_meV=dGP * 1e3, dG_P_err_meV=dGPe * 1e3,
              msd_O_host=msd["host"], msd_O_full=msd["full"], melted=melted,
+             model_fp=mfp, pressure_corrected=bool(B),
              mu_fixedV_meV=(mu_b + ideal) * 1e3, mu_P_meV=(mu_b + ideal + dGP) * 1e3, mu_P_err_meV=float(np.hypot(eb, dGPe)) * 1e3)
+    if not B:
+        print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
     print(f"{tag} proxy {lab} K {K}: {len(wf)} insertions ({len(sfr)} frames), {len(wr)} deletions, {model.ncalls} model calls, {(time.time() - t0) / 60:.1f} min")
@@ -274,6 +298,16 @@ def cmd_dg(a):
     from math import lgamma, log
     w, h = (json.load(open(f)) for f in (a.ice, a.hfluid)); kT = KB * w["T"] * 1e3; N = h["N_H"]
     fs = kT * (log(N + 1) - lgamma(N + 1) / N - 1)
+    for k in ("T", "P_target"):
+        if abs(w[k] - h[k]) > 1e-6 * max(1.0, abs(w[k])):
+            raise SystemExit(f"dg: the two runs have a different {k} ({w[k]:g} vs {h[k]:g}): not the same state")
+    if w.get("model_fp") and h.get("model_fp"):
+        if w["model_fp"] != h["model_fp"]:
+            raise SystemExit(f"dg: the two runs used different Hamiltonians (fingerprints {w['model_fp']} vs {h['model_fp']})")
+    else:
+        print("WARNING: dg: a run has no model fingerprint (made before the check): the model is not verified", flush=True)
+    if not (w.get("pressure_corrected", bool(w.get("B_GPa"))) and h.get("pressure_corrected", bool(h.get("B_GPa")))):
+        print("WARNING: dg: a run has NO pressure correction (no bulk modulus): that mu_H is the fixed-volume value, dg is not at the target pressure", flush=True)
     dg = w["mu_P_meV"] - (h["mu_P_meV"] - fs); e = float(np.hypot(w["mu_P_err_meV"], h["mu_P_err_meV"]))
     if w.get("melted"):
         print(f"WARNING: {a.ice}: the crystal MELTED in the free MD (O MSD {w['msd_O_host'][-1]:.2f} / {w['msd_O_full'][-1]:.2f} A^2): dg is not that of the solid")
