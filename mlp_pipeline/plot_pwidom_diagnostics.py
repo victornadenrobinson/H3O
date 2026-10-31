@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from ase.geometry import find_mic
 from ase import Atoms
 from ase.neighborlist import neighbor_list
 
@@ -41,6 +42,8 @@ def get_cells(data, nframes, assume_cubic):
             cells = np.array([np.diag(v) for v in cells])
         elif cells.shape != (nframes, 3, 3):
             raise ValueError(f"Unsupported cell shape {cells.shape}")
+        if not np.isfinite(cells).all() or np.any(np.abs(np.linalg.det(cells)) <= 0):
+            raise ValueError("Invalid cell")
         return cells
 
     if not assume_cubic:
@@ -68,7 +71,7 @@ def rdf(data, args, out):
 
     cells = get_cells(data, nf, args.assume_cubic)
 
-    edges = np.arange(0, args.rmax + args.dr, args.dr)
+    edges = np.linspace(0, args.rmax, int(np.ceil(args.rmax / args.dr)) + 1)
     r = 0.5 * (edges[:-1] + edges[1:])
     shell = 4*np.pi/3 * (edges[1:]**3 - edges[:-1]**3)
 
@@ -129,9 +132,7 @@ def rdf(data, args, out):
             # This is NOT automatically a weighted insertion RDF.
             extra = full[frame, -1]
             delta = full[frame, :-1] - extra
-            frac = np.linalg.solve(cell.T, delta.T).T
-            frac -= np.rint(frac)
-            dist = np.linalg.norm(frac @ cell, axis=1)
+            _, dist = find_mic(delta, cell, pbc=True)
 
             for z, name in [(1, "H"), (8, "O")]:
                 subset = dist[numbers == z]
@@ -179,7 +180,7 @@ def rdf(data, args, out):
         ax.set(
             xlabel="r (Å)",
             ylabel="Relative neighbour density",
-            title="Saved extra-H configurations (unweighted)"
+            title="Equilibrium N+1 tagged-H environment (unweighted)"
         )
         ax.legend()
         ax.grid(alpha=0.25)

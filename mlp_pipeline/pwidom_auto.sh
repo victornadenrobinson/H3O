@@ -12,6 +12,7 @@ EQUIL_PS=0.4
 MINUTES=30
 CANDIDATES="runs/dft_candidates"
 DRY_RUN=0
+INVENTORY="${PWIDOM_INVENTORY:-runs/inventory_binned.csv}"
 
 usage() {
 cat <<'EOF'
@@ -26,6 +27,7 @@ Options:
   --equil-ps VALUE       Equilibration, ps (default 0.4)
   --minutes VALUE        Existing launcher limit (default 30)
   --candidate-dir PATH   Candidate output directory
+  --inventory PATH       Binned H/O DFT inventory (needed only for missing EOS)
   --dry-run              Show commands without running MD
   --help
 
@@ -93,6 +95,10 @@ while (($#)); do
             CANDIDATES="${2:?Missing candidate directory}"
             shift 2
             ;;
+        --inventory)
+            INVENTORY="${2:?Missing inventory path}"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=1
             shift
@@ -109,6 +115,17 @@ while (($#)); do
     esac
 done
 
+python3 - "${PS[*]}" "${TS[*]}" "$SAMPLE_PS" "$EQUIL_PS" "$MINUTES" <<'PYVALID'
+import math, sys
+p, t, ps, eq, minutes = sys.argv[1:]
+values = [float(x) for x in (p + " " + t).split()]
+if not all(math.isfinite(x) and x > 0 for x in values):
+    raise SystemExit("P/T must be finite and positive")
+ps, eq, minutes = map(float, (ps, eq, minutes))
+if not all(map(math.isfinite, (ps, eq, minutes))) or ps < .1 or eq < 0 or minutes <= 0:
+    raise SystemExit("Require ps >= .1, equil-ps >= 0, minutes > 0 (finite)")
+PYVALID
+
 if ((${#NS[@]} != 4)); then
     echo "ERROR: --n requires exactly four counts" >&2
     exit 2
@@ -118,12 +135,13 @@ fi
 declare -A SEEN_N=()
 
 for N in "${NS[@]}"; do
-    if [[ ! "$N" =~ ^[0-9]+$ ]]; then
+    if [[ ! "$N" =~ ^[1-9][0-9]*$ ]]; then
         echo "ERROR: invalid extra-H count: $N" >&2
         exit 2
     fi
 
-    if ((10#$N > 27)); then
+    N=$((10#$N))
+    if ((N < 1 || N > 27)); then
         echo "ERROR: n=$N exceeds 0.25 H/O for 108 O" >&2
         exit 2
     fi
@@ -149,11 +167,6 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
-if [[ ! -f "runs/inventory_binned.csv" ]]; then
-    echo "ERROR: runs/inventory_binned.csv missing" >&2
-    exit 1
-fi
-
 if [[ ! -f "build_eos_2000.py" ]]; then
     echo "ERROR: build_eos_2000.py missing" >&2
     exit 1
@@ -171,15 +184,27 @@ completed() {
 
     [[ -f "$manifest" ]] || return 1
 
-    "$PYTHON" - "$manifest" <<'PY'
+    "$PYTHON" - "$manifest" "$P" "$T" "${NS[@]}" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 try:
     with open(sys.argv[1]) as f:
         data = json.load(f)
     assert data.get("status") == "complete"
-except (OSError, ValueError, AssertionError):
+    assert float(data["P"]) == float(sys.argv[2])
+    assert float(data["T"]) == float(sys.argv[3])
+    if sys.argv[1].endswith("_extra/manifest.json"):
+        assert data.get("extra_h") == [int(x) for x in sys.argv[4:]]
+    else:
+        assert data.get("extra_h") is None
+    assert len(data["jobs"]) == 4
+    for job in data["jobs"]:
+        assert job.get("exit_code") == 0
+        result = json.loads(Path(job["result"]).read_text())
+        assert "mu_ex_bar_meV" in result
+except (OSError, ValueError, KeyError, AssertionError):
     sys.exit(1)
 PY
 }
@@ -244,7 +269,7 @@ for P in "${PS[@]}"; do
 
             run_command \
                 "$PYTHON" build_eos_2000.py \
-                --P "$P" --T "$T"
+                --P "$P" --T "$T" --inventory "$INVENTORY"
 
             if ((DRY_RUN)); then
                 echo "EOS generation planned."

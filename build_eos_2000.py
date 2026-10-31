@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
 
 
 COMPOSITIONS = {
@@ -17,11 +16,27 @@ COMPOSITIONS = {
 }
 
 MIN_POINTS = 5
-MAX_PRESSURE_EXTRAP = 0.25
 
 
 def load_inventory(filename):
     df = pd.read_csv(filename)
+    required = {"good", "Path", "T_bin", "True_P_GPa", "V_per_atom",
+                "comp_snap", "N_H", "N_O", "Other"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Binned inventory missing composition/provenance fields: {sorted(missing)}")
+    # Never trust a snapped label alone in mixed-material inventories.
+    nh = pd.to_numeric(df["N_H"], errors="coerce")
+    no = pd.to_numeric(df["N_O"], errors="coerce")
+    mask = (df["Other"].fillna("").astype(str).str.strip().eq("")
+            & (nh > 0) & (no >= 0))
+    if "N_ions" in df:
+        mask &= np.isclose(nh + no, pd.to_numeric(df["N_ions"], errors="coerce"))
+    ratio = nh / no.replace(0, np.nan)
+    valid = ((df["comp_snap"].eq("h") & no.eq(0))
+             | (df["comp_snap"].eq("h2o") & np.isclose(ratio, 2, rtol=.04))
+             | (df["comp_snap"].eq("h2.25o") & np.isclose(ratio, 2.25, rtol=.04)))
+    df = df[mask & valid].copy()
 
     df = df[
         df["good"].astype(str).str.lower().isin(["true", "1"])
@@ -75,6 +90,8 @@ def fit_eos(d, comp, temperature):
     v = d["V_per_atom"].to_numpy(dtype=float)
     p = d["True_P_GPa"].to_numpy(dtype=float)
 
+    if len(np.unique(v)) < 3:
+        raise ValueError("EOS needs at least three distinct volumes")
     x = np.log(v)
     y = np.log(p)
 
@@ -115,11 +132,8 @@ def volume_at_pressure(fit, pressure):
     pmin = fit["pmin"]
     pmax = fit["pmax"]
 
-    lower = (1 - MAX_PRESSURE_EXTRAP) * pmin
-    upper = (1 + MAX_PRESSURE_EXTRAP) * pmax
-
-    if pressure <= 0:
-        raise ValueError("Pressure must be positive")
+    if not np.isfinite(pressure) or pressure <= 0:
+        raise ValueError("Pressure must be finite and positive")
 
     extrapolated = not (pmin <= pressure <= pmax)
 
@@ -129,39 +143,13 @@ def volume_at_pressure(fit, pressure):
             f"{pmin:.1f}-{pmax:.1f} -> {pressure:g} GPa"
         )
 
-    target = np.log(pressure)
-
-    def residual(x):
-        return float(np.polyval(fit["coeff"], x) - target)
-
-    xmin = fit["xmin"]
-    xmax = fit["xmax"]
-    roots = []
-
-    # Expand the log-volume search interval if extrapolating.
-    # Retain only roots with a positive bulk modulus.
-    for expansion in (0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 4.0):
-        grid = np.linspace(
-            xmin - expansion, xmax + expansion, 500
-        )
-        values = [residual(z) for z in grid]
-
-        for i in range(len(grid) - 1):
-            if values[i] * values[i + 1] > 0:
-                continue
-
-            root = brentq(residual, grid[i], grid[i + 1])
-            slope = float(
-                np.polyval(fit["deriv"], root)
-            )
-
-            if slope < 0 and not any(
-                abs(root - old) < 1e-8 for old in roots
-            ):
-                roots.append(root)
-
-        if roots:
-            break
+    # Solve the fitted polynomial directly: no arbitrary log-volume search cap.
+    coeff = np.array(fit["coeff"], copy=True)
+    coeff[-1] -= np.log(pressure)
+    roots = [float(z.real) for z in np.roots(coeff)
+             if abs(z.imag) < 1e-10
+             and np.polyval(fit["deriv"], z.real) < 0]
+    xmin, xmax = fit["xmin"], fit["xmax"]
 
     if not roots:
         raise ValueError(
@@ -197,6 +185,8 @@ def available_temperatures(df, comp):
 
 
 def state_at(df, comp, pressure, temperature):
+    if not np.isfinite([pressure, temperature]).all() or min(pressure, temperature) <= 0:
+        raise ValueError("P and T must be finite and positive")
     temps = available_temperatures(df, comp)
 
     if not temps:
@@ -298,6 +288,7 @@ def state_at(df, comp, pressure, temperature):
             any(row[3] for row in fitted)
         ),
         "temperature_method": method,
+        "temperature_extrapolated": method == "temperature extrapolation",
     }
 
 
@@ -326,7 +317,7 @@ def main():
 
     for pressure in args.P:
         for temperature in args.T:
-            if pressure <= 0 or temperature <= 0:
+            if not np.isfinite([pressure, temperature]).all() or pressure <= 0 or temperature <= 0:
                 raise ValueError("P and T must be positive")
 
             filename = (
@@ -348,6 +339,7 @@ def main():
             state = {
                 "P": pressure,
                 "T": temperature,
+                "inventory": str(Path(args.inventory).resolve()),
             }
 
             for key, comp in COMPOSITIONS.items():
