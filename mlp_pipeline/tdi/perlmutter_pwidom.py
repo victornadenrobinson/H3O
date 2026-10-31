@@ -29,6 +29,17 @@ def save(path, data):
     tmp.replace(path)
 
 
+def write_origin(out, toy=False, parent=None):
+    """Small human-readable tag; paths stay under runs/ for existing analysis."""
+    lines = ["Origin: local CPU toy check" if toy else "Origin: NERSC Perlmutter",
+             f"Host: {os.uname().nodename}", f"Slurm allocation: {os.environ.get('SLURM_JOB_ID', 'none')}",
+             f"Created: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+             "Inputs, exact commands and Git revision: manifest.json"]
+    if parent:
+        lines.append(f"Additional sampling from: {parent}")
+    (out / "RUN_ORIGIN.txt").write_text("\n".join(lines)+"\n")
+
+
 class HostLogs:
     """Stream every emitted child line with its host name; retain the full files."""
 
@@ -297,6 +308,7 @@ def run(a):
     manifest["started"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     manifest["status"] = "running"
     save(out / "manifest.json", manifest)
+    write_origin(out, toy=a.cpu, parent=a.extend_run)
     children = []
     stopped = None
     logs = HostLogs(manifest["jobs"])

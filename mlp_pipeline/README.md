@@ -219,3 +219,45 @@ Lower error bars use the maximal-positive-correlation bound on propagated
 statistical sigma because shared-reference covariance is unavailable. They
 exclude sampling and model bias. This figure is not a validated equilibrium
 convex hull or a fitted saturation composition.
+
+### Quick four-GPU throughput benchmark
+
+Finish other GPU calculations first, then run inside the allocation:
+
+```bash
+bash mlp_pipeline/perlmutter_bench.sh --dry-run
+bash mlp_pipeline/perlmutter_bench.sh --minutes 10
+```
+
+This reuses `tdi/bench.py` and the real lambda engine on the 325-atom H2O+H
+insertion system (host and full energies per lambda step). It screens 1/2/4/8
+independent processes per GPU on four GPUs concurrently, then 2/4/8/16 batched
+lambda replicas in one process/GPU. Finally it repeats the best observed layout
+across **all four GPUs** to measure aggregate throughput under node contention.
+Screening layouts use different GPUs and share CPU resources, so ranking is
+preliminary until the whole-node validation finishes. `--system H` or `insH`
+checks the hydrogen reference separately; `--system h2o` checks one-call MD.
+Volumes and P/T come from `--state-json` (default the saved 500-GPa/3000-K file).
+
+Default: five warm-up and 30 timed steps per replica, two TensorFlow CPU threads
+per process, neighbor subprocess pool disabled, 180-second limit per phase and
+ten-minute global cap (including loading/compilation). All processes warm up
+before synchronized timing. Aggregate rates use total completed lambda steps
+divided by the shared timing interval, not a sum of incomparable individual
+rates. Batched GRACE verifies energies/forces/stress against the single calculator
+before timing. Failed/OOM/self-check/timeout cases are excluded from ranking;
+no whole-node result is claimed unless all four validation cases finish.
+
+GPU memory/utilization is sampled during the run; sampled peak is not guaranteed
+to capture the instantaneous allocation peak. GraceBatch may split OOM batches;
+the raw result records its effective max-atoms setting. Larger batches are not
+automatically better. The benchmark changes no MPS settings and refuses an active
+MPS environment or GPUs with more than 512 MiB already allocated. It reports CPU
+affinity/thread settings; CPU preparation can limit throughput despite free VRAM.
+
+Outputs are timestamped `runs/bench_*/` logs, `manifest.json`, `results.jsonl` and
+`summary.json`. `RUN_ORIGIN.txt` identifies Perlmutter, host and Slurm allocation
+in new benchmark and scan directories. The scientific inputs/outputs stay in
+`runs/` for existing analysis; nothing is moved into `perlmutter-runs/`.
+The benchmark writes no production trajectories. CPU toy mode exists only for
+testing the launcher and is never a GPU-performance measurement.
