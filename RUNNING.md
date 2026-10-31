@@ -138,9 +138,23 @@ are referenced. `--dry-run` makes no archive or changes.
 
 Without `--in-place`, extensions retain the existing fresh-directory behavior.
 Do not combine parent and extension as independent data: the extension already
-includes the parent's frames. Periodic MD checkpointing is still absent; this
-option does not recover MD interrupted mid-stage. `run_real.py` TDI separately
-supports checkpoint restarts.
+includes the parent's frames. New PWidom runs save atomic MD checkpoints every
+300 wall seconds by default (`--checkpoint-seconds`), plus completed single-point
+energy batches. To finish an interrupted run in the same directory:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh \
+  --resume-run runs/YOUR_INTERRUPTED_RUN --in-place \
+  --minutes 50 --checkpoint-seconds 300
+```
+
+Verify the old processes have stopped first. Logs append; previous manifests,
+results and work arrays are preserved under `_resume_history/`. Saved MD resumes
+without repeated equilibration or duplicate frames. A legacy host with no saved
+checkpoint/cache starts again from its initial state, retaining its old logs.
+Omit `--in-place` and give a fresh `--out` to preserve the whole source directory.
+`--resume-run` finishes the original target; `--extend-run` adds new sampling and
+re-equilibrates. See [checkpoint/resume details](docs/PWIDOM_RESUME.md).
 
 Compact progress/GPU tables are default; `--verbose` streams full logs and
 `--plain` uses plain ASCII. Full logs are always in the run directory. For a log
@@ -177,6 +191,55 @@ does not accept/reject MD insertions: counts show evaluated insertion trials and
 Kish effective weight counts, with candidate-site totals in the CSV. The latter
 are not independent ESS. Older results without `_work.npz` cannot reconstruct
 running chemical potentials from final summaries alone.
+
+### μ/dG summaries and time-coloured hulls
+
+Use the same GRACE environment (`$PY`) selected in **Environment** above; do not
+use an unrelated system `python3`. The new analysis entry point reads the saved
+JSON/work/pressure files directly, with no inline Python or intermediate export.
+Collect all finished results, errors and exploratory formation hulls:
+
+```bash
+"$PY" mlp_pipeline/pwidom_analysis.py collect \
+  --root runs --out runs/plots/pwidom_summary_1 \
+  --pressure-mode robust --include-flagged
+```
+
+At one P/T, plot μH(t), the hydrogen-reservoir G_H(t), transfer dG(t), and hulls
+every **0.1 ps coloured by time**:
+
+```bash
+"$PY" mlp_pipeline/pwidom_analysis.py time \
+  --runs runs/pwidom_300GPa_3000K_reference runs/pwidom_300GPa_3000K_extra \
+  --step-ps 0.1 --reference-mode cumulative \
+  --out runs/plots/pwidom_300GPa_3000K_time_1
+```
+
+Alternatively, `bash mlp_pipeline/perlmutter_pwidom_analysis.sh ...` accepts the
+same `collect`/`time` arguments and uses the existing `PY`/`GRACE_ENV` interpreter
+discovery with dependency checks. Both forms are CPU-only; no GPU allocation,
+model calls or MD is required. Use a fresh output directory for every report.
+
+The time command writes `mu_G_dg_vs_time.png/.pdf`,
+`hulls_coloured_by_time.png/.pdf`, `time_series.csv`, `time_hulls.csv` and
+`prefix_input.json`. The 300-GPa/3000-K results record work-file paths and 50
+selected frames per ensemble: the 20-fs sampling cadence supports ten snapshots
+from 0.1 to 1.0 ps if the saved files pass the reconstruction checks.
+
+`cumulative` grows the reservoir prefix at the same sampling cutoff as every
+host; `fixed` uses its final value, matching the older convergence plots above.
+Times count production sampling per independent ensemble, excluding equilibration
+and extension re-equilibration gaps. These are correlated cumulative prefixes,
+not independent 0.1-ps blocks or wall time. Missing exact times are skipped as
+whole snapshots, and final JSON values cannot replace missing work arrays.
+Choose one baseline or extension, not overlapping copies of both.
+
+Formation ΔG is reconstructed by composition integration of transfer dG. The
+coloured hull is provisional, not an independent absolute crystal G calculation
+or equilibrium solubility measurement. Static `--include-flagged` allows visibly
+flagged sampling issues; melted/unverified inputs stay excluded. Time hulls also
+refuse melted inputs. See [results conventions](docs/PWIDOM_RESULTS.md) and
+[time-plot details](docs/PWIDOM_TIME_HULLS.md).
 
 ## Other calculations
 

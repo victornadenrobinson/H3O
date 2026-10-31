@@ -1,5 +1,11 @@
 # Cumulative chemical potentials and time-coloured hulls
 
+For the GRACE setup and direct one-command Perlmutter workflow, start with
+[RUNNING.md](../RUNNING.md#μdg-summaries-and-time-coloured-hulls).
+`pwidom_analysis.py time` combines export and plotting in one invocation; the
+separate export instructions below are optional for transferring small numerical
+series to cloud.
+
 Final result JSONs cannot recover a convergence history. The saved grouped work
 arrays and host-pressure cache are required. The Perlmutter branch e90715a
 already supplies `mlp_pipeline/tdi/pwidom_convergence.py`, which can reconstruct

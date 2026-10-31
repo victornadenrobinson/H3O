@@ -10,6 +10,14 @@ Benchmarking and fine-tuning machine-learning interatomic potentials on DFT data
 - Figures and their source numbers: [docs/](docs/)
 - Reference EOS/hull data: `data-h3o-convex-hull.csv`. Large data products live in `runs/` (gitignored) and are shipped as bundles.
 
+## PWidom
+
+Use the existing GRACE setup and commands in **[RUNNING.md](RUNNING.md)** for
+simulations, checkpoint/resume, μ/dG tables and time-coloured formation hulls.
+The analysis commands run directly on saved results; they require no GPU or MD.
+Detailed conventions: [results](docs/PWIDOM_RESULTS.md),
+[time plots](docs/PWIDOM_TIME_HULLS.md), [resume](docs/PWIDOM_RESUME.md).
+
 ## Earlier data-collation package (`h3o_mlp/`, `scripts/`)
 
 Benchmark and fine-tune MLPs (MACE, GRACE, MatterSim) against H2O–H3O DFT data.
