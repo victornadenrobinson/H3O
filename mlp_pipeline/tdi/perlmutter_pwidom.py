@@ -112,6 +112,32 @@ def progress_text(job):
 
 
 def plan(a):
+    parent = None
+    if a.extend_run:
+        parent = json.loads((Path(a.extend_run) / "manifest.json").read_text())
+        if parent["status"] != "complete":
+            raise ValueError("Extend only a completed run; check the original host processes first")
+        if a.state_json or a.roots:
+            raise ValueError("--extend-run inherits its state; omit --state-json/--roots")
+        byname = {j["name"]: j for j in parent["jobs"]}
+        for name in ("H2O", "H2p083O", "H2p25O", "pureH"):
+            if name not in byname:
+                raise ValueError(f"Parent run missing {name}")
+        a.P, a.T, a.model = parent["P"], parent["T"], parent["model"]
+        def option(name, key):
+            cmd = byname[name]["command"]
+            return cmd[cmd.index(key)+1]
+        a.ice_proxy, a.h_proxy = option("H2O", "--proxy"), option("pureH", "--proxy")
+        for key in ("K", "sel", "ndel", "batch"):
+            setattr(a, key, int(option("H2O", "--"+key)))
+        explicit = dict(P=a.P, T=a.T)
+        for key, name in (("ice", "H2O"), ("h225", "H2p25O"), ("H", "pureH")):
+            size = "natoms" if key == "H" else "nrep"
+            explicit[key] = dict(vpa=float(option(name,"--vpa")),
+                                 B_GPa=float(option(name,"--bulk-gpa")),
+                                 source=f"inherited from {a.extend_run}/manifest.json",
+                                 **{size: int(option(name, "--"+size))})
+        a._extension_eos = explicit
     if not all(math.isfinite(v) for v in (a.P, a.T, a.ps, a.equil_ps, a.minutes)):
         raise ValueError("P/T/time settings must be finite")
     if a.P <= 0 or a.T <= 0 or min(a.K, a.sel, a.ndel, a.batch) <= 0:
@@ -121,7 +147,7 @@ def plan(a):
     if a.ps < 0.1:
         raise ValueError("ps must be >= 0.1: the existing estimator needs five 20-fs frames")
     roots = a.roots or sorted(p for p in glob.glob("runs/tdi*") if Path(p).is_dir())
-    explicit = json.loads(Path(a.state_json).read_text()) if a.state_json else None
+    explicit = getattr(a, "_extension_eos", None) or (json.loads(Path(a.state_json).read_text()) if a.state_json else None)
     if explicit and (explicit["P"] != a.P or explicit["T"] != a.T):
         raise ValueError("state-json P/T do not match the requested state")
     state = scan.hosts(roots).get((a.P, a.T), {}) if explicit is None else {}
@@ -219,12 +245,30 @@ def plan(a):
                "--K", str(a.K), "--sel", str(a.sel), "--ndel", str(a.ndel),
                "--batch", str(a.batch), "--proxy", proxy, "--out", str(out),
                "--tag", tag, "--label", "candidate"]
+        if a.candidate_dir:
+            cmd += ["--candidate-dir", a.candidate_dir, "--candidate-limit", str(a.candidate_limit)]
+        if parent is not None:
+            oldcmd = byname[name]["command"]
+            oldout = oldcmd[oldcmd.index("--out")+1]
+            oldtag = oldcmd[oldcmd.index("--tag")+1]
+            source = Path(oldout) / f"{oldtag}_frames.npz"
+            from pwidom import model_fingerprint
+            import numpy as np
+            with np.load(source) as z:
+                if not all(k in z.files for k in ("host", "full", "P_host", "P_full", "model_fp", "numbers", "T", "V")):
+                    raise ValueError(f"Incomplete extension archive: {source}")
+                if str(z["model_fp"]) != model_fingerprint(model):
+                    raise ValueError(f"Model fingerprint differs from extension source: {source}")
+                if (float(z["T"]) != a.T or not np.array_equal(z["numbers"], host.numbers)
+                        or abs(float(z["V"]) - host.get_volume()) > 1e-6 * host.get_volume()):
+                    raise ValueError(f"T/species/volume differs from extension source: {source}")
+            cmd += ["--extend-from", str(source.resolve())]
         records.append(dict(name=name, gpu=gpu, atoms=len(host), command=cmd,
                             log=str(out / f"{name}.log"),
                             progress=str(out / f"{name}_progress.json"),
                             result=str(out / f"{tag}_candidate_K{a.K}.json")))
     return out, dict(model=model, stage0=state, eos_inputs=explicit,
-                     state_json=a.state_json, P=a.P, T=a.T, ps=a.ps,
+                     state_json=a.state_json, extends=a.extend_run, P=a.P, T=a.T, ps=a.ps,
                      equil_ps=a.equil_ps, minutes=a.minutes, jobs=records,
                      allocation=os.environ.get("SLURM_JOB_ID"),
                      git=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip())
@@ -234,6 +278,8 @@ def run(a):
     if a.inspect_eos:
         inspect_eos(a)
         return
+    if a.save_eos:
+        raise ValueError("--save-eos requires --inspect-eos CSV")
     out, manifest = plan(a)
     print(f"Four-host scan: {a.P:g} GPa / {a.T:g} K; {a.ps:g} ps + {a.equil_ps:g} ps equil per MD; wall cap {a.minutes:g} min")
     print(f"Model: {manifest['model']}\nOutput: {out}")
@@ -241,6 +287,8 @@ def run(a):
     if a.T == 3000:
         print("3000 K is outside the supplied fit-label temperatures: this is an extrapolation check.")
     print("Intermediate volume uses the existing per-O interpolation; no refitting or scheduler submission.")
+    if a.extend_run:
+        print(f"EXTENDING {a.extend_run}: add {a.ps:g} ps per ensemble, re-equilibrate {a.equil_ps:g} ps with fresh thermal velocities; retain old frames. Recompute insertion estimates on combined frames.")
     for r in manifest["jobs"]:
         print(f"{r['name']}: GPU {r['gpu'] or 'CPU'}, {r['atoms']} host atoms\n  {shlex.join(r['command'])}")
     if a.dry_run:
@@ -331,6 +379,7 @@ def inspect_eos(a):
     df = import_module("01_bin_inventory").load_inventory(a.inspect_eos)
     eos = import_module("17_eos_md")
     pressures = [a.P * .97, a.P, a.P * 1.03]
+    inputs = dict(P=a.P, T=a.T)
     for key, comp in (("ice", "h2o"), ("h225", "h2.25o"), ("H", "h")):
         d = df[(df.comp_snap == comp) & (df.T_bin == a.T)]
         if key != "H":
@@ -350,7 +399,19 @@ def inspect_eos(a):
             continue
         bulk = -.5 * (v[0] + v[2]) * (pressures[2] - pressures[0]) / (v[2] - v[0])
         print(f"  {a.P:g} GPa: vpa={v[1]:.8g} A^3/atom; B_GPa={bulk:.8g} (same EOS finite-difference convention)")
-    print("Read-only report: no MD, GPU calls or output files. Review EOS coverage/phase before choosing run inputs.")
+        inputs[key] = dict(vpa=float(v[1]), B_GPa=float(bulk),
+            source=f"{Path(a.inspect_eos).resolve()}; {len(d)} exact-{a.T:g}K runs; existing ln P(V) fit and P +/-3% finite difference; generated {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+            **({"natoms":250} if key == "H" else {"nrep":3}))
+    if a.save_eos:
+        if not all(k in inputs for k in ("ice", "h225", "H")):
+            raise ValueError("Incomplete EOS coverage: no configuration saved")
+        path = Path(a.save_eos)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x") as file:
+            file.write(json.dumps(inputs, indent=2) + "\n")
+        print(f"Saved EOS inputs to {path}; no MD or GPU calls. Crystal size nrep=3 (108 O), pure H 250 atoms.")
+    else:
+        print("Read-only report: no MD, GPU calls or output files. Review EOS coverage/phase before choosing run inputs.")
 
 
 def status(a):
@@ -426,7 +487,9 @@ def main():
     r.add_argument("--batch", type=int, default=8)
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
+    r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")
     r.add_argument("--inspect-eos", metavar="CSV", help="read-only exact-temperature-bin DFT EOS report; no GPU/run")
+    r.add_argument("--save-eos", metavar="JSON", help="with --inspect-eos: save all three EOS inputs to a fresh file; no MD")
     r.add_argument("--out")
     r.add_argument("--model", default="grace-ft:runs/grace/ft_m2")
     r.add_argument("--ice-proxy", default="runs/pwidom_fit/proxy_ice.json")
@@ -434,6 +497,8 @@ def main():
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--cpu", action="store_true", help="local toy checks only")
     r.add_argument("--quiet", action="store_true", help="show summaries only; full host output remains in logs")
+    r.add_argument("--candidate-dir", help="optional shared unlabeled extxyz queue for later DFT review")
+    r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic pairs per host")
     s = sub.add_parser("status")
     s.add_argument("out", help="exact output directory printed by the launcher")
     s.add_argument("--gpu", action="store_true", help="also run nvidia-smi on this machine")

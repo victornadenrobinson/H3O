@@ -212,6 +212,8 @@ def cmd_run(a):
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
+    if a.extend_from and os.path.exists(ff):
+        raise SystemExit("--extend-from requires a fresh output cache; refusing to overwrite/reuse an existing one")
     model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
     if os.path.exists(ff):
         z = np.load(ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
@@ -221,11 +223,43 @@ def cmd_run(a):
         else:
             print(f"WARNING: {ff} has no model fingerprint (made before the check): the model is NOT verified", flush=True)
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
+    elif a.extend_from:
+        with np.load(a.extend_from) as old:
+            required = ("host", "full", "P_host", "P_full", "numbers", "model_fp", "V", "T")
+            if not all(k in old.files for k in required):
+                raise SystemExit("Extension requires complete, fingerprinted host/full frame and pressure arrays")
+            if (str(old["model_fp"]) != mfp or float(old["T"]) != a.T
+                    or abs(float(old["V"]) - V) > 1e-6 * V
+                    or not np.array_equal(old["numbers"], host.numbers)):
+                raise SystemExit("Extension source has different model / T / V / species")
+            previous = {k: np.array(old[k]) for k in ("host", "full", "P_host", "P_full")}
+            for key, n in (("host", len(host)), ("full", len(host)+1)):
+                frames = previous[key]
+                pressures = previous["P_host" if key == "host" else "P_full"]
+                if (frames.ndim != 3 or frames.shape[1:] != (n, 3) or not len(frames)
+                        or len(frames) != len(pressures) or not np.isfinite(frames).all()
+                        or not np.isfinite(pressures).all()):
+                    raise SystemExit(f"Invalid extension source {key} arrays")
+            segment_seed = max(a.seed, int(old["segment_seed"]) if "segment_seed" in old.files else a.seed) + 1009
+            segments = int(old["segments"]) + 1 if "segments" in old.files else 2
+        host0 = host.copy(); host0.positions = previous["host"][-1]
+        full0 = Atoms(numbers=np.r_[host.numbers, 1], positions=previous["full"][-1], cell=cell, pbc=True)
+        print(f"EXTENSION: {a.extend_from}; preserve {len(previous['host'])}/{len(previous['full'])} old frames; add {a.ps:g} ps per ensemble", flush=True)
+        print(f"Restarted segment: new thermal velocities, {a.equil_ps:g} ps re-equilibration; MD seed {segment_seed}. Not exact integrator continuation.", flush=True)
+        nh, nPh = md_frames(model, host0, a, segment_seed, "host")
+        nf, nPf = md_frames(model, full0, a, segment_seed+1, "host + 1 H")
+        fh, Ph = np.concatenate([previous["host"], nh]), np.concatenate([previous["P_host"], nPh])
+        fp, Pf = np.concatenate([previous["full"], nf]), np.concatenate([previous["P_full"], nPf])
+        np.savez(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T,
+                 natoms=len(host), numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp,
+                 segment_seed=segment_seed, segments=segments,
+                 parent_frames=os.path.abspath(a.extend_from), additional_ps=a.ps, reequil_ps=a.equil_ps)
+        print("wrote combined old+new frames", ff, flush=True)
     else:
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp)   # both branches added fields: keep all (cell + model name, and the model fingerprint)
+        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
@@ -296,6 +330,30 @@ def cmd_run(a):
     ew = berr([-kT * (lse(-b / kT) - np.log(len(b))) for b in bf]); ed = berr([kT * (lse(b / kT) - np.log(len(b))) for b in br])
     eb = berr([bar(x, -y, kT) for x, y in zip(bf, br)])
     q = np.exp(-(wf - wf.min()) / kT); kish = float(q.sum() ** 2 / (q ** 2).sum() / len(q))   # effective fraction of the insertion samples
+    if a.candidate_dir:
+        from tdi.pwidom_candidates import export_trials
+        trials = []
+        for k, (phis, lnW) in enumerate(ins):
+            for j, phi in enumerate(phis):
+                du = float(e1[k, j] - e0[k])
+                trials.append(dict(direction="insertion", frame=sfr[k], trial=j,
+                    dU_mlp_eV=du, phi_eV=float(phi), gap_kT=(du-float(phi))/kT,
+                    log_weight=float(-wf_frame[k][j]/kT),
+                    structures=[S0[k], S1[k*a.sel+j]]))
+        offset = 0
+        for k, ws in enumerate(dele):
+            for j, (phi, lnW) in enumerate(ws):
+                du = float(f0[k] - f1[offset+j])
+                trials.append(dict(direction="deletion", frame=dfr[k], trial=j,
+                    dU_mlp_eV=du, phi_eV=float(phi), gap_kT=(du-float(phi))/kT,
+                    log_weight=float(wr_frame[k][j]/kT),
+                    structures=[D1[offset+j], D0[k]]))
+            offset += len(ws)
+        count = export_trials(a.candidate_dir, trials, a.candidate_limit,
+            dict(run=str(os.path.abspath(a.out)), tag=tag, model=a.model, model_fp=mfp,
+                 proxy=a.proxy, P_GPa=a.P, T_K=a.T, K=K,
+                 source_frames=str(os.path.abspath(ff))))
+        print(f"DFT candidate queue: {count} new paired requests in {a.candidate_dir}; unlabeled; no VASP submitted", flush=True)
     ideal = kT * np.log((NH + 1) / V) + 3 * kT * np.log(refs.thermal_wavelength(float(host.get_masses()[isH][0]), a.T))
     (ph, eph), (pf, epf) = frame_mean_P(Ph), frame_mean_P(Pf)
     B = a.bulk_gpa; dGP = -V / (2 * B) * ((pf - a.P) ** 2 - (ph - a.P) ** 2) / EV_A3_GPA if B else 0.0
@@ -353,6 +411,9 @@ def main():
     r.add_argument("--stride", type=int, default=1, help="use every stride-th cached frame"); r.add_argument("--batch", type=int, default=16, help="structures per batched model call (GRACE)")
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
+    r.add_argument("--extend-from", help="cached frames: append a restarted MD segment in fresh --out; new thermal velocities and re-equilibration")
+    r.add_argument("--candidate-dir", default=None, help="optional unlabeled extxyz diagnostic queue; no DFT submission")
+    r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic trial pairs per host run")
     d = sub.add_parser("dg"); d.add_argument("ice"); d.add_argument("hfluid")
     a = ap.parse_args(); {"run": cmd_run, "dg": cmd_dg}[a.cmd](a)
 

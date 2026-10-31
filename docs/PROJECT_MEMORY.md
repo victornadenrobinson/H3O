@@ -48,6 +48,28 @@ prefixed logs, GPU utilization/memory and progress sidecars with stage-specific
 ETA. It does not retrofit an already running process. Status --follow or tail -F
 views existing logs without stopping the calculation. Project continuity lives
 in Git plus external results storage, not an assumed shared live cloud machine.
+Update: 500-GPa/3000-K run completed, allocation 60620660. All three ice-host
+estimates flagged UNCONVERGED; H2O Kish .021, H2.083O .146, H2.25O .097; pure-H
+Kish .530 and insertion/deletion agree. Reported robust dg -1146.5 +-89.6,
+-738.5 +-105.0, +185.7 +-109.4 meV/H. Small table committed as
+docs/data/pwidom_pm_500GPa_3000K_reported.csv. pwidom_formation.py makes a
+provisional integral (not a validated equilibrium hull), with conservative
+maximal-positive-correlation statistical sigma bounds; sampling/model bias omitted.
+Old-proxy 500-GPa/3000-K production Kish remains unknown. proxy_compare.py plots
+the actual pair curves when the fitted JSON files are present remotely, and
+optionally writes (does not run) a cached-frame baseline replay script.
+User requested a fresh 400-GPa/3000-K ten-minute scan. --inspect-eos CSV
+--P 400 --save-eos JSON now saves complete exact-bin EOS inputs without GPU work;
+then --state-json JSON --P 400 starts the usual fresh scan. --candidate-dir DIR
+optionally queues bounded paired extxyz trials for DFT review (no VASP submission
+or automatic training). Low Kish/proxy mismatch is not GRACE uncertainty.
+--extend-run DIR adds a restarted, re-equilibrated MD segment from old endpoint
+positions in a fresh directory and recomputes estimates on old+new frames.
+This is not exact continuation: prior caches contain no velocity/integrator state.
+More GRACE-only methods cannot independently establish model accuracy: prioritized
+check is matched DFT host/host+H in ice and pure H, then model-to-DFT free-energy
+correction with overlap diagnostics. VASP 5.4.4 CPU modules exist per user's list;
+training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
 
 ## Layout and workflows
 

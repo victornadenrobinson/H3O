@@ -1,0 +1,5 @@
+# User-reported Perlmutter run runs/pwidom_pm_20261031_105811, allocation 60620660; GRACE ft_m2, insertion-fitted proxies, robust scan pressure correction. All H/O estimates unconverged. Errors are reported statistical errors only. Pure H is the reference, not a fourth mixture composition.
+P_GPa,T_K,n,dg_meV,err_meV,kish,flag
+500,3000,0,-1146.5,89.6,0.021,unconverged
+500,3000,0.08333333333333333,-738.5,105.0,0.146,unconverged
+500,3000,0.25,185.7,109.4,0.097,unconverged

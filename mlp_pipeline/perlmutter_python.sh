@@ -14,6 +14,7 @@ h3o_select_python() {
     local task=$1; shift
     local arg previous="" model="" cheap=0 cpu=0 candidate base
     local -a h3o_required=(numpy pandas ase scipy) candidates=()
+    if [[ "$task" == plot ]]; then h3o_required+=(matplotlib); fi
     for arg in "$@"; do
         case "$arg" in
             --help|-h|--dry-run|--inspect-eos|--inspect-eos=*) cheap=1 ;;

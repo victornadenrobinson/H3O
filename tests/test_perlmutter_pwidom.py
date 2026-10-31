@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,12 +35,17 @@ def shell(name, args, env):
 
 def test_toy_scan_and_readonly_status(campaign):
     env, args, out = campaign
-    r = shell("perlmutter_pwidom.sh", [*args, "--out", str(out)], env)
+    queue = out.parent / "candidates"
+    r = shell("perlmutter_pwidom.sh", [*args, "--out", str(out),
+              "--candidate-dir", str(queue), "--candidate-limit", "2"], env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[H2O]" in r.stdout and "[pureH]" in r.stdout
     assert "proxy candidate" in r.stdout
     m = json.loads((out / "manifest.json").read_text())
     assert m["status"] == "complete" and len(m["jobs"]) == 4
+    requests = [json.loads(line) for line in (queue / "queue.jsonl").read_text().splitlines()]
+    assert len(requests) == 8
+    assert all(r["reference_status"] == "unlabeled" for r in requests)
     for job in m["jobs"]:
         result = json.loads(Path(job["result"]).read_text())
         assert job["exit_code"] == 0 and result["n_ins"] == 5
@@ -123,6 +129,16 @@ def test_inspect_eos_reports_values_without_running(campaign):
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.count("vpa=") == 3 and "Read-only report" in r.stdout
     assert not out.exists()
+    config = out.parent / "saved_eos.json"
+    args = ["--inspect-eos", str(inv), "--save-eos", str(config)]
+    saved = shell("perlmutter_pwidom.sh", args, env)
+    assert saved.returncode == 0, saved.stdout + saved.stderr
+    eos = json.loads(config.read_text())
+    assert eos["P"] == 500 and eos["ice"]["nrep"] == 3 and eos["H"]["natoms"] == 250
+    assert eos["ice"]["vpa"] == pytest.approx(2, abs=.001)
+    before = config.read_bytes()
+    again = shell("perlmutter_pwidom.sh", args, env)
+    assert again.returncode != 0 and config.read_bytes() == before
 
 
 def discovery_env(tmp_path):
@@ -257,3 +273,26 @@ def test_old_run_log_eta(monkeypatch, tmp_path):
     text = pm.progress_text(dict(log=str(log)))
     assert "elapsed 00:01:54 / remaining ~00:01:12" in text
     assert "this MD only" in text
+
+
+def test_extend_run_adds_frames_without_modifying_parent(campaign):
+    env, args, out = campaign
+    first = shell("perlmutter_pwidom.sh", [*args, "--out", str(out)], env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    before = {p: p.read_bytes() for p in out.iterdir()}
+    extension = out.parent / "extended"
+    # Extension must not need original TDI roots; its exact state is inherited.
+    r = shell("perlmutter_pwidom.sh", ["--cpu", "--extend-run", str(out),
+        "--ps", "0.1", "--equil-ps", "0", "--out", str(extension)], env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    manifest = json.loads((extension / "manifest.json").read_text())
+    assert manifest["status"] == "complete" and manifest["extends"] == str(out)
+    for job in manifest["jobs"]:
+        result = json.loads(Path(job["result"]).read_text())
+        assert result["n_frames_host"] == 10 and result["n_ins"] == 10
+        oldjob = next(j for j in json.loads((out/"manifest.json").read_text())["jobs"] if j["name"] == job["name"])
+        oldtag = oldjob["command"][oldjob["command"].index("--tag")+1]
+        with np.load(out / f"{oldtag}_frames.npz") as old, np.load(extension / f"{oldtag}_frames.npz") as new:
+            assert new["segments"] == 2 and new["segment_seed"] > old["segment_seed"]
+            np.testing.assert_array_equal(old["host"], new["host"][:5])
+    assert before == {p: p.read_bytes() for p in out.iterdir()}

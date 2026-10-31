@@ -127,3 +127,95 @@ for this standard environment. `export GRACE_ENV="$SCRATCH/grace-env"` pins it
 explicitly for both wrappers if desired. The saved EOS values are rounded to the
 precision of the supplied terminal report. This is a DFT-volume starting point:
 check actual GRACE pressures and phase stability in the run results.
+
+### New state points, additional sampling, and diagnostics
+
+Prepare a new state from the inventory without copying EOS numbers by hand:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh --P 400 --T 3000 \
+  --inspect-eos runs/inventory_binned.csv --save-eos runs/eos_400GPa_3000K.json
+bash mlp_pipeline/perlmutter_pwidom.sh --P 400 --T 3000 \
+  --state-json runs/eos_400GPa_3000K.json --dry-run
+bash mlp_pipeline/perlmutter_pwidom.sh --P 400 --T 3000 \
+  --state-json runs/eos_400GPa_3000K.json --candidate-dir runs/dft_candidates
+```
+
+Saving requires complete exact-bin coverage and a fresh filename. No GPU work
+occurs until the last command. The default run cap remains ten minutes.
+
+Repeating a launch starts fresh; it does not extend an earlier scan. For a
+**completed** run, append more sampling in a fresh output directory:
+
+```bash
+bash mlp_pipeline/perlmutter_pwidom.sh --extend-run runs/<completed-run> \
+  --ps 0.4 --equil-ps 0.2 --minutes 10 --dry-run
+bash mlp_pipeline/perlmutter_pwidom.sh --extend-run runs/<completed-run> \
+  --ps 0.4 --equil-ps 0.2 --minutes 10 --candidate-dir runs/dft_candidates
+```
+
+This inherits the parent state, model, proxies and insertion settings; `--ps`
+is **additional** production time per ensemble. Model fingerprint, T, species
+and volume must match before any child starts. Existing caches contain no
+velocities/integrator state, so the added segment starts at the last saved
+coordinates, draws fresh seeded thermal velocities, re-equilibrates, then
+combines old and new production frames. It is not exact trajectory continuation.
+The original stays byte-for-byte unchanged. Insertion single points are
+recomputed over the combined sample, so an extension may need more walltime than
+the initial scan. Do not launch overlapping extensions of one parent. Errors
+remain short-run statistical estimates; extension does not guarantee convergence.
+
+Compare the pair curves (CPU only) and prepare an **unexecuted** baseline replay:
+
+```bash
+bash mlp_pipeline/perlmutter_proxy_compare.sh \
+  --run-dir runs/<completed-run> --out runs/<fresh-comparison-directory>
+```
+
+Outputs: `proxy_pairs.png` (energy and force, including the short-range core),
+`pair_curves.csv`, input hashes and `replay_old.sh`. The old proxy is
+`docs/data/toyfit_t4.json`; fitted ones are `runs/pwidom_fit/proxy_{ice,H}.json`.
+No model work is launched. Review the replay script/cost before executing it:
+it reuses cached, fingerprinted ensembles and changes only proxy sampling, not MD.
+The existing probe-fit Kish diagnostics describe starting-proxy-selected sites;
+they are not the production Kish of new-proxy draws.
+
+With `--candidate-dir`, future scans can save a bounded unlabeled extxyz queue
+(default ten trial pairs per host; `--candidate-limit` changes this). Selection
+includes dominant estimator weights, large centered proxy residuals, and
+representative trials. Each request links host-without-H and host-with-H
+geometries plus model/fingerprint, state, source frame, predicted insertion
+energy, proxy value, log weight and reason. A lock serializes writers and exact
+geometries are deduplicated. These are **sampling/proxy diagnostics**, not an
+uncertainty estimate or proof of GRACE error. No files are labeled as DFT and no
+VASP job/training is started. Include representative equilibrium configurations
+alongside unusual sites; do not automatically train on every close-contact probe.
+
+Older archives lack exact trial positions/weights. Their representative MD
+snapshots can still be queued without model calls:
+
+```bash
+"$SCRATCH/grace-env/bin/python" mlp_pipeline/tdi/pwidom_candidates.py \
+  runs/<completed-run>/*_frames.npz --out runs/dft_candidates --per-source 3
+```
+
+Existing `tdi/dft_check.py prep-widom` prepares host/probe VASP checks from cached
+frames and a training DFT template. It samples new sites rather than recovering
+the old estimator's exact influential sites. Before labeling queue geometries,
+audit VASP version, PAW datasets, XC, cutoff, k-mesh, electronic smearing and
+convergence against the actual training OUTCAR/template. The user's module list
+includes VASP 5.4.4 CPU and VASP 6 GPU builds; no Perlmutter VASP launcher is
+configured by this change. POTCAR and raw training frames stay outside Git.
+
+The small reported 500-GPa/3000-K table is committed separately from raw data.
+Reproduce its provisional formation plot with:
+
+```bash
+"$SCRATCH/grace-env/bin/python" mlp_pipeline/tdi/pwidom_formation.py \
+  --out runs/<fresh-figure-prefix>
+```
+
+Lower error bars use the maximal-positive-correlation bound on propagated
+statistical sigma because shared-reference covariance is unavailable. They
+exclude sampling and model bias. This figure is not a validated equilibrium
+convex hull or a fitted saturation composition.
