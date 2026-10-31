@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shlex
 import signal
@@ -19,6 +20,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pwidom_scan as scan
+from pwidom_progress import duration
 
 
 def save(path, data):
@@ -84,8 +86,28 @@ def progress_text(job):
         pct = f" {100 * fraction:.0f}% ({p['done']}/{p['total']} {p['unit']})" if fraction is not None else ""
         eta = "estimating" if p["eta_seconds"] is None else f"{p['eta_seconds'] / 60:.1f} min"
         age = max(0, time.time() - p["updated"])
-        return f"{p['stage']}{pct}; stage ETA {eta}; updated {age:.0f}s ago"
+        elapsed = duration(p.get("elapsed_seconds", 0))
+        left = "estimating" if p["eta_seconds"] is None else duration(p["eta_seconds"])
+        return f"{p['stage']}{pct}; elapsed {elapsed} / remaining {left} (stage); stage ETA {eta}; updated {age:.0f}s ago"
     except (OSError, ValueError, KeyError):
+        # Attach to runs launched before progress sidecars were introduced.
+        try:
+            text = Path(job["log"]).read_text(errors="replace")
+            matches = list(re.finditer(r"MD (host(?: \+ 1 H)?): (\d+)/(\d+) frames,[^\n]*?, ([\d.]+) min", text))
+            if matches:
+                last = matches[-1]
+                stage, done, total, elapsed = last.groups()
+                if "wrote " in text[last.end():] or "proxy " in text[last.end():]:
+                    return "MD finished; later-stage ETA unavailable in this older log"
+                done, total, elapsed = int(done), int(total), float(elapsed) * 60
+                previous = [m for m in matches[:-1] if m[1] == stage]
+                left = "estimating"
+                if previous and done > int(previous[-1][2]):
+                    remaining = (elapsed - float(previous[-1][4]) * 60) / (done - int(previous[-1][2])) * (total - done)
+                    left = "~" + duration(remaining)
+                return f"MD {stage}: {done}/{total} frames; elapsed {duration(elapsed)} / remaining {left} (this MD only; estimated from log)"
+        except (OSError, KeyError):
+            pass
         return "initializing; stage ETA estimating"
 
 
@@ -264,7 +286,7 @@ def run(a):
                 stopped = stopped or "wall-time cap"
                 break
             if elapsed - last >= 30:
-                print(f"{elapsed / 60:.1f} min | " + " | ".join(
+                print(f"elapsed {duration(elapsed)} / cap {duration(a.minutes * 60)}; cap remaining {duration(a.minutes * 60 - elapsed)} | " + " | ".join(
                     f"{r['name']}: " + ("running" if p.poll() is None else f"exit {p.returncode}") for r, p in children))
                 metrics = gpu_metrics(manifest["jobs"])
                 for r, p in children:
@@ -337,9 +359,14 @@ def status(a):
         manifest = json.loads((out / "manifest.json").read_text())
         logs = HostLogs(manifest["jobs"])
         print(f"Following {out}; Ctrl-C stops this viewer only.", flush=True)
+        last = -float("inf")
         try:
             while True:
                 logs.drain()
+                if time.monotonic() - last >= 30:
+                    for job in manifest["jobs"]:
+                        print(f"[{job['name']}] {progress_text(job)}", flush=True)
+                    last = time.monotonic()
                 if json.loads((out / "manifest.json").read_text())["status"] != "running":
                     logs.drain(final=True)
                     break

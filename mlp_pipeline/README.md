@@ -71,6 +71,10 @@ proxy preparation and batched single-point counts, percentages and measured
 ETA says estimating until timed work is available. ETA is not a prediction for
 all remaining stages. Progress is emitted at roughly 10-second intervals and
 stage boundaries, with no extra force evaluations or changes to the sampler.
+Time fields explicitly show `elapsed HH:MM:SS / remaining HH:MM:SS` for the
+current stage; the launcher separately counts down time to the wall cap.
+For older runs without sidecars, status estimates current-MD time remaining
+from successive frame/time log lines; unmeasured later stages remain unknown.
 Missing telemetry is reported without failing the calculation. Already running
 processes keep their original output behavior until the next run.
 `--gpu` runs nvidia-smi on the machine where status is invoked. On the login node,

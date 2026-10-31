@@ -226,6 +226,7 @@ def test_progress_eta_uses_stage_timing(monkeypatch, tmp_path):
     clock[0] += 20
     reporter.update("MD host sampling", 25, 100)
     assert json.loads(path.read_text())["eta_seconds"] == 60
+    assert json.loads(path.read_text())["elapsed_seconds"] == 20
     reporter.update("single points", 0, 40)
     assert json.loads(path.read_text())["eta_seconds"] is None
 
@@ -245,3 +246,14 @@ def test_progress_does_not_change_toy_md(monkeypatch, tmp_path):
         argparse.Namespace(**settings, _progress=Progress(tmp_path / "progress.json")), 3, "host")
     for a, b in zip(old, new):
         np.testing.assert_array_equal(a, b)
+
+
+def test_old_run_log_eta(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    import perlmutter_pwidom as pm
+    log = tmp_path / "host.log"
+    log.write_text("  MD host + 1 H: 4/20 frames, P so far 514 GPa, 1.5 min\n"
+                   "  MD host + 1 H: 8/20 frames, P so far 514 GPa, 1.9 min\n")
+    text = pm.progress_text(dict(log=str(log)))
+    assert "elapsed 00:01:54 / remaining ~00:01:12" in text
+    assert "this MD only" in text
