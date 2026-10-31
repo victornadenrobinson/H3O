@@ -4,6 +4,7 @@ The shell entry points are perlmutter_pwidom.sh and perlmutter_pwidom_status.sh.
 Scientific estimators and volume interpolation remain in the existing modules.
 """
 import argparse
+import csv
 import glob
 import importlib.util
 import json
@@ -24,6 +25,68 @@ def save(path, data):
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     tmp.replace(path)
+
+
+class HostLogs:
+    """Stream every emitted child line with its host name; retain the full files."""
+
+    def __init__(self, jobs):
+        self.jobs = jobs
+        self.files = {}
+        self.pending = {}
+
+    def drain(self, final=False):
+        for job in self.jobs:
+            name = job["name"]
+            if name not in self.files:
+                try:
+                    self.files[name] = open(job["log"], errors="replace")
+                except FileNotFoundError:
+                    continue
+            text = self.pending.pop(name, "") + self.files[name].read()
+            lines = text.splitlines(keepends=True)
+            for line in lines:
+                if line.endswith(("\n", "\r")) or final:
+                    print(f"[{name}] {line.rstrip(chr(10) + chr(13))}", flush=True)
+                else:
+                    self.pending[name] = line
+
+    def close(self):
+        for file in self.files.values():
+            file.close()
+
+
+def gpu_metrics(jobs):
+    ids = [job["gpu"] for job in jobs if job["gpu"]]
+    if not ids:
+        return {}
+    try:
+        output = subprocess.check_output([
+            "nvidia-smi", "--id=" + ",".join(ids),
+            "--query-gpu=index,uuid,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits"], text=True, stderr=subprocess.DEVNULL, timeout=3)
+        metrics = {}
+        for row in csv.reader(output.splitlines(), skipinitialspace=True):
+            index, uuid, util, used, total = (value.strip() for value in row)
+            text = f"GPU {index}: {util}% util, {float(used) / 1024:.1f}/{float(total) / 1024:.1f} GiB"
+            for gpu in ids:
+                if gpu == index or uuid.startswith(gpu):
+                    metrics[gpu] = text
+        return metrics
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
+def progress_text(job):
+    try:
+        p = json.loads(Path(job["progress"]).read_text())
+        fraction = p["fraction"]
+        pct = f" {100 * fraction:.0f}% ({p['done']}/{p['total']} {p['unit']})" if fraction is not None else ""
+        eta = "estimating" if p["eta_seconds"] is None else f"{p['eta_seconds'] / 60:.1f} min"
+        age = max(0, time.time() - p["updated"])
+        return f"{p['stage']}{pct}; stage ETA {eta}; updated {age:.0f}s ago"
+    except (OSError, ValueError, KeyError):
+        return "initializing; stage ETA estimating"
 
 
 def plan(a):
@@ -136,6 +199,7 @@ def plan(a):
                "--tag", tag, "--label", "candidate"]
         records.append(dict(name=name, gpu=gpu, atoms=len(host), command=cmd,
                             log=str(out / f"{name}.log"),
+                            progress=str(out / f"{name}_progress.json"),
                             result=str(out / f"{tag}_candidate_K{a.K}.json")))
     return out, dict(model=model, stage0=state, eos_inputs=explicit,
                      state_json=a.state_json, P=a.P, T=a.T, ps=a.ps,
@@ -165,6 +229,7 @@ def run(a):
     save(out / "manifest.json", manifest)
     children = []
     stopped = None
+    logs = HostLogs(manifest["jobs"])
 
     def interrupt(signum, frame):
         nonlocal stopped
@@ -179,7 +244,8 @@ def run(a):
                 break
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=r["gpu"],
                        TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2",
-                       OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="1")
+                       OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="1",
+                       PW_PROGRESS_FILE=os.path.abspath(r["progress"]))
             # Each GPU is independent; do not inherit another launcher's serialization lock.
             env.pop("PW_GPU_LOCK", None)
             with open(r["log"], "x") as log:
@@ -192,14 +258,20 @@ def run(a):
         last = -30.0
         while any(p.poll() is None for _, p in children):
             elapsed = time.monotonic() - started
+            if not a.quiet:
+                logs.drain()
             if stopped or elapsed >= a.minutes * 60:
                 stopped = stopped or "wall-time cap"
                 break
             if elapsed - last >= 30:
                 print(f"{elapsed / 60:.1f} min | " + " | ".join(
                     f"{r['name']}: " + ("running" if p.poll() is None else f"exit {p.returncode}") for r, p in children))
+                metrics = gpu_metrics(manifest["jobs"])
+                for r, p in children:
+                    print(f"  {r['name']} | {metrics.get(r['gpu'], 'GPU telemetry unavailable' if r['gpu'] else 'CPU')} | "
+                          + (progress_text(r) if p.poll() is None else f"exit {p.returncode}"), flush=True)
                 last = elapsed
-            time.sleep(0.2)
+            time.sleep(0.5)
     finally:
         for _, p in children:
             if p.poll() is None:
@@ -221,6 +293,9 @@ def run(a):
             p.returncode == 0 and Path(r["result"]).is_file() for r, p in children)
         manifest["status"] = "complete" if complete else (stopped or "failed")
         save(out / "manifest.json", manifest)
+        if not a.quiet:
+            logs.drain(final=True)
+        logs.close()
     print(f"{manifest['status']}: {out}; unfinished MD is not checkpointed")
     status(argparse.Namespace(out=str(out), gpu=False))
     if not complete:
@@ -258,11 +333,28 @@ def inspect_eos(a):
 
 def status(a):
     out = Path(a.out)
+    if getattr(a, "follow", False):
+        manifest = json.loads((out / "manifest.json").read_text())
+        logs = HostLogs(manifest["jobs"])
+        print(f"Following {out}; Ctrl-C stops this viewer only.", flush=True)
+        try:
+            while True:
+                logs.drain()
+                if json.loads((out / "manifest.json").read_text())["status"] != "running":
+                    logs.drain(final=True)
+                    break
+                time.sleep(1)
+        except KeyboardInterrupt:
+            return
+        finally:
+            logs.close()
     m = json.loads((out / "manifest.json").read_text())
     print(f"{out}: {m['status']}; allocation {m['allocation']}; {m['P']:g} GPa / {m['T']:g} K")
     results = {}
     for r in m["jobs"]:
         print(f"\n{r['name']}: GPU {r['gpu'] or 'CPU'}, PID {r.get('pid', '-')}, exit {r.get('exit_code', '-')}")
+        if m["status"] == "running":
+            print("  " + progress_text(r))
         if Path(r["result"]).exists():
             w = results[r["name"]] = json.loads(Path(r["result"]).read_text())
             print(f"  Widom {w['mu_ex_widom_meV']:.1f}; deletion {w['mu_ex_delete_meV']:.1f}; BAR {w['mu_ex_bar_meV']:.1f} meV")
@@ -314,9 +406,11 @@ def main():
     r.add_argument("--h-proxy", default="runs/pwidom_fit/proxy_H.json")
     r.add_argument("--dry-run", action="store_true")
     r.add_argument("--cpu", action="store_true", help="local toy checks only")
+    r.add_argument("--quiet", action="store_true", help="show summaries only; full host output remains in logs")
     s = sub.add_parser("status")
     s.add_argument("out", help="exact output directory printed by the launcher")
     s.add_argument("--gpu", action="store_true", help="also run nvidia-smi on this machine")
+    s.add_argument("--follow", action="store_true", help="stream full host logs until completion; Ctrl-C stops viewer only")
     a = ap.parse_args()
     try:
         (run if a.action == "run" else status)(a)

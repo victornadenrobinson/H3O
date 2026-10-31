@@ -41,6 +41,13 @@ is discovered successfully. Exact-3000K DFT EOS counts are 382 H2O, 178 H2.25O,
 envs/pwidom_500GPa_3000K.json. Use `--state-json` with that file, then --dry-run
 before the short GPU scan. Environment discovery is verified remotely for the
 analysis dependencies; a full four-GPU scan remains unverified here.
+User confirmed Perlmutter dry-run resolves ft_m2/seed/1/final_model and launched
+the four-GPU scan in runs/pwidom_pm_20261031_105811; last supplied status had all
+four hosts running. Outcome not yet supplied. Next launcher version streams full
+prefixed logs, GPU utilization/memory and progress sidecars with stage-specific
+ETA. It does not retrofit an already running process. Status --follow or tail -F
+views existing logs without stopping the calculation. Project continuity lives
+in Git plus external results storage, not an assumed shared live cloud machine.
 
 ## Layout and workflows
 

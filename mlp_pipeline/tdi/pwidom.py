@@ -110,8 +110,10 @@ class Model:
             from tdi.batched import GraceBatch
             self.gb = GraceBatch(self.calc)
 
-    def energies(self, structs):
+    def energies(self, structs, progress=None):
         out = []
+        if progress:
+            progress.update("single points", 0, len(structs), "structures", force=True)
         for i in range(0, len(structs), self.batch):
             part = structs[i:i + self.batch]; self.ncalls += 1
             if self.gb is not None:
@@ -121,6 +123,8 @@ class Model:
             else:
                 for at in part:
                     at.calc = self.calc; out.append(float(at.get_potential_energy())); at.calc = None
+            if progress:
+                progress.update("single points", len(out), len(structs), "structures")
         return np.array(out)
 
 
@@ -132,13 +136,28 @@ def md_frames(model, at0, a, seed, label):
     at = at0.copy(); at.calc = model.calc; rng = np.random.default_rng(seed); t0 = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng)
     dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=0.01, rng=rng)
-    dyn.run(int(a.equil_ps * 1000 / a.dt)); every = max(1, int(round(a.every_fs / a.dt))); nfr = int(a.ps * 1000 / a.every_fs)
+    equil_steps = int(a.equil_ps * 1000 / a.dt)
+    every = max(1, int(round(a.every_fs / a.dt))); nfr = int(a.ps * 1000 / a.every_fs)
+    progress = getattr(a, "_progress", None)
+    if progress and progress.path is not None:
+        progress.update(f"MD {label} equilibration", 0, equil_steps, "steps", force=True)
+        def md_progress():
+            if dyn.nsteps <= equil_steps:
+                progress.update(f"MD {label} equilibration", dyn.nsteps, equil_steps, "steps")
+            else:
+                progress.update(f"MD {label} sampling", dyn.nsteps - equil_steps, nfr * every, "steps")
+        dyn.attach(md_progress, interval=20)
+    dyn.run(equil_steps)
+    if progress:
+        progress.update(f"MD {label} sampling", 0, nfr * every, "steps", force=True)
     pos, P = [], []
     for k in range(nfr):
         dyn.run(every); pos.append(at.positions.copy())
         P.append(-at.get_stress()[:3].mean() * EV_A3_GPA + len(at) * units.kB * a.T / at.get_volume() * EV_A3_GPA)
         if (k + 1) % max(1, nfr // 5) == 0:
             print(f"  MD {label}: {k + 1}/{nfr} frames, P so far {np.mean(P):.1f} GPa, {(time.time() - t0) / 60:.1f} min", flush=True)
+    if progress:
+        progress.update(f"MD {label} sampling", nfr * every, nfr * every, "steps", force=True)
     return np.array(pos), np.array(P)
 
 
@@ -182,6 +201,9 @@ def apply_like(a):
 
 
 def cmd_run(a):
+    from tdi.pwidom_progress import from_environment
+    a._progress = progress = from_environment()
+    progress.update("model loading", force=True)
     if a.like:
         apply_like(a)
     assert a.vpa and a.T and a.P, "--vpa, --T and --P (or --like)"
@@ -220,6 +242,7 @@ def cmd_run(a):
     sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []; t_last = time.time()
     def tick(i, ntot, what):   # the proxy stage is CPU work of minutes with no other output: a line every 30 s
         nonlocal t_last
+        progress.update(f"proxy {what}", i, ntot, "frames")
         if time.time() - t_last >= 30:
             t_last = time.time(); el = t_last - t0; print(f"  proxy {what}: frame {i + 1}/{ntot}, {el / 60:.1f} min, ETA {el / (i + 1) * (ntot - i - 1) / 60:.1f} min for this part", flush=True)
     for i_f, f in enumerate(sfr):
@@ -245,6 +268,7 @@ def cmd_run(a):
             ws.append((phi_t, lse(-phik / kT) - np.log(K)))
         dele.append(ws)
     print(f"proxy {a.proxy} K {K}: {len(S1)} insertion and {len(D1)} deletion trials prepared ({(time.time() - t0) / 60:.1f} min); real-model single points: {len(S0) + len(S1) + len(D0) + len(D1)}", flush=True)
+    progress.update("proxy deletions", len(dfr), len(dfr), "frames", force=True)
     lk = os.environ.get("PW_GPU_LOCK")   # several pwidom processes on one GPU (pwidom_scan): only one at a time in the memory-hungry batched single-point stage
     if lk:
         import fcntl
@@ -252,9 +276,11 @@ def cmd_run(a):
         try:
             fcntl.flock(fh_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            progress.update("waiting for single-point GPU lock", force=True)
             print(f"waiting for the single-point GPU lock ({lk}): another host is in its single points", flush=True); fcntl.flock(fh_lock, fcntl.LOCK_EX)
             print(f"got the GPU lock after {(time.time() - t_w) / 60:.1f} min", flush=True)
-    E = model.energies(S0 + S1 + D0 + D1); n0, n1, m0 = len(S0), len(S1), len(D0)
+    E = model.energies(S0 + S1 + D0 + D1, progress=progress); n0, n1, m0 = len(S0), len(S1), len(D0)
+    progress.update("analysis", force=True)
     if lk: fcntl.flock(fh_lock, fcntl.LOCK_UN); fh_lock.close()
     e0, e1, f0, f1 = E[:n0], E[n0:n0 + n1].reshape(n0, a.sel), E[n0 + n1:n0 + n1 + m0], E[n0 + n1 + m0:]
     wf_frame, gap_ins = [], []
@@ -286,6 +312,7 @@ def cmd_run(a):
         print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
+    progress.update("complete", 1, 1, "result", force=True)
     print(f"{tag} proxy {lab} K {K}: {len(wf)} insertions ({len(sfr)} frames), {len(wr)} deletions, {model.ncalls} model calls, {(time.time() - t0) / 60:.1f} min")
     print(f"  mu_ex: Widom {mu_w * 1e3:8.1f} +- {ew * 1e3:5.1f}   deletion {mu_d * 1e3:8.1f} +- {ed * 1e3:5.1f}   BAR {mu_b * 1e3:8.1f} +- {eb * 1e3:5.1f} meV")
     print(f"  proxy quality: std(dU - phi) {r['proxy_gap_std_kT_ins']:.2f} kT (insertion) {r['proxy_gap_std_kT_del']:.2f} kT (deletion); Kish effective fraction of insertions {kish:.3f}")

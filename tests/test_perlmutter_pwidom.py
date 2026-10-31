@@ -36,16 +36,24 @@ def test_toy_scan_and_readonly_status(campaign):
     env, args, out = campaign
     r = shell("perlmutter_pwidom.sh", [*args, "--out", str(out)], env)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "[H2O]" in r.stdout and "[pureH]" in r.stdout
+    assert "proxy candidate" in r.stdout
     m = json.loads((out / "manifest.json").read_text())
     assert m["status"] == "complete" and len(m["jobs"]) == 4
     for job in m["jobs"]:
         result = json.loads(Path(job["result"]).read_text())
         assert job["exit_code"] == 0 and result["n_ins"] == 5
         assert result["proxy_gap_std_kT_ins"] < 1e-8
+        progress = json.loads(Path(job["progress"]).read_text())
+        assert progress["stage"] == "complete" and progress["fraction"] == 1
     before = {p: p.read_bytes() for p in out.iterdir()}
     status = shell("perlmutter_pwidom_status.sh", [str(out)], env)
     assert status.returncode == 0, status.stderr
     assert "Pure-H minimum" in status.stdout and "H2O: dg" in status.stdout
+    assert before == {p: p.read_bytes() for p in out.iterdir()}
+    follow = shell("perlmutter_pwidom_status.sh", [str(out), "--follow"], env)
+    assert follow.returncode == 0, follow.stderr
+    assert "[H2O]" in follow.stdout and "proxy candidate" in follow.stdout
     assert before == {p: p.read_bytes() for p in out.iterdir()}
     again = shell("perlmutter_pwidom.sh", [*args, "--out", str(out)], env)
     assert again.returncode != 0 and "Output already exists" in again.stderr
@@ -186,3 +194,54 @@ def test_missing_environment_has_actionable_error(tmp_path):
     r = shell("perlmutter_pwidom.sh", ["--help"], env)
     assert r.returncode != 0 and "Set GRACE_ENV=" in r.stderr
     assert "No environment was installed" in r.stderr
+
+
+def test_gpu_metrics_and_progress_text(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    import perlmutter_pwidom as pm
+    def query(cmd, **kwargs):
+        assert "--id=0,GPU-bbbb" in cmd and kwargs["timeout"] == 3
+        return "0, GPU-aaaa, 87, 10240, 81920\n1, GPU-bbbb-full, 52, 20480, 81920\n"
+    monkeypatch.setattr(pm.subprocess, "check_output", query)
+    metrics = pm.gpu_metrics([dict(gpu="0"), dict(gpu="GPU-bbbb")])
+    assert "87% util, 10.0/80.0 GiB" in metrics["0"]
+    assert "52% util, 20.0/80.0 GiB" in metrics["GPU-bbbb"]
+    path = tmp_path / "progress.json"
+    path.write_text(json.dumps(dict(stage="MD host sampling", fraction=.5,
+        done=100, total=200, unit="steps", eta_seconds=90, updated=0)))
+    assert "50%" in pm.progress_text(dict(progress=str(path)))
+    assert "stage ETA 1.5 min" in pm.progress_text(dict(progress=str(path)))
+
+
+def test_progress_eta_uses_stage_timing(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    import pwidom_progress as pp
+    clock = [100.0]
+    monkeypatch.setattr(pp, "time", SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0]))
+    path = tmp_path / "progress.json"
+    reporter = pp.Progress(path)
+    reporter.update("MD host sampling", 0, 100)
+    assert json.loads(path.read_text())["eta_seconds"] is None
+    clock[0] += 20
+    reporter.update("MD host sampling", 25, 100)
+    assert json.loads(path.read_text())["eta_seconds"] == 60
+    reporter.update("single points", 0, 40)
+    assert json.loads(path.read_text())["eta_seconds"] is None
+
+
+def test_progress_does_not_change_toy_md(monkeypatch, tmp_path):
+    import argparse
+    import numpy as np
+    from ase import Atoms
+    monkeypatch.syspath_prepend(str(ROOT / "mlp_pipeline/tdi"))
+    monkeypatch.setenv("TOYICE_FIT", str(ROOT / "docs/data/toyfit_t4.json"))
+    from pwidom import Model, md_frames
+    from pwidom_progress import Progress
+    host = Atoms("OH2", positions=[[1, 1, 1], [2, 1, 1], [1, 2, 1]], cell=[8]*3, pbc=True)
+    settings = dict(T=3000, dt=.5, equil_ps=.01, ps=.1, every_fs=20)
+    old = md_frames(Model("toyice", "cpu", 1), host, argparse.Namespace(**settings), 3, "host")
+    new = md_frames(Model("toyice", "cpu", 1), host,
+        argparse.Namespace(**settings, _progress=Progress(tmp_path / "progress.json")), 3, "host")
+    for a, b in zip(old, new):
+        np.testing.assert_array_equal(a, b)

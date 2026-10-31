@@ -23,6 +23,7 @@ environment, then run from the repository (or invoke the script by absolute path
 bash mlp_pipeline/perlmutter_pwidom.sh --dry-run
 bash mlp_pipeline/perlmutter_pwidom.sh
 bash mlp_pipeline/perlmutter_pwidom_status.sh runs/<output-directory> --gpu
+bash mlp_pipeline/perlmutter_pwidom_status.sh runs/<output-directory> --follow
 ```
 
 Both shell entry points check the environment before starting. `PY=/path/to/python`
@@ -58,7 +59,20 @@ the existing pwidom evaluator (including its batched/single self-check).
 Every run requires a fresh `--out` or creates a timestamped directory: existing
 results are never overwritten or silently reused. `manifest.json` records the
 commands, source paths, resolved model, Git revision, allocation, PIDs and exits;
-each host has a log and the usual pwidom frames/result files. Status is read-only;
+each host has a log and the usual pwidom frames/result files. Status is read-only.
+The launcher streams full emitted host output with `[H2O]` / `[pureH]` prefixes,
+while preserving the full files. `--quiet` restores summary-only output. The
+status script's `--follow` streams logs from an already running scan and prints
+the result summary when the launcher finishes. Ctrl-C stops that viewer only.
+The 30-second heartbeat also reports utilization and used/total memory per GPU
+from nvidia-smi. Optional progress sidecars record equilibration/sampling steps,
+proxy preparation and batched single-point counts, percentages and measured
+**stage** ETA. Initial model loading/first-call compilation has unknown duration;
+ETA says estimating until timed work is available. ETA is not a prediction for
+all remaining stages. Progress is emitted at roughly 10-second intervals and
+stage boundaries, with no extra force evaluations or changes to the sampler.
+Missing telemetry is reported without failing the calculation. Already running
+processes keep their original output behavior until the next run.
 `--gpu` runs nvidia-smi on the machine where status is invoked. On the login node,
 use an overlapping allocation step for GPU monitoring rather than querying login GPUs.
 
