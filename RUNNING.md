@@ -278,6 +278,30 @@ flagged sampling issues; melted/unverified inputs stay excluded. Time hulls also
 refuse melted inputs. See [results conventions](docs/PWIDOM_RESULTS.md) and
 [time-plot details](docs/PWIDOM_TIME_HULLS.md).
 
+## Perlmutter VASP: first single-point test
+
+Use the existing GRACE `PY`/`GRACE_ENV` setup above. The local template supplied
+for these tests is `vasp_inputs/` (INCAR/KPOINTS/POSCAR/POTCAR); it is ignored by
+Git. In a CPU allocation, start with the reported `vasp/5.4.4-cpu` module:
+
+```bash
+export VASP_MODULE=vasp/5.4.4-cpu
+bash mlp_pipeline/perlmutter_vasp_check.sh preflight --template vasp_inputs
+bash mlp_pipeline/perlmutter_vasp_check.sh snapshot \
+  --frames runs/pwidom_300GPa_3000K_reference/pw_H2O_300GPa_3000K_frames.npz \
+  --template vasp_inputs --out runs/vasp_one_snapshot_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_one_snapshot_1 \
+  --ranks 32 --max-points 1 --minutes 20
+bash mlp_pipeline/perlmutter_vasp_check.sh status runs/vasp_one_snapshot_1
+```
+
+This prepares exactly one saved host configuration and runs one VASP SCF, with
+no MD/model calls. Outputs and retries are retained in timestamped attempt dirs;
+SCF convergence is required before accepting TOTEN. Run VASP inside an allocation,
+never on a login node. See [VASP test instructions](docs/PWIDOM_VASP.md) for the
+allocation example, settings audit, paired 40–100-structure check and later batch
+submission. First establish a working executable and actual single-point timing.
+
 ## Other calculations
 
 Use `$PY`/`$MODEL` from the source computer's setup above. Inspect `--help` before
