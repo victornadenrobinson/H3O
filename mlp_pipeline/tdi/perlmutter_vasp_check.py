@@ -438,7 +438,7 @@ def report_training(root,point):
     with np.load(reference,allow_pickle=False) as labels:
         delta=record['TOTEN_eV']-float(labels['energy'])
         result=dict(id=point['id'],energy_difference_eV=delta,energy_difference_meV_atom=delta*1000/point['natoms'])
-        message=f"LABEL {point['id']}: VASP−original={delta:+.6f} eV ({result['energy_difference_meV_atom']:+.3f} meV/atom)"
+        message=f"LABEL {point['id']}: VASP−{point.get('reference_kind','original')}={delta:+.6f} eV ({result['energy_difference_meV_atom']:+.3f} meV/atom)"
         try:
             at=read(directory/record['attempt']/'OUTCAR',format='vasp-out',index=-1)
             expected=read(directory/'POSCAR')
@@ -719,6 +719,10 @@ def main():
     q=sub.add_parser('queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run');q.add_argument('--hosts',nargs='+')
     q=sub.add_parser('prep-queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run',required=True);q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--template',default='vasp_inputs');q.add_argument('--pairs',type=int,default=1);q.add_argument('--out',required=True)
     q=sub.add_parser('mesh-check');q.add_argument('directory');q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--pairs-per-host',type=int,default=1);q.add_argument('--mesh',nargs=3,type=int,default=[2,2,2]);q.add_argument('--out',required=True)
+    q=sub.add_parser('fitprep');q.add_argument('dataset');q.add_argument('--base-train',default='runs/train_m.extxyz');q.add_argument('--base-valid',default='runs/valid_m.extxyz');q.add_argument('--out',required=True)
+    q=sub.add_parser('dataset');q.add_argument('directories',nargs='+');q.add_argument('--seed',type=int,default=17);q.add_argument('--out',required=True)
+    q=sub.add_parser('normal');q.add_argument('--run',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--hosts',nargs='+',default=['H2O','H2p083O','H2p25O','pureH']);q.add_argument('--per-host',type=int,default=10);q.add_argument('--discard-fraction',type=float,default=.5);q.add_argument('--device',default='cpu');q.add_argument('--out',required=True)
+    q=sub.add_parser('baseline');q.add_argument('directory');q.add_argument('--model',required=True);q.add_argument('--device',default='cpu');q.add_argument('--out',required=True)
     q=sub.add_parser('training');q.add_argument('--data',nargs='+',default=['runs/train_m.extxyz','runs/valid_m.extxyz']);q.add_argument('--count',type=int,default=20);q.add_argument('--source-root',default='..');q.add_argument('--template');q.add_argument('--T',type=float);q.add_argument('--P',type=float);q.add_argument('--pressure-window',type=float,default=100);q.add_argument('--out',required=True)
     q=sub.add_parser('snapshot');q.add_argument('--frames',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--frame',type=int,default=-1);q.add_argument('--ensemble',choices=['host','full'],default='host')
     q=sub.add_parser('smoke');q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--T',type=float,default=3000);q.add_argument('--vpa',type=float,default=2.2)
@@ -732,6 +736,9 @@ def main():
     q=sub.add_parser('watch');q.add_argument('directory');q.add_argument('--interval',type=float,default=2.);q.add_argument('--once',action='store_true')
     q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true',help='reevaluate both GRACE energies, even for saved pairs; use --batch 1 for an independent nonbatched audit');q.add_argument('--replay-tol',type=float,default=1e-3);q.add_argument('--forces-stress',action='store_true',help='reevaluate GRACE forces/stress against completed OUTCARs; no new VASP calls');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
     a=p.parse_args()
+    if a.action in ('normal','baseline','dataset','fitprep'):
+        from tdi import vasp_normal_check
+        globals()[a.action]=getattr(vasp_normal_check,a.action)
     try:globals()[a.action.replace('-','_')](a)
     except (ValueError,OSError,KeyError) as exc:raise SystemExit(str(exc))
 

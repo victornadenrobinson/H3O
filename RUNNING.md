@@ -447,3 +447,7 @@ Use `training --count 40 --source-root .. --out runs/vasp_training_40_1`, then
 `run runs/vasp_training_40_1 --exe vasp_gam --ranks 32 --parallel 8 --minutes 50`
 through `bash mlp_pipeline/perlmutter_vasp_check.sh`. Two nodes need
 `--ntasks-per-node=128` (256 tasks total); `-n 128` only supports four such points.
+
+The complete four-part sequence (original-label baseline, ordinary MD, paired
+edge-case replay, and a split retraining dataset) is in
+[PWidom DFT validation](docs/PWIDOM_DFT_VALIDATION.md).
