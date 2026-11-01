@@ -70,8 +70,9 @@ class VaspEngine(Calculator):
             wave=directory/'WAVECAR';warm=previous.get('signature')==signature and wave.exists() and wave.stat().st_size>0
             if not warm:wave.unlink(missing_ok=True)
             dft.write_dft(str(directory),atoms,self.temperature,self.tp,'ASE VASP force engine')
-            with (directory/'INCAR').open('a') as f:
-                f.write(f"ISIF = 2\nISTART = {1 if warm else 0}\nICHARG = 2\nLWAVE = .TRUE.\n")
+            inc=dft.parse_incar(directory/'INCAR')
+            inc.update(ISIF='2',ISTART=str(1 if warm else 0),ICHARG='2',LWAVE='.TRUE.')
+            (directory/'INCAR').write_text(''.join(f'{key} = {value}\n' for key,value in inc.items()))
             # Overwritten active files are scratch only. Completed results are atomic.
             for name in ('OUTCAR','vasprun.xml','CONTCAR'): (directory/name).unlink(missing_ok=True)
             command=self.settings['command'];started=time.perf_counter()

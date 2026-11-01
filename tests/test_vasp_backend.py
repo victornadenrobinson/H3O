@@ -43,7 +43,10 @@ def test_force_order_totEN_cache_and_warm_start(configured):
     assert calc.ncalls==1
     calc.reset();at.get_forces();assert calc.ncalls==1 # persistent geometry cache
     at.positions[0,2]+=.01;at.get_forces();assert calc.ncalls==2
-    assert 'ISTART = 1' in (Path(calc.directory)/'INCAR').read_text()
+    inc=(Path(calc.directory)/'INCAR').read_text()
+    assert 'ISTART = 1' in inc
+    assert inc.count('LWAVE =')==1 and inc.count('ISTART =')==1
+    assert 'LWAVE = .TRUE.' in inc
     assert len(list(calc.cache.glob('*.npz')))==2
     assert 'vasp' not in str(pwidom.model_fingerprint('vasp:'+str(path)))
 
@@ -71,6 +74,8 @@ def test_plan_and_smoke_isolation(configured,tmp_path,monkeypatch):
         template=str(template),exe=str(exe),ice_proxy='none',h_proxy='none')
     dft_pwidom.dft_plan(args)
     manifest=json.loads((out/'dft_plan.json').read_text());assert len(manifest['workers'])==8
+    hydrogen=manifest['workers'][3]['args']
+    assert hydrogen[hydrogen.index('--natoms')+1]=='729'
     assert len({json.loads((Path(w['directory'])/'vasp.json').read_text())['work'] for w in manifest['workers']})==8
     calls=[];monkeypatch.setattr(pwidom,'main',lambda:calls.append(sys.argv.copy()))
     dft_pwidom.dft_worker(Namespace(directory=str(out),index=0,smoke=True))
@@ -91,3 +96,23 @@ def test_same_pwidom_pipeline_runs_with_vasp_force_engine(configured,tmp_path,mo
     assert result['n_ins']==5 and result['n_del']==5
     assert abs(result['mu_ex_bar_meV'])<1e-5
     assert (out/'smoke_host_md.npz').exists() and (out/'smoke_full_md.npz').exists()
+
+
+def test_resize_h_preserves_old_workers_and_density(configured,tmp_path):
+    _,exe,template=configured
+    state=tmp_path/'state.json';state.write_text(json.dumps(dict(P=500.,T=5000.,ice=dict(vpa=2.,B_GPa=1000.,nrep=3,source='test'),
+        h225=dict(vpa=2.1,B_GPa=1100.,nrep=3,source='test'),H=dict(vpa=1.5,B_GPa=1200.,natoms=250,source='test'))))
+    root=tmp_path/'plan'
+    dft_pwidom.dft_plan(Namespace(state_json=str(state),out=str(root),replicates=1,ps=.5,equil_ps=1.,every_fs=20.,sel=4,ndel=4,
+        template=str(template),exe=str(exe),ice_proxy='none',h_proxy='none',h_natoms=250))
+    before=json.loads((root/'dft_plan.json').read_text());old=Path(before['workers'][3]['directory'])
+    sentinel=old/'pw_host_md.npz';sentinel.write_bytes(b'old-checkpoint')
+    dft_pwidom.dft_h_size(Namespace(directory=str(root),natoms=729))
+    after=json.loads((root/'dft_plan.json').read_text())
+    assert after['workers'][:3]==before['workers'][:3]
+    assert sentinel.read_bytes()==b'old-checkpoint'
+    assert after['state']['H']['vpa']==1.5
+    new=after['workers'][3];assert 'pureH729' in new['directory']
+    assert new['args'][new['args'].index('--natoms')+1]=='729'
+    from tdi.run_real import build_h_n
+    assert build_h_n(1.5,729).get_volume()==pytest.approx(729*1.5)

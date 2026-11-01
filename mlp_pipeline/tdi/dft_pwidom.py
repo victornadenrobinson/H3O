@@ -22,6 +22,9 @@ def dft_plan(a):
     if int(a.ps*1000/a.every_fs)<5:raise ValueError('Need at least five sampled frames for existing estimator')
     for key in ('ice','h225','H'):
         if key not in state or not state[key].get('source') or state[key]['vpa']<=0 or state[key]['B_GPa']<=0:raise ValueError('Need complete reviewed EOS state JSON')
+    state['H']['natoms']=getattr(a,'h_natoms',729)
+    from tdi.run_real import build_h_n
+    build_h_n(state['H']['vpa'],state['H']['natoms'])
     if state['ice']['nrep']!=state['h225']['nrep']:raise ValueError('Ice host sizes differ')
     out.mkdir(parents=True);workers=[]
     for replica in range(a.replicates):
@@ -81,3 +84,49 @@ def dft_worker(a):
         results=list(directory.glob('pw_vasp_K*.json'))
         if len(results)==1:
             save(directory/'DONE.json',dict(result=results[0].name,args_sha256=args_hash))
+
+
+def dft_h_size(a):
+    """Move H workers to fresh directories; never resize existing checkpoints."""
+    from tdi.perlmutter_vasp_check import save
+    from tdi.run_real import build_h_n
+    root=Path(a.directory).resolve();plan=json.loads((root/'dft_plan.json').read_text())
+    if a.natoms<700:raise ValueError('Use at least 700 atoms for this Gamma-only reservoir policy')
+    build_h_n(plan['state']['H']['vpa'],a.natoms)
+    changes=[]
+    for worker in plan['workers']:
+        if worker['host']!='pureH':continue
+        args=worker['args'].copy()
+        if int(args[args.index('--natoms')+1])==a.natoms:continue
+        directory=root/f"pureH{a.natoms}_rep{worker['replica']}"
+        if directory.exists():raise ValueError(f'{directory} already exists; refusing overwrite')
+        cfg=json.loads(Path(args[args.index('--model')+1].split(':',1)[1]).read_text())
+        cfg['work']=str(directory/'vasp_work')
+        changes.append((worker,args,directory,cfg))
+    if not changes:print('Requested pure-H size already configured');return
+    for worker,args,directory,cfg in changes:
+        directory.mkdir();configpath=directory/'vasp.json';save(configpath,cfg)
+        args[args.index('--model')+1]='vasp:'+str(configpath)
+        args[args.index('--out')+1]=str(directory)
+        args[args.index('--natoms')+1]=str(a.natoms)
+        worker.update(directory=str(directory),args=args)
+    plan['state']['H']['natoms']=a.natoms
+    save(root/'dft_plan.json',plan)
+    print(f'Updated future H workers to {a.natoms}/{a.natoms+1} atoms at unchanged V/atom. Existing directories/checkpoints and running workers untouched.')
+
+
+def dft_stop_smokes(a):
+    """Request checkpointed stop of only this user's smoke workers for this plan."""
+    root=Path(a.directory).resolve();matched=[]
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name)==os.getpid():continue
+        try:
+            if entry.stat().st_uid!=os.getuid():continue
+            argv=(entry/'cmdline').read_bytes().decode().split('\0')
+            if not any(Path(token).name=='perlmutter_vasp_check.py' for token in argv if token):continue
+            if 'dft-worker' not in argv or '--smoke' not in argv:continue
+            index=argv.index('dft-worker')
+            if Path(argv[index+1]).resolve()!=root:continue
+            os.kill(int(entry.name),signal.SIGTERM);matched.append(int(entry.name))
+        except (OSError,ValueError,IndexError):continue
+    print(f'Stop requested for smoke worker PIDs {matched}. Allow current force calls to finish and checkpoint before restarting.')

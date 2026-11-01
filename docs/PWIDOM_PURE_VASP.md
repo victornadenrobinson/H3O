@@ -110,8 +110,22 @@ and executable stable throughout a campaign. Unset HHWALL for pure DFT.
 
 The Γ-only configuration defines the sampled DFT Hamiltonian. Pure-H k-point and
 finite-size convergence remain separate checks; do not call a Γ reservoir
-converged from the previous two-pair test. The default H cell is 250 atoms,
-matching the prior workflow, rather than the larger Γ-converged cell discussed.
+converged from the previous two-pair test. The default DFT H cell is now 729 atoms (730 with the added H), at unchanged
+EOS V/atom. This implements the requested roughly-700-atom Gamma size criterion;
+convergence at every P/T still needs verification. The MLP launcher default is
+unchanged. Existing 250-atom plans can be migrated with:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh dft-h-size \
+  runs/dft_pwidom_500GPa_5000K_1 --natoms 729
+```
+
+This gives H workers fresh pureH729_rep0/rep1 directories and preserves all old
+250-atom files. Running workers retain their original size until stopped.
+`dft-stop-smokes PLAN` requests SIGTERM only for the current user’s smoke worker
+processes for that exact plan; wait for their current force calls/checkpoints
+before restarting. Generated engine INCARs have unique restart keys (no
+conflicting LWAVE/ISTART entries).
 No collected values alone establish equilibrium, phase stability, BAR overlap,
 pressure-correction accuracy, or a converged convex hull.
 
