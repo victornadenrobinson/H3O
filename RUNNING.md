@@ -295,6 +295,26 @@ bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_one_snapshot_1 \
 bash mlp_pipeline/perlmutter_vasp_check.sh status runs/vasp_one_snapshot_1
 ```
 
+For an actual saved production insertion/deletion pair, use the existing
+candidate queue and its recorded GRACE ΔU instead of regenerating a trial:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh queue \
+  --run runs/pwidom_300GPa_3000K_reference
+bash mlp_pipeline/perlmutter_vasp_check.sh prep-queue \
+  --run runs/pwidom_300GPa_3000K_reference --hosts H2O --pairs 1 \
+  --template vasp_inputs --out runs/vasp_saved_pair_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_saved_pair_1 \
+  --ranks 32 --max-points 2 --minutes 20
+bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_saved_pair_1 \
+  --out runs/plots/vasp_saved_pair_1
+```
+
+A pair is two single-point geometries. Queue import filters to the selected
+run/host tags and checks the saved geometry hashes. Analysis uses `dU_mlp_eV`
+directly; no new GRACE evaluation is required. Weight-selected/extreme requests
+remain labelled diagnostics, not representative DFT free-energy samples.
+
 This prepares exactly one saved host configuration and runs one VASP SCF, with
 no MD/model calls. Outputs and retries are retained in timestamped attempt dirs;
 SCF convergence is required before accepting TOTEN. Run VASP inside an allocation,

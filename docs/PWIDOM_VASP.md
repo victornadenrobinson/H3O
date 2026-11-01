@@ -55,9 +55,44 @@ concurrent execution. The wall cap stops active child process groups and leaves
 unfinished attempts unlabelled. Individual SCF progress is in `vasp.out`/OUTCAR.
 These are single-point restarts, not exact electronic-WAVECAR continuation.
 
+## Prefer the exact saved production pairs when available
+
+`runs/dft_candidates/request_*.json` already links each without-H/with-H geometry
+and its production GRACE **energy difference** `dU_mlp_eV`. The extxyz files do
+not need absolute GRACE-energy labels for this paired comparison. Filter to one
+source run rather than mixing P/T/compositions across the whole queue:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh queue \
+  --run runs/pwidom_300GPa_3000K_reference
+bash mlp_pipeline/perlmutter_vasp_check.sh prep-queue \
+  --run runs/pwidom_300GPa_3000K_reference --hosts H2O --pairs 1 \
+  --template vasp_inputs --out runs/vasp_saved_pair_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_saved_pair_1 \
+  --ranks 32 --max-points 2 --minutes 20
+bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_saved_pair_1 \
+  --out runs/plots/vasp_saved_pair_1
+```
+
+This performs two VASP single points for one ΔU comparison. `--max-points 1` runs
+one geometry first; repeating it skips that completed geometry and runs its
+partner. Later request more pairs, or `--hosts H2O pureH`, subject to the available
+counts printed by `queue`. No samples are manufactured if fewer pairs exist.
+Each pair requires both VASP energies even though its GRACE difference is saved.
+No GRACE/model calls are made by queue preparation or the default saved-pair
+analysis. The source model identity and state must match the selected run.
+
+The importer verifies geometry hashes, the one-H difference and common cell,
+preserves direction/frame/tag/model/reasons/log-weight provenance, and deduplicates
+identical geometry pairs. Multiple eligible groups are selected round-robin.
+Reasons such as `dominant_estimator_weight` and `large_centered_proxy_residual`
+make these targeted diagnostics, not an unbiased equilibrium sample. They must
+not be passed off as a new pure-DFT BAR/free-energy estimate. Source queue and
+run files remain untouched.
+
 ## Next: paired insertion/deletion energies
 
-After the one-snapshot chain works, prepare 40 pairs (80 single-point structures),
+If exact saved requests are unavailable, prepare 40 NEW pairs (80 single-point structures),
 split equally between H2O/pure-H and insertion/deletion, from a completed run:
 
 ```bash

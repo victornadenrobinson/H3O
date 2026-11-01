@@ -181,6 +181,11 @@ def prep(a):
                 trials.append(dict(host=name,direction=direction,frame=int(frame),T=result['T'],P=result['P_target'],
                     proxy=proxy,K=K,phi_eV=ph,lnW=lnw,deleted_index=deleted,model=result['model'],model_fp=result['model_fp'],
                     source_frames=str(framepath),geometries=[without,with_h]))
+    write_pairs(a,tp,trials,dict(run=str(root),seed=a.seed,discard_fraction=a.discard_fraction,
+        note='NEW reproducible proxy trials on cached GRACE ensembles, not a replay of the saved production work arrays. No MD/model/VASP calls during preparation.'))
+
+
+def write_pairs(a,tp,trials,metadata):
     out=Path(a.out).resolve();out.mkdir(parents=True,exist_ok=False)
     points=[];pairs=[]
     for i,trial in enumerate(trials):
@@ -190,12 +195,93 @@ def prep(a):
             dft.write_dft(str(directory),at,trial['T'],tp,f'PWidom validation pair {i}, {trial["direction"]}, {role}')
             ids.append(identity);points.append(dict(id=identity,path=identity,input_sha256=input_hash(directory),natoms=len(at)))
         pairs.append(dict(pair=i,points=ids,**trial))
-    save(out/'manifest.json',dict(schema=1,mode='paired_pwidom_energy_check',template=str(Path(a.template).resolve()),
-        run=str(root),seed=a.seed,discard_fraction=a.discard_fraction,pairs=pairs,points=points,
-        note='NEW reproducible proxy trials on cached GRACE ensembles, not a replay of the saved production work arrays. No MD/model/VASP calls during preparation.'))
+    save(out/'manifest.json',dict(schema=1,mode='paired_pwidom_energy_check',
+        template=str(Path(a.template).resolve()),pairs=pairs,points=points,**metadata))
     (out/'dirs.txt').write_text(''.join(str(out/p['path'])+'\n' for p in points))
     print(f'Prepared {len(pairs)} paired differences / {len(points)} VASP single points in {out}')
-    print('Sampling is diagnostic and correlated within ensembles; these data alone are not pure-VASP free energies.')
+    print('Diagnostic geometries only; these data alone are not pure-VASP free energies.')
+
+
+def queue_entries(a):
+    root=Path(a.queue).resolve()
+    manifest=None;allowed={};runpath=None
+    if a.run:
+        runpath=Path(a.run).resolve();manifest=json.loads((runpath/'manifest.json').read_text())
+        for job in manifest['jobs']:
+            if a.hosts and job['name'] not in a.hosts:continue
+            path=Path(job['result'])
+            if not path.is_file():path=runpath/path.name
+            result=json.loads(path.read_text());allowed[result['tag']]=(job['name'],result)
+        if not allowed:raise ValueError('No matching host tags in the selected run')
+    entries=[]
+    for file in sorted(root.glob('request_*.json')):
+        request=json.loads(file.read_text())
+        if runpath:
+            source=Path(request.get('run','')).resolve()
+            if source!=runpath:continue
+            if request.get('tag') not in allowed:continue
+            host,result=allowed[request['tag']]
+            if (request.get('model_fp')!=result.get('model_fp') or request.get('T_K')!=result['T']
+                    or request.get('P_GPa')!=result['P_target']):
+                raise ValueError(f'{file}: queue/result state or Hamiltonian mismatch')
+        else:host=request.get('tag','unknown')
+        if request.get('direction') not in ('insertion','deletion') or 'dU_mlp_eV' not in request:continue
+        if request.get('geometry_order')!=['host_without_selected_H','host_with_selected_H']:
+            raise ValueError(f'{file}: geometry order missing or unsupported')
+        if len(request.get('structures',[]))!=2 or not np.isfinite(float(request['dU_mlp_eV'])):
+            raise ValueError(f'{file}: invalid paired request')
+        entries.append((file,host,request))
+    return root,entries
+
+
+def queue(a):
+    _,entries=queue_entries(a)
+    from collections import Counter
+    counts=Counter((r.get('run'),host,r['direction']) for _,host,r in entries)
+    print(json.dumps(dict(groups=[dict(run=run,host=host,direction=direction,pairs=n)
+        for (run,host,direction),n in sorted(counts.items())],total_pairs=len(entries),
+        note='Saved production ΔU and paired geometries. Nothing prepared or evaluated.'),indent=2))
+
+
+def prep_queue(a):
+    if a.pairs<1:raise ValueError('pairs must be positive')
+    if Path(a.out).exists():raise ValueError('Use a fresh output directory')
+    tp=validated_template(a.template);root,entries=queue_entries(a)
+    groups={};seen=set()
+    for file,host,request in entries:
+        identity=tuple(request['structures'])
+        if identity in seen:continue
+        seen.add(identity)
+        groups.setdefault((host,request['direction']),[]).append((file,host,request))
+    if sum(map(len,groups.values()))<a.pairs:
+        raise ValueError(f'Only {sum(map(len,groups.values()))} unique saved pairs match; choose fewer or list queue groups')
+    chosen=[]
+    while len(chosen)<a.pairs:
+        for key in sorted(groups):
+            if groups[key] and len(chosen)<a.pairs:chosen.append(groups[key].pop(0))
+    from tdi.pwidom_candidates import geometry_id
+    from collections import Counter
+    trials=[]
+    for file,host,r in chosen:
+        atoms=[]
+        for name in r['structures']:
+            path=(root/name).resolve()
+            if path.parent!=root or path.suffix!='.extxyz':raise ValueError('Queue geometry must be a direct extxyz child')
+            at=read(path)
+            if geometry_id(at)!=path.stem:raise ValueError(f'{path}: geometry hash changed; saved GRACE ΔU cannot be trusted')
+            atoms.append(at)
+        without,with_h=atoms
+        if len(with_h)!=len(without)+1 or not np.allclose(with_h.cell,without.cell) or not np.array_equal(with_h.pbc,without.pbc):
+            raise ValueError(f'{file}: invalid paired cell/species')
+        def sites(at):return Counter((int(z),*np.round(pos,7)) for z,pos in zip(at.numbers,at.positions))
+        extra=sites(with_h)-sites(without);missing=sites(without)-sites(with_h)
+        if missing or sum(extra.values())!=1 or next(iter(extra))[0]!=1:raise ValueError(f'{file}: pair must differ by exactly one H')
+        trials.append(dict(host=host,direction=r['direction'],frame=r['frame'],T=r['T_K'],P=r['P_GPa'],
+            K=r['K'],phi_eV=r['phi_eV'],lnW=None,proxy=r['proxy'],model=r['model'],model_fp=r['model_fp'],
+            source_frames=r['source_frames'],tag=r['tag'],trial=r.get('trial'),request_file=str(file),
+            dU_mlp_eV=float(r['dU_mlp_eV']),log_weight=r['log_weight'],reasons=r.get('reasons',[]),geometries=atoms))
+    write_pairs(a,tp,trials,dict(run=str(Path(a.run).resolve()),queue=str(root),
+        note='EXACT saved production pairs and GRACE ΔU; round-robin across available host/direction groups. Targeted/weight-selected diagnostics, not unbiased DFT ensemble samples.'))
 
 
 def snapshot(a):
@@ -334,7 +420,10 @@ def analyze(a):
         row.update(complete=complete,dU_DFT_eV=None,dU_MLP_eV=None,DFT_minus_MLP_eV=None)
         if complete:
             row['dU_DFT_eV']=records[ids[1]]['TOTEN_eV']-records[ids[0]]['TOTEN_eV']
-            if a.compare_mlp:
+            if pair.get('dU_mlp_eV') is not None:
+                row['dU_MLP_eV']=float(pair['dU_mlp_eV'])
+                row['DFT_minus_MLP_eV']=row['dU_DFT_eV']-row['dU_MLP_eV']
+            elif a.compare_mlp:
                 model=pair['model']
                 if pw.model_fingerprint(model)!=pair['model_fp']:raise ValueError('Saved GRACE Hamiltonian changed; refuse comparison')
                 if model not in model_cache:model_cache[model]=pw.Model(model,a.device,a.batch)
@@ -379,6 +468,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='action',required=True)
     q=sub.add_parser('discover');q.add_argument('--inventory',default='runs/inventory_binned.csv');q.add_argument('--limit',type=int,default=5)
     q=sub.add_parser('preflight');q.add_argument('--template',default='vasp_inputs');q.add_argument('--exe',default=os.environ.get('VASP_EXE','vasp_std'));q.add_argument('--train-outcar',type=Path)
+    q=sub.add_parser('queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run');q.add_argument('--hosts',nargs='+')
+    q=sub.add_parser('prep-queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run',required=True);q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--template',default='vasp_inputs');q.add_argument('--pairs',type=int,default=1);q.add_argument('--out',required=True)
     q=sub.add_parser('snapshot');q.add_argument('--frames',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--frame',type=int,default=-1);q.add_argument('--ensemble',choices=['host','full'],default='host')
     q=sub.add_parser('smoke');q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--T',type=float,default=3000);q.add_argument('--vpa',type=float,default=2.2)
     q=sub.add_parser('prep');q.add_argument('--run',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True)
@@ -390,7 +481,7 @@ def main():
     q=sub.add_parser('status');q.add_argument('directory')
     q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
     a=p.parse_args()
-    try:globals()[a.action](a)
+    try:globals()[a.action.replace('-','_')](a)
     except (ValueError,OSError,KeyError) as exc:raise SystemExit(str(exc))
 
 

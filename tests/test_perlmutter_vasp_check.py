@@ -125,3 +125,49 @@ def test_exactly_one_cached_snapshot(prepared,tmp_path):
     np.testing.assert_allclose(at.cell.array,cell)
     with np.load(cache) as z:
         np.testing.assert_allclose(np.sort(at.get_scaled_positions()%1,axis=0),np.sort((z['host'][-1]@np.linalg.inv(cell))%1,axis=0))
+
+
+def make_queue(prepared,tmp_path):
+    from ase import Atoms
+    from tdi.pwidom_candidates import enqueue
+    _,args,cell=prepared
+    queue=tmp_path/'queue'
+    with np.load(Path(args.run)/'pw_H2O_frames.npz') as z:
+        host=Atoms(numbers=z['numbers'],positions=z['host'][4],cell=cell,pbc=True)
+    full=host+Atoms('H',positions=[[.5,.5,.5]])
+    metadata=dict(run=str(Path(args.run).resolve()),tag='pw_H2O',direction='insertion',
+        geometry_order=['host_without_selected_H','host_with_selected_H'],dU_mlp_eV=-.05,
+        model='toyice',model_fp=pw.model_fingerprint('toyice'),T_K=3000.,P_GPa=300.,
+        K=2000,frame=4,trial=0,phi_eV=.1,proxy='none',log_weight=1.,
+        source_frames=str(Path(args.run)/'pw_H2O_frames.npz'),reasons=['representative'])
+    enqueue(queue,[host,full],metadata)
+    enqueue(queue,[host,full],dict(metadata,run=str(tmp_path/'another_run')))
+    return queue,Namespace(queue=str(queue),run=args.run,hosts=['H2O'],pairs=1,template=args.template,out=str(tmp_path/'queued'))
+
+
+def test_saved_queue_filtered_and_analyzed_without_model(prepared,tmp_path,monkeypatch):
+    queue,args=make_queue(prepared,tmp_path)
+    check.prep_queue(args)
+    out=Path(args.out);manifest=json.loads((out/'manifest.json').read_text())
+    assert len(manifest['pairs'])==1 and len(manifest['points'])==2
+    assert manifest['pairs'][0]['dU_mlp_eV']==-.05
+    assert manifest['pairs'][0]['request_file'].startswith(str(queue))
+    monkeypatch.setenv('SLURM_JOB_ID','test');exe=fake_vasp(tmp_path)
+    check.run(runner_args(out,exe))
+    def no_model(*a,**k):raise AssertionError('Saved GRACE difference must not trigger model calls')
+    monkeypatch.setattr(pw,'Model',no_model)
+    analysis=tmp_path/'queued_analysis'
+    check.analyze(Namespace(directory=str(out),out=str(analysis),compare_mlp=False,device='cpu',batch=1))
+    import csv
+    row=next(csv.DictReader((analysis/'paired_energies.csv').open()))
+    assert float(row['dU_DFT_eV'])==pytest.approx(-.1)
+    assert float(row['dU_MLP_eV'])==pytest.approx(-.05)
+    assert float(row['DFT_minus_MLP_eV'])==pytest.approx(-.05)
+
+
+def test_queue_geometry_changes_refused(prepared,tmp_path):
+    from ase.io import write
+    queue,args=make_queue(prepared,tmp_path)
+    file=next(queue.glob('*.extxyz'));at=read(file);at.positions+=.01;write(file,at,format='extxyz')
+    with pytest.raises(ValueError,match='hash changed'):check.prep_queue(args)
+    assert not Path(args.out).exists()
