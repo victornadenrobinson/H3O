@@ -171,3 +171,29 @@ def test_queue_geometry_changes_refused(prepared,tmp_path):
     file=next(queue.glob('*.extxyz'));at=read(file);at.positions+=.01;write(file,at,format='extxyz')
     with pytest.raises(ValueError,match='hash changed'):check.prep_queue(args)
     assert not Path(args.out).exists()
+
+
+def test_four_concurrent_points_and_allocation_limit(prepared,tmp_path,monkeypatch):
+    out,_,_=prepared;exe=fake_vasp(tmp_path)
+    text=exe.read_text();lines=text.splitlines(keepends=True)
+    lines.insert(1,"import os,time\nfrom pathlib import Path\ntrace=Path(os.environ['FAKE_VASP_TRACE'])\nwith trace.open('a') as f:f.write(f'S {os.getpid()} {time.monotonic_ns()}\\n')\ntime.sleep(.8)\n")
+    lines.append("with trace.open('a') as f:f.write(f'E {os.getpid()} {time.monotonic_ns()}\\n')\n")
+    exe.write_text(''.join(lines));trace=tmp_path/'trace'
+    monkeypatch.setenv('SLURM_JOB_ID','test');monkeypatch.setenv('SLURM_NTASKS','4');monkeypatch.setenv('FAKE_VASP_TRACE',str(trace))
+    check.run(runner_args(out,exe,parallel=4,max_points=4))
+    events=sorted((int(line.split()[2]),line.split()[0]) for line in trace.read_text().splitlines())
+    active=peak=0
+    for _,event in events:
+        active+=1 if event=='S' else -1;peak=max(peak,active)
+    assert peak==4 and active==0
+    manifest=json.loads((out/'manifest.json').read_text())
+    assert sum(check.done(out/p['path']) is not None for p in manifest['points'])==4
+    monkeypatch.setenv('SLURM_NTASKS','3')
+    with pytest.raises(ValueError,match='Packing needs'):check.run(runner_args(out,exe,parallel=4,max_points=4))
+
+
+def test_parallel_srun_is_exclusive_and_exact(prepared,tmp_path,capsys):
+    out,_,_=prepared;exe=fake_vasp(tmp_path)
+    check.run(runner_args(out,exe,launcher='srun',parallel=4,max_points=4,dry_run=True))
+    output=capsys.readouterr().out
+    assert '--exclusive --exact --ntasks 1' in output

@@ -46,6 +46,13 @@ magnetic templates require explicit review rather than silently using wrong
 settings. NCORE/KPAR must divide the selected ranks; parallel settings are not
 silently rewritten.
 
+`run --parallel 4 --ranks 32` packs four independent MPI points into a 128-rank
+allocation. Each srun step uses `--exclusive --exact` CPU resources; allocation
+capacity is validated. Outputs, locks and convergence records are independent.
+No new GRACE calls are made when analyzing exact saved queue pairs. Stop launching
+new work after a failure; already-running points can finish within the wall cap.
+TERM/INT/HUP or the cap stop every active process group and preserve its attempt.
+
 Results go under each point's `attempts/<timestamp>/`. Existing attempts are
 never overwritten. Only an exit-zero OUTCAR with finite free-energy TOTEN,
 EDIFF convergence and the timing footer gets a `DONE.json`; completed points are

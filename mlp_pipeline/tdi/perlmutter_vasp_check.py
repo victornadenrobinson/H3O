@@ -318,79 +318,115 @@ def smoke(a):
 
 def run(a):
     root=Path(a.directory).resolve();manifest=json.loads((root/'manifest.json').read_text())
-    points=manifest['points']
+    points=manifest['points'];parallel=getattr(a,'parallel',1)
     if a.index is not None:
         if not 0<=a.index<len(points):raise ValueError('Task index outside prepared point list')
         points=[points[a.index]]
-    if (a.ranks<1 or not np.isfinite(a.minutes) or a.minutes<=0
+    if (a.ranks<1 or parallel<1 or not np.isfinite(a.minutes) or a.minutes<=0
             or not np.isfinite(a.margin_seconds) or a.margin_seconds<0
             or (a.max_points is not None and a.max_points<1)):
-        raise ValueError('Positive ranks/minutes/max-points and finite nonnegative margin required')
+        raise ValueError('Positive ranks/parallel/minutes/max-points and finite nonnegative margin required')
     exe=shutil.which(a.exe)
     if not exe:raise ValueError(f'{a.exe} not found; load the selected VASP module')
     if not a.dry_run and not os.environ.get('SLURM_JOB_ID'):
         raise ValueError('Run VASP inside a Slurm allocation, not on the login node')
     launcher=shlex.split(a.launcher)
-    command=launcher+(['--ntasks',str(a.ranks),'--cpus-per-task=1','--cpu-bind=cores'] if Path(launcher[0]).name=='srun' else [])+[exe] if launcher else [exe]
-    deadline=time.monotonic()+a.minutes*60;stopped=[None];previous={};completed=0;ran=0;failed=0
+    is_srun=bool(launcher and Path(launcher[0]).name=='srun')
+    command=launcher+(['--exclusive','--exact','--ntasks',str(a.ranks),'--cpus-per-task=1','--cpu-bind=cores'] if is_srun else [])+[exe]
+    pending=[];completed=0
+    for point in points:
+        directory=root/point['path']
+        if input_hash(directory)!=point['input_sha256']:raise ValueError(f'{directory}: inputs changed since preparation')
+        if done(directory):completed+=1;print(f'SKIP converged {point["id"]}',flush=True);continue
+        inc=dft.parse_incar(directory/'INCAR');ncore=int(inc.get('NCORE','1'));kpar=int(inc.get('KPAR','1'))
+        if ncore<1 or kpar<1 or a.ranks%(ncore*kpar):
+            raise ValueError(f'{point["id"]}: ranks={a.ranks} incompatible with NCORE={ncore}, KPAR={kpar}; review parallel settings')
+        pending.append(point)
+    if a.max_points is not None:pending=pending[:a.max_points]
+    allocated=int(os.environ.get('SLURM_NTASKS','0'))
+    needed=min(parallel,len(pending))*a.ranks
+    if not a.dry_run and parallel>1 and (allocated<needed):
+        raise ValueError(f'Packing needs {needed} allocated MPI ranks; SLURM_NTASKS={allocated}. Request enough ranks with salloc -n.')
+    print(f'Packing up to {parallel} independent VASP points × {a.ranks} MPI ranks; OMP_NUM_THREADS=1',flush=True)
+    if a.dry_run:
+        for point in pending:print(f'{point["id"]}: {shlex.join(command)}',flush=True)
+        return
+    deadline=time.monotonic()+a.minutes*60;stopped=[None];previous={};active=[];ran=0;failed=0;budget_stop=False
     def stop(signum,frame):stopped[0]=signum
-    if not a.dry_run:
-        for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):previous[sig]=signal.signal(sig,stop)
+    def launch(point):
+        directory=root/point['path'];lock=(directory/'.run.lock').open('a')
+        log=None
+        try:
+            try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:raise ValueError(f'{point["id"]}: another runner holds this point lock')
+            if done(directory):lock.close();return None
+            attempt=directory/'attempts'/(time.strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:8])
+            attempt.mkdir(parents=True,exist_ok=False)
+            for name in ('INCAR','KPOINTS','POSCAR','structure.extxyz'):
+                if (directory/name).exists():shutil.copy2(directory/name,attempt/name)
+            (attempt/'POTCAR').symlink_to(directory/'POTCAR')
+            save(attempt/'attempt.json',dict(command=command,input_sha256=point['input_sha256'],allocation=os.environ.get('SLURM_JOB_ID'),
+                started=time.strftime('%Y-%m-%dT%H:%M:%S%z'),parallel=parallel,note='New isolated attempt; prior outputs preserved'))
+            log=(attempt/'vasp.out').open('x')
+            process=subprocess.Popen(command,cwd=attempt,env=dict(os.environ,OMP_NUM_THREADS='1'),
+                stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            print(f'START {point["id"]}: {shlex.join(command)}',flush=True)
+            return dict(point=point,directory=directory,attempt=attempt,lock=lock,log=log,process=process,started=time.monotonic())
+        except BaseException:
+            if log:log.close()
+            lock.close();raise
+    def finish(job):
+        nonlocal completed,failed
+        process=job['process'];code=process.wait();job['log'].close()
+        energy=converged(job['attempt']/'OUTCAR');timing=time.monotonic()-job['started']
+        try:
+            save(job['attempt']/'exit.json',dict(exit_code=code,wall_seconds=timing,electronic_converged=energy is not None))
+            if code==0 and energy is not None:
+                save(job['directory']/'DONE.json',dict(energy,input_sha256=job['point']['input_sha256'],
+                    attempt=str(job['attempt'].relative_to(job['directory'])),wall_seconds=timing,ranks=a.ranks))
+                completed+=1;print(f'DONE {job["point"]["id"]}: TOTEN={energy["TOTEN_eV"]:.9f} eV, wall={timing:.1f}s',flush=True)
+            else:
+                failed+=1;print(f'INCOMPLETE {job["point"]["id"]}: exit={code}; converged TOTEN not accepted; inspect {job["attempt"]}',flush=True)
+        finally:job['lock'].close()
+    def terminate():
+        for job in active:
+            if job['process'].poll() is None:
+                try:os.killpg(job['process'].pid,signal.SIGTERM)
+                except ProcessLookupError:pass
+        end=time.monotonic()+5
+        while any(j['process'].poll() is None for j in active) and time.monotonic()<end:time.sleep(.1)
+        for job in list(active):
+            if job['process'].poll() is None:
+                try:os.killpg(job['process'].pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+            finish(job);active.remove(job)
+    for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):previous[sig]=signal.signal(sig,stop)
+    last_report=time.monotonic()
     try:
-        for point in points:
-            directory=root/point['path']
-            if input_hash(directory)!=point['input_sha256']:raise ValueError(f'{directory}: inputs changed since preparation')
-            if done(directory):completed+=1;print(f'SKIP converged {point["id"]}',flush=True);continue
-            inc=dft.parse_incar(directory/'INCAR')
-            ncore=int(inc.get('NCORE','1'));kpar=int(inc.get('KPAR','1'))
-            if ncore<1 or kpar<1 or a.ranks%(ncore*kpar):raise ValueError(f'{point["id"]}: ranks={a.ranks} incompatible with NCORE={ncore}, KPAR={kpar}; review parallel settings')
-            print(f'{point["id"]}: {shlex.join(command)}',flush=True)
-            if a.dry_run:continue
-            if a.max_points is not None and ran>=a.max_points:break
-            if stopped[0] is not None or deadline-time.monotonic()<a.margin_seconds:break
-            with (directory/'.run.lock').open('a') as lock:
-                try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                except BlockingIOError:raise ValueError(f'{point["id"]}: another runner holds this point lock')
-                if done(directory):completed+=1;continue
-                attempt=directory/'attempts'/(time.strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:8])
-                attempt.mkdir(parents=True,exist_ok=False)
-                for name in ('INCAR','KPOINTS','POSCAR','structure.extxyz'):
-                    if (directory/name).exists():shutil.copy2(directory/name,attempt/name)
-                (attempt/'POTCAR').symlink_to(directory/'POTCAR')
-                save(attempt/'attempt.json',dict(command=command,input_sha256=point['input_sha256'],allocation=os.environ.get('SLURM_JOB_ID'),
-                    started=time.strftime('%Y-%m-%dT%H:%M:%S%z'),note='New attempt; prior outputs preserved'))
-                started=time.monotonic();ran+=1
-                env=dict(os.environ,OMP_NUM_THREADS='1')
-                with (attempt/'vasp.out').open('x') as log:
-                    process=subprocess.Popen(command,cwd=attempt,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-                    while process.poll() is None:
-                        if stopped[0] is not None or time.monotonic()>=deadline:
-                            try:os.killpg(process.pid,signal.SIGTERM)
-                            except ProcessLookupError:pass
-                            try:process.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                try:os.killpg(process.pid,signal.SIGKILL)
-                                except ProcessLookupError:pass
-                                process.wait()
-                            break
-                        time.sleep(.2)
-                code=process.wait();energy=converged(attempt/'OUTCAR')
-                timing=time.monotonic()-started
-                save(attempt/'exit.json',dict(exit_code=code,wall_seconds=timing,electronic_converged=energy is not None))
-                if code==0 and energy is not None:
-                    record=dict(energy,input_sha256=point['input_sha256'],attempt=str(attempt.relative_to(directory)),
-                                wall_seconds=timing,ranks=a.ranks)
-                    save(directory/'DONE.json',record);completed+=1
-                    print(f'DONE {point["id"]}: TOTEN={energy["TOTEN_eV"]:.9f} eV, wall={timing:.1f}s',flush=True)
-                else:
-                    failed+=1;print(f'INCOMPLETE {point["id"]}: exit={code}; converged TOTEN not accepted; inspect {attempt}',flush=True)
-                    break
+        while pending or active:
+            if stopped[0] is not None or time.monotonic()>=deadline:
+                budget_stop=time.monotonic()>=deadline;terminate();break
+            if pending and deadline-time.monotonic()<a.margin_seconds:budget_stop=True
+            while pending and len(active)<parallel and not failed and not budget_stop:
+                point=pending.pop(0);job=launch(point)
+                if job:active.append(job);ran+=1
+                else:completed+=1
+            for job in list(active):
+                if job['process'].poll() is not None:finish(job);active.remove(job)
+            if not active and (failed or budget_stop or not pending):break
+            if time.monotonic()-last_report>=10:
+                print(f'Progress: {completed} complete; {len(active)} running; {len(pending)} queued in this invocation',flush=True)
+                last_report=time.monotonic()
+            time.sleep(.2)
     finally:
-        for sig,handler in previous.items():signal.signal(sig,handler)
+        try:
+            if active:terminate()
+        finally:
+            for sig,handler in previous.items():signal.signal(sig,handler)
     print(f'{completed} selected points complete, {ran} attempted now, {failed} failed/incomplete; old attempts preserved')
-    if failed:raise SystemExit(1)
     if stopped[0] is not None:raise SystemExit(128+stopped[0])
-    if not a.dry_run and time.monotonic()>=deadline-a.margin_seconds and completed<len(points):raise SystemExit(124)
+    if failed:raise SystemExit(1)
+    if budget_stop and pending:raise SystemExit(124)
 
 
 def status(a):
@@ -476,7 +512,7 @@ def main():
     q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--pairs',type=int,default=40);q.add_argument('--K',type=int,default=2000)
     q.add_argument('--discard-fraction',type=float,default=.5);q.add_argument('--seed',type=int,default=17)
     q=sub.add_parser('run');q.add_argument('directory');q.add_argument('--exe',default=os.environ.get('VASP_EXE','vasp_std'))
-    q.add_argument('--launcher',default='srun');q.add_argument('--ranks',type=int,default=32);q.add_argument('--minutes',type=float,default=20)
+    q.add_argument('--launcher',default='srun');q.add_argument('--ranks',type=int,default=32);q.add_argument('--parallel',type=int,default=1,help='independent concurrent VASP points; ranks are per point');q.add_argument('--minutes',type=float,default=20)
     q.add_argument('--margin-seconds',type=float,default=60);q.add_argument('--max-points',type=int);q.add_argument('--index',type=int);q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('status');q.add_argument('directory')
     q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)

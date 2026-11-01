@@ -310,6 +310,28 @@ bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_saved_pair_1 \
   --out runs/plots/vasp_saved_pair_1
 ```
 
+To use a 128-rank interactive allocation for **four independent 32-rank VASP
+points**, prepare 20 saved pairs (40 structures) and pack the runner:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh prep-queue \
+  --run runs/pwidom_300GPa_3000K_reference \
+  --hosts H2O H2p083O H2p25O pureH --pairs 20 \
+  --template vasp_inputs --out runs/vasp_saved_40_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_saved_40_1 \
+  --ranks 32 --parallel 4 --minutes 25
+bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_saved_40_1 \
+  --out runs/plots/vasp_saved_40_1
+```
+
+Each concurrent `srun` uses `--exclusive --exact`, one OpenMP thread per rank,
+and its own directory/log/lock. Allocation rank count is checked before launch;
+completed points are skipped and interrupted attempts remain available. The
+analysis uses the queue's saved GRACE ΔU without model calls. At the measured
+87.1 s per point, 40 structures would take roughly 15 minutes in four lanes,
+not 10; shared-node throughput and SCF costs must be measured. Forty pairs means
+80 structures and roughly twice that time. Check allocation time remaining.
+
 A pair is two single-point geometries. Queue import filters to the selected
 run/host tags and checks the saved geometry hashes. Analysis uses `dU_mlp_eV`
 directly; no new GRACE evaluation is required. Weight-selected/extreme requests
