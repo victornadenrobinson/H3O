@@ -1,0 +1,176 @@
+tail -n 20 runs/dft_pwidom_500GPa_5000K_1/smoke_*
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_0.log <==
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+RESUME host: step 3/24, 0/5 saved frames; no velocity reset or repeated equilibration
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 3/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/smoke/pw_host_md.npz
+VASP force call 1: 324 atoms, 268.4s, warm=False, E=-575.94164017 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/smoke/pw_host_md.npz
+VASP force call 2: 324 atoms, 98.3s, warm=False, E=-597.80179233 eV
+VASP force call 3: 324 atoms, 76.6s, warm=False, E=-626.23357834 eV
+VASP force call 4: 324 atoms, 81.1s, warm=False, E=-649.99637241 eV
+VASP force call 5: 324 atoms, 71.1s, warm=False, E=-663.12274033 eV
+CHECKPOINT host: step 8/24, 1/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/smoke/pw_host_md.npz
+VASP force call 6: 324 atoms, 76.2s, warm=False, E=-657.56569229 eV
+VASP force call 7: 324 atoms, 63.7s, warm=False, E=-643.35614242 eV
+VASP force call 8: 324 atoms, 86.9s, warm=False, E=-640.66463428 eV
+VASP force call 9: 324 atoms, 79.4s, warm=False, E=-636.47944294 eV
+CHECKPOINT host: step 12/24, 2/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/smoke/pw_host_md.npz
+VASP force call 10: 324 atoms, 69.1s, warm=False, E=-628.46405072 eV
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_1.log <==
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 0/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/smoke/pw_host_md.npz
+VASP force call 1: 333 atoms, 94.4s, warm=False, E=-457.62409753 eV
+VASP force call 2: 333 atoms, 70.0s, warm=False, E=-470.10735143 eV
+VASP force call 3: 333 atoms, 69.9s, warm=False, E=-492.96886181 eV
+VASP force call 4: 333 atoms, 82.5s, warm=False, E=-515.99077508 eV
+CHECKPOINT host: step 3/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/smoke/pw_host_md.npz
+VASP force call 5: 333 atoms, 92.2s, warm=False, E=-532.53909367 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/smoke/pw_host_md.npz
+VASP force call 6: 333 atoms, 87.8s, warm=False, E=-549.89633828 eV
+VASP force call 7: 333 atoms, 92.5s, warm=False, E=-579.80621584 eV
+VASP force call 8: 333 atoms, 89.2s, warm=False, E=-614.55963600 eV
+VASP force call 9: 333 atoms, 92.9s, warm=False, E=-637.90232899 eV
+CHECKPOINT host: step 8/24, 1/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/smoke/pw_host_md.npz
+VASP force call 10: 333 atoms, 99.8s, warm=False, E=-646.40035427 eV
+VASP force call 11: 333 atoms, 75.7s, warm=False, E=-641.75731359 eV
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_2.log <==
+  3) craype-network-ofi   6) cray-dsmml/0.3.1                 9) cray-mpich/9.1.0     12) cpe/26.03               15) cpu/1.0
+
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 0/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/smoke/pw_host_md.npz
+VASP force call 1: 351 atoms, 295.4s, warm=False, E=-403.11150497 eV
+VASP force call 2: 351 atoms, 91.5s, warm=False, E=-410.30526453 eV
+CHECKPOINT host: step 1/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/smoke/pw_host_md.npz
+VASP force call 3: 351 atoms, 87.7s, warm=False, E=-430.82686362 eV
+VASP force call 4: 351 atoms, 93.6s, warm=False, E=-454.63447055 eV
+VASP force call 5: 351 atoms, 97.8s, warm=False, E=-478.41200759 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/smoke/pw_host_md.npz
+VASP force call 6: 351 atoms, 100.1s, warm=False, E=-503.67685288 eV
+VASP force call 7: 351 atoms, 91.2s, warm=False, E=-532.02690994 eV
+VASP force call 8: 351 atoms, 83.1s, warm=False, E=-564.31144913 eV
+VASP force call 9: 351 atoms, 267.6s, warm=False, E=-596.23266110 eV
+CHECKPOINT host: step 8/24, 1/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/smoke/pw_host_md.npz
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_3.log <==
+CHECKPOINT host + 1 H: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/pureH_rep0/smoke/pw_full_md.npz
+VASP force call 31: 251 atoms, 22.9s, warm=False, E=-209.69838766 eV
+VASP force call 32: 251 atoms, 23.2s, warm=False, E=-201.09599735 eV
+VASP force call 33: 251 atoms, 23.9s, warm=False, E=-196.37534818 eV
+VASP force call 34: 251 atoms, 23.1s, warm=False, E=-195.87206121 eV
+VASP force call 35: 251 atoms, 22.8s, warm=False, E=-198.56459264 eV
+VASP force call 36: 251 atoms, 22.0s, warm=False, E=-202.61386145 eV
+VASP force call 37: 251 atoms, 20.2s, warm=False, E=-205.57757275 eV
+VASP force call 38: 251 atoms, 19.9s, warm=False, E=-206.97174561 eV
+VASP force call 39: 251 atoms, 19.8s, warm=False, E=-208.20103817 eV
+VASP force call 40: 251 atoms, 19.8s, warm=False, E=-209.82770912 eV
+VASP force call 41: 251 atoms, 19.8s, warm=False, E=-210.57637103 eV
+VASP force call 42: 251 atoms, 21.4s, warm=False, E=-209.71491710 eV
+VASP force call 43: 251 atoms, 21.2s, warm=False, E=-208.40406282 eV
+VASP force call 44: 251 atoms, 21.0s, warm=False, E=-207.48116352 eV
+CHECKPOINT host + 1 H: step 18/24, 3/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/pureH_rep0/smoke/pw_full_md.npz
+VASP force call 45: 251 atoms, 21.2s, warm=False, E=-206.41916933 eV
+VASP force call 46: 251 atoms, 19.3s, warm=False, E=-205.08279767 eV
+VASP force call 47: 251 atoms, 198.8s, warm=False, E=-203.06588802 eV
+VASP force call 48: 251 atoms, 19.1s, warm=False, E=-201.22982145 eV
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_4.log <==
+  3) craype-network-ofi   6) cray-dsmml/0.3.1                 9) cray-mpich/9.1.0     12) cpe/26.03               15) cpu/1.0
+
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 0/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep1/smoke/pw_host_md.npz
+VASP force call 1: 324 atoms, 280.4s, warm=False, E=-495.78297929 eV
+VASP force call 2: 324 atoms, 108.2s, warm=False, E=-507.93321279 eV
+CHECKPOINT host: step 1/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep1/smoke/pw_host_md.npz
+VASP force call 3: 324 atoms, 82.5s, warm=False, E=-530.93947926 eV
+VASP force call 4: 324 atoms, 97.5s, warm=False, E=-552.59672079 eV
+VASP force call 5: 324 atoms, 84.1s, warm=False, E=-565.93324014 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep1/smoke/pw_host_md.npz
+VASP force call 6: 324 atoms, 82.8s, warm=False, E=-579.74690049 eV
+VASP force call 7: 324 atoms, 79.6s, warm=False, E=-602.52343345 eV
+VASP force call 8: 324 atoms, 80.3s, warm=False, E=-628.65849361 eV
+VASP force call 9: 324 atoms, 88.2s, warm=False, E=-647.26199809 eV
+CHECKPOINT host: step 8/24, 1/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep1/smoke/pw_host_md.npz
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_5.log <==
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 0/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep1/smoke/pw_host_md.npz
+VASP force call 1: 333 atoms, 265.4s, warm=False, E=-534.73565335 eV
+VASP force call 2: 333 atoms, 94.1s, warm=False, E=-538.18935253 eV
+CHECKPOINT host: step 1/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep1/smoke/pw_host_md.npz
+VASP force call 3: 333 atoms, 82.1s, warm=False, E=-550.20775243 eV
+VASP force call 4: 333 atoms, 68.4s, warm=False, E=-564.61321744 eV
+VASP force call 5: 333 atoms, 71.8s, warm=False, E=-579.31454428 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep1/smoke/pw_host_md.npz
+VASP force call 6: 333 atoms, 66.2s, warm=False, E=-598.75164013 eV
+VASP force call 7: 333 atoms, 79.1s, warm=False, E=-621.90951177 eV
+VASP force call 8: 333 atoms, 82.6s, warm=False, E=-645.43223222 eV
+VASP force call 9: 333 atoms, 81.7s, warm=False, E=-665.65434263 eV
+CHECKPOINT host: step 8/24, 1/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep1/smoke/pw_host_md.npz
+VASP force call 10: 333 atoms, 69.6s, warm=False, E=-676.03091649 eV
+VASP force call 11: 333 atoms, 88.8s, warm=False, E=-672.77039856 eV
+VASP force call 12: 333 atoms, 60.0s, warm=False, E=-659.97538968 eV
+VASP force call 13: 333 atoms, 59.0s, warm=False, E=-647.30876589 eV
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_6.log <==
+  2) libfabric/2.3.1      5) gcc-native/14                    8) cray-libsci/26.03.0  11) perftools-base/26.03.0  14) darshan/default
+  3) craype-network-ofi   6) cray-dsmml/0.3.1                 9) cray-mpich/9.1.0     12) cpe/26.03               15) cpu/1.0
+
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+/pscratch/sd/v/victornr/grace-env/lib/python3.11/site-packages/ase/md/langevin.py:102: FutureWarning: The implementation of `fixcm=True` in `Langevin` does not strictly sample the correct NVT distributions. The deviations are typically small for large systems but can be more pronounced for small systems. Use `fixcm=False` together with `ase.constraints.FixCom`. `fixcm` is deprecated since ASE 3.28.0 and will be removed in a future release.
+  warnings.warn(msg, FutureWarning)
+CHECKPOINT host: step 0/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep1/smoke/pw_host_md.npz
+VASP force call 1: 351 atoms, 293.4s, warm=False, E=-435.83707074 eV
+VASP force call 2: 351 atoms, 119.6s, warm=False, E=-441.05200883 eV
+CHECKPOINT host: step 1/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep1/smoke/pw_host_md.npz
+VASP force call 3: 351 atoms, 92.9s, warm=False, E=-458.32983366 eV
+VASP force call 4: 351 atoms, 112.1s, warm=False, E=-480.81034642 eV
+VASP force call 5: 351 atoms, 101.1s, warm=False, E=-502.35853744 eV
+CHECKPOINT host: step 4/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep1/smoke/pw_host_md.npz
+VASP force call 6: 351 atoms, 109.4s, warm=False, E=-524.89023702 eV
+VASP force call 7: 351 atoms, 84.6s, warm=False, E=-552.15614564 eV
+VASP force call 8: 351 atoms, 292.2s, warm=False, E=-581.50630581 eV
+CHECKPOINT host: step 7/24, 0/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep1/smoke/pw_host_md.npz
+
+==> runs/dft_pwidom_500GPa_5000K_1/smoke_7.log <==
+VASP force call 31: 251 atoms, 25.7s, warm=False, E=-205.23468424 eV
+VASP force call 32: 251 atoms, 23.7s, warm=False, E=-197.62238177 eV
+VASP force call 33: 251 atoms, 21.1s, warm=False, E=-194.18758287 eV
+VASP force call 34: 251 atoms, 22.8s, warm=False, E=-195.12078170 eV
+VASP force call 35: 251 atoms, 23.9s, warm=False, E=-199.02048740 eV
+VASP force call 36: 251 atoms, 21.3s, warm=False, E=-204.19358330 eV
+VASP force call 37: 251 atoms, 19.4s, warm=False, E=-209.11742394 eV
+VASP force call 38: 251 atoms, 19.2s, warm=False, E=-212.45294091 eV
+VASP force call 39: 251 atoms, 18.3s, warm=False, E=-213.62602528 eV
+VASP force call 40: 251 atoms, 18.5s, warm=False, E=-213.03102039 eV
+VASP force call 41: 251 atoms, 18.4s, warm=False, E=-211.05614362 eV
+VASP force call 42: 251 atoms, 18.4s, warm=False, E=-208.20653103 eV
+VASP force call 43: 251 atoms, 18.3s, warm=False, E=-207.10510177 eV
+VASP force call 44: 251 atoms, 17.8s, warm=False, E=-209.10389665 eV
+VASP force call 45: 251 atoms, 18.4s, warm=False, E=-211.48351961 eV
+CHECKPOINT host + 1 H: step 19/24, 3/5 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/pureH_rep1/smoke/pw_full_md.npz
+VASP force call 46: 251 atoms, 18.1s, warm=False, E=-212.28576350 eV
+VASP force call 47: 251 atoms, 17.6s, warm=False, E=-211.92807691 eV
+VASP force call 48: 251 atoms, 18.1s, warm=False, E=-211.13835862 eV
+VASP force call 49: 251 atoms, 18.3s, warm=False, E=-210.19967545 eV

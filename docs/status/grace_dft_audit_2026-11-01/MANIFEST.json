@@ -1,0 +1,190 @@
+{
+  "description": "User supplied numerical evidence and derived CSVs; raw inline entries transcribed from chat; uploaded logs retained verbatim.",
+  "files": [
+    {
+      "path": "data/filtered_5000K_baseline_24.csv",
+      "bytes": 473,
+      "sha256": "fb523f1e95e507092e1c048d85a4b5b738bfd9def19908d6d1fce3adcfc4b793"
+    },
+    {
+      "path": "data/measured_finished_results.csv",
+      "bytes": 29871,
+      "sha256": "b410589350c3968c2e1f4ac9b88be0f345c25db2e6880e57af2cf2f09bbe49cd"
+    },
+    {
+      "path": "data/measured_formation_hull.csv",
+      "bytes": 7224,
+      "sha256": "b992423a302303eceb5b48a06aaec7075004e02ae8a73d83e2d8fc5d709b5d69"
+    },
+    {
+      "path": "data/normal_40.csv",
+      "bytes": 1810,
+      "sha256": "f420d8d29c44c5f81e2059002bdec1c5efbc876f25846721f07ed9b645256e0f"
+    },
+    {
+      "path": "data/normal_40_summary.csv",
+      "bytes": 552,
+      "sha256": "5282fcabd60fa42c9fc60862eeecd7ba29ee559778d2241a1fe30e933d3f1463"
+    },
+    {
+      "path": "data/original_baseline_40.csv",
+      "bytes": 767,
+      "sha256": "810c1e210ec9eaf45ea7cada2f252145dd4f16f1eee73d2316245abb8bf3966f"
+    },
+    {
+      "path": "data/paired_20_replay.csv",
+      "bytes": 3654,
+      "sha256": "e3acb530244c9b53e3f22bad14d9cfc1cf18964edeb4b350239581ba2cdabce4"
+    },
+    {
+      "path": "data/paired_partial_analysis_history.csv",
+      "bytes": 1334,
+      "sha256": "c8cb7ac25e034bbb2a8e15ade72379a98264378827ebd47e00ef2f4e35846f54"
+    },
+    {
+      "path": "data/production_latest_calls.csv",
+      "bytes": 5760,
+      "sha256": "a2413025dd86ab0716926d15d890eb8710cab74e5015b34bb83cea98c8063311"
+    },
+    {
+      "path": "data/production_latest_summary.csv",
+      "bytes": 1225,
+      "sha256": "fecc49ded7dcc46d085c923800694edbdbfa2604bea7ed75b408aa410cb6fe1b"
+    },
+    {
+      "path": "data/robust_finished_results.csv",
+      "bytes": 29842,
+      "sha256": "105a0b147ce7ae6f57c6ece3d6854a422408fe18116f994e1f674bd4b6ecf1d3"
+    },
+    {
+      "path": "data/robust_formation_hull.csv",
+      "bytes": 7283,
+      "sha256": "73592c7a1e11e62de081c8bb35f19afa173ce2cf8d719c2b6ee54adff7e5479c"
+    },
+    {
+      "path": "data/selected_mu_dg.csv",
+      "bytes": 23799,
+      "sha256": "436c0aa348e472130204ec40659fcb05f0f3f35a43089e8d776281b87e86d43c"
+    },
+    {
+      "path": "data/selected_tables.md",
+      "bytes": 3065,
+      "sha256": "6d4ff8d8ebf5cb727fc3e50bc6394f1a2effc7fdf597c15d99db4f24f4c92641"
+    },
+    {
+      "path": "data/state_summary.csv",
+      "bytes": 717,
+      "sha256": "35ec86cf6b5c8f3969a24060128ee92cd1505994c61a8b3a6213575c69397e85"
+    },
+    {
+      "path": "data/validation_40_by_composition.csv",
+      "bytes": 1544,
+      "sha256": "10d908ba305f61363bdd86b128d2dfea7aded445a8c00cc9a5203541f0f4bc72"
+    },
+    {
+      "path": "data/validation_40_by_temperature.csv",
+      "bytes": 461,
+      "sha256": "fa8d8d36573fbb2c8ca61378b5ee56987b4d39198b4eb68e553f6bab834db7b9"
+    },
+    {
+      "path": "data/warm_smoke_calls.csv",
+      "bytes": 883,
+      "sha256": "e289af1618433fd045ab7e17587754014e44c88c5f80a7d963024530c266fb96"
+    },
+    {
+      "path": "raw/eos_and_three_job_submissions.txt",
+      "bytes": 9715,
+      "sha256": "0fa2505f4ebef124212b8d7431643d461b800d10dc58b1e5cbc4a9cb0d82d50c"
+    },
+    {
+      "path": "raw/finished_run_discovery.txt",
+      "bytes": 8203,
+      "sha256": "12e64a43bc9e4977dc19332a6de878adbe74b604338a2c0f87b3efaa6a21ec20"
+    },
+    {
+      "path": "raw/initial_audit_request.txt",
+      "bytes": 7903,
+      "sha256": "b607840f7d38c47dd70500f16f2592b052044c08d99e1e2f5cf3fcf3264a34cd"
+    },
+    {
+      "path": "raw/inline_5000K_filtered_baseline_24.txt",
+      "bytes": 513,
+      "sha256": "c68cc535717f3081cad8d8d5412f1e337fdd02fd79fa93ed396ae2f95032cb2a"
+    },
+    {
+      "path": "raw/inline_original_label_grace_baseline_40.txt",
+      "bytes": 768,
+      "sha256": "63f2bdfa0aa12d9d2996bf365915659f608f5c999be654e84de0d6396ee00ed8"
+    },
+    {
+      "path": "raw/inline_original_vasp_reproduction.txt",
+      "bytes": 596,
+      "sha256": "88ebc54682b1ebdf7fd6105869a005497a5c8018497be621f028fa45459fc4f4"
+    },
+    {
+      "path": "raw/inline_production_500GPa_first_tail.txt",
+      "bytes": 729,
+      "sha256": "cdc57ca6af87b351ff873beba6c84d916e3f96ca762124e38580d3cafb3a2583"
+    },
+    {
+      "path": "raw/inline_pureH_k222.txt",
+      "bytes": 791,
+      "sha256": "524cb19889f9a67d572f1305c08481671e4dac5f5b0435e4300665201deaf4d3"
+    },
+    {
+      "path": "raw/inline_settings_and_milestones.md",
+      "bytes": 9506,
+      "sha256": "0124d1c715cf1145c74f1fafd75eec76fdb6ede6695d0950f478f3e36566ac2b"
+    },
+    {
+      "path": "raw/inline_validation_benchmark.txt",
+      "bytes": 2075,
+      "sha256": "d6e78a4569f04bc63ab6c6a13e31b71a11a91d419226f0c11b829d56333c0f84"
+    },
+    {
+      "path": "raw/inline_warm_smoke_calls.txt",
+      "bytes": 1062,
+      "sha256": "ff0608c85bff91fc4bf5cd6993cf01bad4a4fc3fc752d7f220c4c60700a27495"
+    },
+    {
+      "path": "raw/normal_40_vasp_log.txt",
+      "bytes": 17044,
+      "sha256": "e299faca5d1d87d1727c585ee481cc08cd8cb2917dde5b05acd20a2bf7210370"
+    },
+    {
+      "path": "raw/paired_20_independent_replay.txt",
+      "bytes": 5652,
+      "sha256": "c8108af3786e0b75606ca2a69af021f24e293e131d078d575cb513aa7befa308"
+    },
+    {
+      "path": "raw/production_three_jobs_approximately_four_hours.txt",
+      "bytes": 10450,
+      "sha256": "118cb9ad257a56b0a596118495e6fbd6769edaa7a4a9b437f4b24f2d3c3e6ef6"
+    },
+    {
+      "path": "raw/pwidom_44_results_input.json",
+      "bytes": 154451,
+      "sha256": "78b34359ea57cea7cb0baa937ba9a7ba7f06e63f31fdb578d8dcecdc522e6a68"
+    },
+    {
+      "path": "raw/pwidom_44_results_original_upload.txt",
+      "bytes": 154483,
+      "sha256": "52f641e082894a2fbb168c1b8488a50147c209e20b843ca01d09448aea401e3d"
+    },
+    {
+      "path": "raw/smoke_cold_force_calls.txt",
+      "bytes": 15712,
+      "sha256": "608d8a79015e920767f41ddfce8009e5562a61c0a3f195e806e0e4516d4deeaf"
+    },
+    {
+      "path": "raw/smoke_cold_tail_all_workers.txt",
+      "bytes": 15060,
+      "sha256": "83102a686c3219e759d2e359870945d03986ff258ad2dfd9543d5bd8c00eaf2f"
+    },
+    {
+      "path": "raw/young_directory_listing.txt",
+      "bytes": 21776,
+      "sha256": "b34b2a39415f9dc8d8327437e1b8aa6e98e040988b015774aac0c1e3cb4703eb"
+    }
+  ]
+}

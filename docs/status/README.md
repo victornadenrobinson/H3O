@@ -8,6 +8,7 @@ prior snapshots when updating; do not silently combine Young and Perlmutter data
 
 | Snapshot | Source | What is known |
 | --- | --- | --- |
+| [GRACE/DFT audit, 2026-11-01](GRACE_DFT_AUDIT_2026-11-01.md) | Perlmutter outputs supplied in chat, plus existing Young/Perlmutter numerical archives | All supplied DFT validation numbers, old/new energy conventions, paired replay, k-mesh checks, 44-result mu/dG export, CPU timings and 12 production worker tails; raw evidence and CSV appendices. |
 | [Young TDI summary received 2026-10-31](young_tdi_summary_received_2026-10-31.txt) | UCL Young, supplied by the user | Full pasted `summarize.py` output. Actual execution time, node and source Git revision were not supplied. |
 | [Perlmutter 500 GPa / 3000 K reported results](../data/pwidom_pm_500GPa_3000K_reported.csv) | NERSC Perlmutter, allocation 60620660 | Three H/O host values from `runs/pwidom_pm_20261031_105811`; pure H was the reference. All ice-host estimates unconverged. |
 

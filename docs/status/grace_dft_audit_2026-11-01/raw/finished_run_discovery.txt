@@ -1,0 +1,85 @@
+find runs/pwidom* \
+>   -type d \( -name _history -o -name _resume_history \) -prune -o \
+>   -type f -name manifest.json \
+>   -exec grep -HnE '"status"[[:space:]]*:[[:space:]]*"complete"' {} +
+runs/pwidom_300GPa_3000K_extra/manifest.json:334:  "status": "complete"
+runs/pwidom_300GPa_3000K_reference/manifest.json:278:  "status": "complete"
+runs/pwidom_300GPa_4000K_extra/manifest.json:334:  "status": "complete"
+runs/pwidom_300GPa_4000K_reference/manifest.json:278:  "status": "complete"
+runs/pwidom_300GPa_5000K_reference/manifest.json:278:  "status": "complete"
+runs/pwidom_500GPa_2000K_reference/manifest.json:272:  "status": "complete"
+runs/pwidom_500GPa_3000K_extension1/manifest.json:278:  "status": "complete"
+runs/pwidom_500GPa_3000K_nscan1/manifest.json:327:  "status": "complete"
+runs/pwidom_600GPa_2000K_n_5_11_16_22/manifest.json:328:  "status": "complete"
+runs/pwidom_600GPa_2000K_reference/manifest.json:272:  "status": "complete"
+runs/pwidom_pm_20261031_105811/manifest.json:249:  "status": "complete"
+victornr@nid001965:/pscratch/sd/v/victornr/H3O~> find runs/pwidom* \
+>   -type d \( -name _history -o -name _resume_history \) -prune -o \
+>   -type f -name 'pw_*.json' \
+>   -exec grep -HnE '"(T|P_target|phase|hper|N_H|natoms|mu_ex_bar_meV|mu_ex_bar_err_meV|mu_P_meV|mu_P_err_meV|melted|kish_frac_ins)"[[:space:]]*:' {} + \
+>   > /tmp/pwidom_results.txt
+victornr@nid001965:/pscratch/sd/v/victornr/H3O~>
+victornr@nid001965:/pscratch/sd/v/victornr/H3O~> cat /tmp/pwidom_results.txt
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:9: "hper": 2.2037037037037037,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:11: "P_target": 300.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:14: "N_H": 238,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:15: "natoms": 346,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:25: "mu_ex_bar_meV": 2234.1676469499107,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:26: "mu_ex_bar_err_meV": 44.27309094728213,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:29: "kish_frac_ins": 0.03492875297964323,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:62: "melted": false,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:66: "mu_P_meV": 1098.5603470715052,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus22_300GPa_3000K_candidate_K2000.json:67: "mu_P_err_meV": 48.32422057007793,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:9: "hper": 2.148148148148148,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:11: "P_target": 300.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:14: "N_H": 232,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:15: "natoms": 340,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:25: "mu_ex_bar_meV": 1981.0017149539703,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:26: "mu_ex_bar_err_meV": 34.16489303402283,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:29: "kish_frac_ins": 0.007606321843403393,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:62: "melted": false,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:66: "mu_P_meV": 791.4124373449678,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus16_300GPa_3000K_candidate_K2000.json:67: "mu_P_err_meV": 38.33029879296854,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:9: "hper": 2.0462962962962963,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:11: "P_target": 300.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:14: "N_H": 221,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:15: "natoms": 329,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:25: "mu_ex_bar_meV": 1421.3492018990426,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:26: "mu_ex_bar_err_meV": 44.305053235198514,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:29: "kish_frac_ins": 0.06940794060020349,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:62: "melted": false,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:66: "mu_P_meV": 169.00389418520646,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus5_300GPa_3000K_candidate_K2000.json:67: "mu_P_err_meV": 48.83887397757764,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:9: "hper": 2.1018518518518516,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:11: "P_target": 300.0,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:14: "N_H": 227,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:15: "natoms": 335,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:25: "mu_ex_bar_meV": 1730.9701491016192,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:26: "mu_ex_bar_err_meV": 77.90096911729876,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:29: "kish_frac_ins": 0.06875665241605636,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:62: "melted": false,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:66: "mu_P_meV": 508.6848001820804,
+runs/pwidom_300GPa_3000K_extra/pw_Hplus11_300GPa_3000K_candidate_K2000.json:67: "mu_P_err_meV": 78.35472073127643,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:9: "hper": 2.0833333333333335,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:11: "P_target": 300.0,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:14: "N_H": 225,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:15: "natoms": 333,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:25: "mu_ex_bar_meV": 1495.2391094952825,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:26: "mu_ex_bar_err_meV": 45.512372834090975,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:29: "kish_frac_ins": 0.059091267807897745,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:62: "melted": false,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:66: "mu_P_meV": 255.88947729455202,
+runs/pwidom_300GPa_3000K_reference/pw_H2p083O_300GPa_3000K_candidate_K2000.json:67: "mu_P_err_meV": 47.42663392970679,
+runs/pwidom_300GPa_3000K_reference/pw_H2O_300GPa_3000K_candidate_K2000.json:8: "phase": "fcc",
+runs/pwidom_300GPa_3000K_reference/pw_H2O_300GPa_3000K_candidate_K2000.json:9: "hper": 2.0,
+runs/pwidom_300GPa_3000K_reference/pw_H2O_300GPa_3000K_candidate_K2000.json:10: "T": 3000.0,

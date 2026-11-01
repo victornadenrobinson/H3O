@@ -264,3 +264,27 @@ Obtain user go-ahead for expensive runs. Validate paths/model/source provenance 
 Report meV and kT, use 'lambda values', dt=0.5 fs; count insertion per added H.
 DFT energy is TOTEN; virial excludes ionic kinetic pressure; avoid double-counting
 N kT/V. Keep model error, finite sampling and statistical errors distinct.
+
+
+## GRACE–DFT validation update, 2026-11-01
+
+Read [the complete numerical audit](status/GRACE_DFT_AUDIT_2026-11-01.md) before
+interpreting solubility or declaring the model validated. It archives all supplied
+normal/pair/original-label/benchmark results, earlier 44-result mu/dG export, and
+raw logs. H2.25O ordinary 300-GPa/3000-K errors are substantial: raw energy
+RMSE140.87meV/atom, force componentRMSE1.163eV/Angstrom. The older21.684725
+meV/atom benchmark is MAE AFTER fitted elemental offsets, not raw RMSE. All20
+paired GRACE dU reproduce within0.07meV/H; pair selection is deliberately biased.
+Do not add their mean residual to a chemical potential or infer no H solubility.
+
+DFT jobs60649379/380/381 were submitted at500/400/600GPa,5000K, respectively,
+2nodes256tasks48h,4systems64ranks each, one replica. Later pasted worker tails
+confirm all12 workers advancing in host equilibration, with729-H reservoirs and
+warm=True calls. First-replica500-GPa data remain under the original `_1` root;
+400/600 use `_4x64`. Checkpoints242–528/3000 host steps,0/25 production frames,
+are normal before2000-step equilibration finishes. No completed physical DFT
+PWidom/BAR mu/dG has been supplied. Recent H-call medians61–70s imply about
+97–111h remaining MD BEFORE trials if unchanged, not48h guaranteed completion.
+Current state is not a live queue observation. Keep systematic model, sampling,
+finite-size/k-point, phase and numerical errors separate. No retraining/DFT
+free-energy result or SI-phase stability is established by these tails alone.

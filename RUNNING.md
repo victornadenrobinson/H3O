@@ -462,3 +462,7 @@ For four DFT PWidom systems × 64 ranks, use `dft-layout` followed by
 `bash mlp_pipeline/perlmutter_dft_pwidom_run.sh PLAN --smoke --minutes 20`.
 The 48-hour batch script is `mlp_pipeline/perlmutter_dft_pwidom_48h.sbatch`;
 see the final section of [Pure-VASP PWidom](docs/PWIDOM_PURE_VASP.md).
+
+Numerical evidence and current concerns are recorded in
+[GRACE/DFT audit, 2026-11-01](docs/status/GRACE_DFT_AUDIT_2026-11-01.md),
+including all supplied validation rows and the later three-job production tails.

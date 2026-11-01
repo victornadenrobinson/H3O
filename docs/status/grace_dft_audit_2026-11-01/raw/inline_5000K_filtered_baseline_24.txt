@@ -1,0 +1,25 @@
+Transcribed from user inline BASELINE output, selected 5000 K and 600 +/-100 GPa; reindexed independently from the original 40. Columns: GRACE-minus-DFT meV/atom, force component RMSE eV/Angstrom.
+-3.253 .6032
+10.539 .7559
+3.210 .8182
+4.183 .7928
+12.350 .6080
+1.069 .8060
+-3.330 .7036
+-2.491 .6031
+-4.152 .7386
+-15.350 .4494
+-19.552 .4531
+-10.434 .5560
+-11.355 .3902
+5.357 .7090
+-1.006 .7904
+-13.453 .3969
+-7.586 .7662
+-9.379 .4614
+19.887 .8325
+10.190 .7479
+-11.596 .3936
+-29.374 .7893
+-10.684 .5300
+-2.259 .7934

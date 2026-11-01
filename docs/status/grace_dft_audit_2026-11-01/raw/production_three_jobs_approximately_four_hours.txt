@@ -1,0 +1,144 @@
+tail /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_*/*/worker.log
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2O_rep0/worker.log <==
+VASP force call 413: 324 atoms, 51.1s, warm=True, E=-737.07983915 eV
+VASP force call 414: 324 atoms, 43.6s, warm=True, E=-733.38998125 eV
+VASP force call 415: 324 atoms, 45.8s, warm=True, E=-731.83105954 eV
+VASP force call 416: 324 atoms, 36.5s, warm=True, E=-732.31337397 eV
+CHECKPOINT host: step 415/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2O_rep0/pw_host_md.npz
+VASP force call 417: 324 atoms, 35.6s, warm=True, E=-732.90488348 eV
+VASP force call 418: 324 atoms, 54.6s, warm=True, E=-732.45325380 eV
+VASP force call 419: 324 atoms, 46.3s, warm=True, E=-732.08734928 eV
+VASP force call 420: 324 atoms, 41.9s, warm=True, E=-733.46700360 eV
+VASP force call 421: 324 atoms, 45.8s, warm=True, E=-735.99116981 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p083O_rep0/worker.log <==
+VASP force call 418: 333 atoms, 36.2s, warm=True, E=-739.36058438 eV
+VASP force call 419: 333 atoms, 36.8s, warm=True, E=-738.30764855 eV
+VASP force call 420: 333 atoms, 35.9s, warm=True, E=-741.05460963 eV
+VASP force call 421: 333 atoms, 40.2s, warm=True, E=-743.75605498 eV
+VASP force call 422: 333 atoms, 43.4s, warm=True, E=-745.86905697 eV
+VASP force call 423: 333 atoms, 37.9s, warm=True, E=-747.59467645 eV
+CHECKPOINT host: step 422/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p083O_rep0/pw_host_md.npz
+VASP force call 424: 333 atoms, 48.4s, warm=True, E=-749.00654967 eV
+VASP force call 425: 333 atoms, 42.1s, warm=True, E=-751.53378679 eV
+VASP force call 426: 333 atoms, 39.6s, warm=True, E=-754.83673257 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p25O_rep0/worker.log <==
+VASP force call 380: 351 atoms, 45.0s, warm=True, E=-732.75165714 eV
+CHECKPOINT host: step 379/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p25O_rep0/pw_host_md.npz
+VASP force call 381: 351 atoms, 40.2s, warm=True, E=-730.60440720 eV
+VASP force call 382: 351 atoms, 49.1s, warm=True, E=-725.89277734 eV
+VASP force call 383: 351 atoms, 59.7s, warm=True, E=-722.50151658 eV
+VASP force call 384: 351 atoms, 47.7s, warm=True, E=-723.26728465 eV
+VASP force call 385: 351 atoms, 39.1s, warm=True, E=-725.26590725 eV
+VASP force call 386: 351 atoms, 47.2s, warm=True, E=-726.36076511 eV
+VASP force call 387: 351 atoms, 40.8s, warm=True, E=-724.82578065 eV
+CHECKPOINT host: step 386/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p25O_rep0/pw_host_md.npz
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/pureH_rep0/worker.log <==
+VASP force call 239: 729 atoms, 64.8s, warm=True, E=-888.77892020 eV
+VASP force call 240: 729 atoms, 71.1s, warm=True, E=-884.07988654 eV
+VASP force call 241: 729 atoms, 73.2s, warm=True, E=-880.74505408 eV
+VASP force call 242: 729 atoms, 69.6s, warm=True, E=-881.14187968 eV
+VASP force call 243: 729 atoms, 65.0s, warm=True, E=-885.60682668 eV
+CHECKPOINT host: step 242/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/pureH_rep0/pw_host_md.npz
+VASP force call 244: 729 atoms, 75.2s, warm=True, E=-891.98225353 eV
+VASP force call 245: 729 atoms, 72.2s, warm=True, E=-898.24645729 eV
+VASP force call 246: 729 atoms, 68.6s, warm=True, E=-903.57185800 eV
+VASP force call 247: 729 atoms, 67.2s, warm=True, E=-907.49993474 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/worker.log <==
+VASP force call 506: 324 atoms, 41.4s, warm=True, E=-599.95754270 eV
+VASP force call 507: 324 atoms, 33.5s, warm=True, E=-599.52201468 eV
+VASP force call 508: 324 atoms, 40.4s, warm=True, E=-599.14232182 eV
+VASP force call 509: 324 atoms, 33.0s, warm=True, E=-597.48619936 eV
+CHECKPOINT host: step 508/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2O_rep0/pw_host_md.npz
+VASP force call 510: 324 atoms, 30.2s, warm=True, E=-595.26456338 eV
+VASP force call 511: 324 atoms, 35.4s, warm=True, E=-595.07863599 eV
+VASP force call 512: 324 atoms, 34.2s, warm=True, E=-599.40689664 eV
+VASP force call 513: 324 atoms, 33.6s, warm=True, E=-604.41613521 eV
+VASP force call 514: 324 atoms, 33.7s, warm=True, E=-606.91327178 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/worker.log <==
+VASP force call 486: 333 atoms, 31.7s, warm=True, E=-579.18337309 eV
+VASP force call 487: 333 atoms, 33.8s, warm=True, E=-584.19881651 eV
+VASP force call 488: 333 atoms, 37.7s, warm=True, E=-591.57439257 eV
+VASP force call 489: 333 atoms, 33.2s, warm=True, E=-597.04196803 eV
+VASP force call 490: 333 atoms, 31.4s, warm=True, E=-596.44329965 eV
+VASP force call 491: 333 atoms, 35.1s, warm=True, E=-590.90473957 eV
+VASP force call 492: 333 atoms, 41.7s, warm=True, E=-587.53140882 eV
+CHECKPOINT host: step 491/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p083O_rep0/pw_host_md.npz
+VASP force call 493: 333 atoms, 36.2s, warm=True, E=-590.26068150 eV
+VASP force call 494: 333 atoms, 40.9s, warm=True, E=-595.20443044 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/worker.log <==
+VASP force call 375: 351 atoms, 41.6s, warm=True, E=-558.91679583 eV
+VASP force call 376: 351 atoms, 48.3s, warm=True, E=-556.65244393 eV
+VASP force call 377: 351 atoms, 39.3s, warm=True, E=-552.11838098 eV
+VASP force call 378: 351 atoms, 47.0s, warm=True, E=-546.61161825 eV
+CHECKPOINT host: step 377/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/H2p25O_rep0/pw_host_md.npz
+VASP force call 379: 351 atoms, 40.7s, warm=True, E=-540.92111627 eV
+VASP force call 380: 351 atoms, 54.9s, warm=True, E=-536.40933331 eV
+VASP force call 381: 351 atoms, 47.5s, warm=True, E=-534.41946436 eV
+VASP force call 382: 351 atoms, 40.7s, warm=True, E=-533.16198192 eV
+VASP force call 383: 351 atoms, 39.0s, warm=True, E=-531.60285549 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/pureH729_rep0/worker.log <==
+VASP force call 272: 729 atoms, 58.0s, warm=True, E=-678.78787483 eV
+VASP force call 273: 729 atoms, 54.2s, warm=True, E=-680.11352763 eV
+VASP force call 274: 729 atoms, 63.9s, warm=True, E=-679.87917761 eV
+VASP force call 275: 729 atoms, 58.4s, warm=True, E=-678.80285761 eV
+VASP force call 276: 729 atoms, 62.8s, warm=True, E=-678.01184000 eV
+VASP force call 277: 729 atoms, 65.6s, warm=True, E=-677.34108213 eV
+CHECKPOINT host: step 276/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_500GPa_5000K_1/pureH729_rep0/pw_host_md.npz
+VASP force call 278: 729 atoms, 66.7s, warm=True, E=-678.24160623 eV
+VASP force call 279: 729 atoms, 61.5s, warm=True, E=-681.51296610 eV
+VASP force call 280: 729 atoms, 61.2s, warm=True, E=-684.40668182 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2O_rep0/worker.log <==
+VASP force call 526: 324 atoms, 30.5s, warm=True, E=-502.88342196 eV
+VASP force call 527: 324 atoms, 33.1s, warm=True, E=-497.84145156 eV
+VASP force call 528: 324 atoms, 34.1s, warm=True, E=-491.19202987 eV
+VASP force call 529: 324 atoms, 31.6s, warm=True, E=-484.13317814 eV
+CHECKPOINT host: step 528/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2O_rep0/pw_host_md.npz
+VASP force call 530: 324 atoms, 32.4s, warm=True, E=-478.40592366 eV
+VASP force call 531: 324 atoms, 32.5s, warm=True, E=-478.13827725 eV
+VASP force call 532: 324 atoms, 31.4s, warm=True, E=-484.91605819 eV
+VASP force call 533: 324 atoms, 32.0s, warm=True, E=-490.80605487 eV
+VASP force call 534: 324 atoms, 31.4s, warm=True, E=-490.09805557 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p083O_rep0/worker.log <==
+VASP force call 474: 333 atoms, 29.8s, warm=True, E=-441.45038714 eV
+VASP force call 475: 333 atoms, 36.2s, warm=True, E=-449.71784954 eV
+VASP force call 476: 333 atoms, 37.6s, warm=True, E=-455.49856354 eV
+VASP force call 477: 333 atoms, 41.7s, warm=True, E=-456.51503073 eV
+VASP force call 478: 333 atoms, 35.6s, warm=True, E=-456.93794220 eV
+VASP force call 479: 333 atoms, 40.3s, warm=True, E=-458.71005595 eV
+VASP force call 480: 333 atoms, 35.4s, warm=True, E=-459.34101457 eV
+VASP force call 481: 333 atoms, 30.1s, warm=True, E=-457.02215003 eV
+CHECKPOINT host: step 480/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p083O_rep0/pw_host_md.npz
+VASP force call 482: 333 atoms, 35.3s, warm=True, E=-454.93513926 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p25O_rep0/worker.log <==
+VASP force call 434: 351 atoms, 35.4s, warm=True, E=-390.52781597 eV
+VASP force call 435: 351 atoms, 50.0s, warm=True, E=-391.29695389 eV
+CHECKPOINT host: step 434/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p25O_rep0/pw_host_md.npz
+VASP force call 436: 351 atoms, 39.9s, warm=True, E=-392.36740179 eV
+VASP force call 437: 351 atoms, 41.5s, warm=True, E=-391.48201869 eV
+VASP force call 438: 351 atoms, 37.9s, warm=True, E=-387.93634304 eV
+VASP force call 439: 351 atoms, 35.8s, warm=True, E=-385.23957443 eV
+VASP force call 440: 351 atoms, 40.0s, warm=True, E=-386.16801263 eV
+VASP force call 441: 351 atoms, 35.3s, warm=True, E=-390.12935032 eV
+VASP force call 442: 351 atoms, 42.6s, warm=True, E=-394.41932395 eV
+
+==> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/pureH_rep0/worker.log <==
+VASP force call 263: 729 atoms, 61.2s, warm=True, E=-473.87897313 eV
+VASP force call 264: 729 atoms, 56.9s, warm=True, E=-469.96613930 eV
+VASP force call 265: 729 atoms, 53.2s, warm=True, E=-464.99010483 eV
+VASP force call 266: 729 atoms, 65.0s, warm=True, E=-462.67329887 eV
+VASP force call 267: 729 atoms, 65.3s, warm=True, E=-464.07926693 eV
+CHECKPOINT host: step 266/3000, 0/25 frames -> /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/pureH_rep0/pw_host_md.npz
+VASP force call 268: 729 atoms, 62.8s, warm=True, E=-467.69819835 eV
+VASP force call 269: 729 atoms, 65.9s, warm=True, E=-471.36912736 eV
+VASP force call 270: 729 atoms, 61.1s, warm=True, E=-473.98626788 eV
+VASP force call 271: 729 atoms, 59.9s, warm=True, E=-475.53247020 eV

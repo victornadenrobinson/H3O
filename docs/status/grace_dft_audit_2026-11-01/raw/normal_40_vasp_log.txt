@@ -1,0 +1,164 @@
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+Packing up to 8 independent VASP points × 32 MPI ranks; OMP_NUM_THREADS=1
+START normal_000_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_001_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_002_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_003_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_004_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_005_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_006_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_007_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+Progress: 0 complete; 8 running; 32 queued in this invocation
+DONE normal_002_H2O: TOTEN=-951.126686130 eV, wall=109.4s
+LABEL normal_002_H2O: VASP−GRACE=+7.271278 eV (+22.442 meV/atom); force RMSE=0.389493 eV/Å; stress RMSE=0.7615 GPa
+START normal_008_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_003_H2O: TOTEN=-954.878161860 eV, wall=110.2s
+LABEL normal_003_H2O: VASP−GRACE=+8.435288 eV (+26.035 meV/atom); force RMSE=0.451561 eV/Å; stress RMSE=1.2080 GPa
+DONE normal_007_H2O: TOTEN=-960.877597380 eV, wall=110.2s
+LABEL normal_007_H2O: VASP−GRACE=+8.224395 eV (+25.384 meV/atom); force RMSE=0.383794 eV/Å; stress RMSE=0.6825 GPa
+Progress: 3 complete; 6 running; 31 queued in this invocation
+START normal_009_H2O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_010_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_001_H2O: TOTEN=-948.790408550 eV, wall=111.0s
+LABEL normal_001_H2O: VASP−GRACE=+7.706638 eV (+23.786 meV/atom); force RMSE=0.391179 eV/Å; stress RMSE=1.0037 GPa
+DONE normal_005_H2O: TOTEN=-958.089394320 eV, wall=110.9s
+LABEL normal_005_H2O: VASP−GRACE=+8.760566 eV (+27.039 meV/atom); force RMSE=0.449355 eV/Å; stress RMSE=1.1242 GPa
+START normal_011_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_012_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_000_H2O: TOTEN=-957.879163760 eV, wall=111.3s
+LABEL normal_000_H2O: VASP−GRACE=+6.871009 eV (+21.207 meV/atom); force RMSE=0.394191 eV/Å; stress RMSE=0.7453 GPa
+START normal_013_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_004_H2O: TOTEN=-960.626231120 eV, wall=112.1s
+LABEL normal_004_H2O: VASP−GRACE=+7.694969 eV (+23.750 meV/atom); force RMSE=0.421547 eV/Å; stress RMSE=0.6938 GPa
+DONE normal_006_H2O: TOTEN=-959.298119580 eV, wall=112.0s
+LABEL normal_006_H2O: VASP−GRACE=+7.386466 eV (+22.798 meV/atom); force RMSE=0.368883 eV/Å; stress RMSE=0.9811 GPa
+START normal_014_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+START normal_015_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+Progress: 8 complete; 8 running; 24 queued in this invocation
+DONE normal_010_H2p083O: TOTEN=-946.653662880 eV, wall=75.3s
+LABEL normal_010_H2p083O: VASP−GRACE=+26.683929 eV (+80.132 meV/atom); force RMSE=0.637813 eV/Å; stress RMSE=4.0840 GPa
+START normal_016_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 9 complete; 8 running; 23 queued in this invocation
+DONE normal_008_H2O: TOTEN=-961.300801040 eV, wall=83.9s
+LABEL normal_008_H2O: VASP−GRACE=+7.688295 eV (+23.729 meV/atom); force RMSE=0.428429 eV/Å; stress RMSE=0.6559 GPa
+START normal_017_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_012_H2p083O: TOTEN=-951.648415910 eV, wall=89.1s
+LABEL normal_012_H2p083O: VASP−GRACE=+19.459470 eV (+58.437 meV/atom); force RMSE=0.695055 eV/Å; stress RMSE=3.1958 GPa
+START normal_018_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 11 complete; 8 running; 21 queued in this invocation
+DONE normal_014_H2p083O: TOTEN=-940.679927330 eV, wall=91.5s
+LABEL normal_014_H2p083O: VASP−GRACE=+28.750458 eV (+86.338 meV/atom); force RMSE=0.675586 eV/Å; stress RMSE=3.9202 GPa
+START normal_019_H2p083O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 12 complete; 8 running; 20 queued in this invocation
+DONE normal_009_H2O: TOTEN=-965.297829650 eV, wall=106.6s
+LABEL normal_009_H2O: VASP−GRACE=+6.311043 eV (+19.479 meV/atom); force RMSE=0.380142 eV/Å; stress RMSE=0.6078 GPa
+START normal_020_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 13 complete; 8 running; 19 queued in this invocation
+DONE normal_015_H2p083O: TOTEN=-957.614983850 eV, wall=111.6s
+LABEL normal_015_H2p083O: VASP−GRACE=+21.810670 eV (+65.498 meV/atom); force RMSE=0.642670 eV/Å; stress RMSE=3.0454 GPa
+START normal_021_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_013_H2p083O: TOTEN=-947.971313520 eV, wall=113.5s
+LABEL normal_013_H2p083O: VASP−GRACE=+28.611265 eV (+85.920 meV/atom); force RMSE=0.581896 eV/Å; stress RMSE=3.4687 GPa
+START normal_022_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_011_H2p083O: TOTEN=-929.069244320 eV, wall=116.1s
+LABEL normal_011_H2p083O: VASP−GRACE=+29.222923 eV (+87.757 meV/atom); force RMSE=0.672994 eV/Å; stress RMSE=3.2890 GPa
+START normal_023_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 16 complete; 8 running; 16 queued in this invocation
+Progress: 16 complete; 8 running; 16 queued in this invocation
+Progress: 16 complete; 8 running; 16 queued in this invocation
+Progress: 16 complete; 8 running; 16 queued in this invocation
+Progress: 16 complete; 8 running; 16 queued in this invocation
+DONE normal_017_H2p083O: TOTEN=-953.777197710 eV, wall=79.0s
+LABEL normal_017_H2p083O: VASP−GRACE=+24.173555 eV (+72.593 meV/atom); force RMSE=0.709452 eV/Å; stress RMSE=4.4090 GPa
+START normal_024_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_016_H2p083O: TOTEN=-953.617517640 eV, wall=94.8s
+LABEL normal_016_H2p083O: VASP−GRACE=+26.424188 eV (+79.352 meV/atom); force RMSE=0.643972 eV/Å; stress RMSE=3.6104 GPa
+Progress: 18 complete; 7 running; 15 queued in this invocation
+START normal_025_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_019_H2p083O: TOTEN=-942.921062310 eV, wall=78.7s
+LABEL normal_019_H2p083O: VASP−GRACE=+26.606443 eV (+79.899 meV/atom); force RMSE=0.550940 eV/Å; stress RMSE=2.2209 GPa
+START normal_026_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 19 complete; 8 running; 13 queued in this invocation
+Progress: 19 complete; 8 running; 13 queued in this invocation
+DONE normal_018_H2p083O: TOTEN=-946.322464080 eV, wall=103.8s
+LABEL normal_018_H2p083O: VASP−GRACE=+31.286192 eV (+93.953 meV/atom); force RMSE=0.691930 eV/Å; stress RMSE=4.8371 GPa
+START normal_027_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 20 complete; 8 running; 12 queued in this invocation
+DONE normal_021_H2p25O: TOTEN=-924.215540520 eV, wall=91.7s
+LABEL normal_021_H2p25O: VASP−GRACE=+46.465360 eV (+132.380 meV/atom); force RMSE=1.085321 eV/Å; stress RMSE=6.9053 GPa
+START normal_028_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_023_H2p25O: TOTEN=-929.284263470 eV, wall=91.0s
+LABEL normal_023_H2p25O: VASP−GRACE=+49.190105 eV (+140.143 meV/atom); force RMSE=1.103885 eV/Å; stress RMSE=7.4624 GPa
+START normal_029_H2p25O: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 22 complete; 8 running; 10 queued in this invocation
+Progress: 22 complete; 8 running; 10 queued in this invocation
+DONE normal_020_H2p25O: TOTEN=-934.533769960 eV, wall=119.5s
+LABEL normal_020_H2p25O: VASP−GRACE=+44.193991 eV (+125.909 meV/atom); force RMSE=1.073787 eV/Å; stress RMSE=6.8750 GPa
+START normal_030_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 23 complete; 8 running; 9 queued in this invocation
+DONE normal_022_H2p25O: TOTEN=-926.107514930 eV, wall=119.9s
+LABEL normal_022_H2p25O: VASP−GRACE=+52.039949 eV (+148.262 meV/atom); force RMSE=1.203958 eV/Å; stress RMSE=7.9509 GPa
+START normal_031_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 24 complete; 8 running; 8 queued in this invocation
+DONE normal_024_H2p25O: TOTEN=-949.952110640 eV, wall=81.0s
+LABEL normal_024_H2p25O: VASP−GRACE=+38.248196 eV (+108.969 meV/atom); force RMSE=1.157356 eV/Å; stress RMSE=7.0298 GPa
+START normal_032_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_030_pureH: TOTEN=-345.163949860 eV, wall=24.4s
+LABEL normal_030_pureH: VASP−GRACE=+23.313944 eV (+93.256 meV/atom); force RMSE=0.477561 eV/Å; stress RMSE=6.9590 GPa
+Progress: 26 complete; 7 running; 7 queued in this invocation
+START normal_033_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 26 complete; 8 running; 6 queued in this invocation
+DONE normal_031_pureH: TOTEN=-348.285621230 eV, wall=27.3s
+LABEL normal_031_pureH: VASP−GRACE=+22.240012 eV (+88.960 meV/atom); force RMSE=0.483503 eV/Å; stress RMSE=6.6011 GPa
+START normal_034_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_032_pureH: TOTEN=-354.450367980 eV, wall=23.1s
+LABEL normal_032_pureH: VASP−GRACE=+19.741162 eV (+78.965 meV/atom); force RMSE=0.481705 eV/Å; stress RMSE=6.0463 GPa
+START normal_035_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 28 complete; 8 running; 4 queued in this invocation
+DONE normal_025_H2p25O: TOTEN=-945.669997860 eV, wall=101.6s
+LABEL normal_025_H2p25O: VASP−GRACE=+35.507725 eV (+101.162 meV/atom); force RMSE=1.122390 eV/Å; stress RMSE=6.2599 GPa
+START normal_036_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_033_pureH: TOTEN=-351.493301380 eV, wall=21.4s
+LABEL normal_033_pureH: VASP−GRACE=+20.026603 eV (+80.106 meV/atom); force RMSE=0.483526 eV/Å; stress RMSE=5.8079 GPa
+START normal_037_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+DONE normal_026_H2p25O: TOTEN=-925.303378040 eV, wall=102.2s
+LABEL normal_026_H2p25O: VASP−GRACE=+59.263461 eV (+168.842 meV/atom); force RMSE=1.228563 eV/Å; stress RMSE=9.9378 GPa
+START normal_038_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 31 complete; 8 running; 1 queued in this invocation
+DONE normal_034_pureH: TOTEN=-350.154441910 eV, wall=23.0s
+LABEL normal_034_pureH: VASP−GRACE=+22.415706 eV (+89.663 meV/atom); force RMSE=0.510981 eV/Å; stress RMSE=5.7352 GPa
+START normal_039_pureH: srun --exclusive --exact --nodes=1 --ntasks 32 --cpus-per-task=1 --cpu-bind=cores /global/common/software/nersc9/vasp/vasp/5.4.4-cpu/bin/vasp_gam
+Progress: 32 complete; 8 running; 0 queued in this invocation
+DONE normal_035_pureH: TOTEN=-353.753387950 eV, wall=24.8s
+LABEL normal_035_pureH: VASP−GRACE=+22.353921 eV (+89.416 meV/atom); force RMSE=0.487507 eV/Å; stress RMSE=6.7969 GPa
+DONE normal_036_pureH: TOTEN=-352.911695700 eV, wall=22.2s
+LABEL normal_036_pureH: VASP−GRACE=+20.401753 eV (+81.607 meV/atom); force RMSE=0.514700 eV/Å; stress RMSE=6.0813 GPa
+DONE normal_038_pureH: TOTEN=-350.212722980 eV, wall=21.5s
+LABEL normal_038_pureH: VASP−GRACE=+19.396752 eV (+77.587 meV/atom); force RMSE=0.490258 eV/Å; stress RMSE=6.0502 GPa
+DONE normal_037_pureH: TOTEN=-348.988290800 eV, wall=24.8s
+LABEL normal_037_pureH: VASP−GRACE=+20.886497 eV (+83.546 meV/atom); force RMSE=0.501062 eV/Å; stress RMSE=5.8107 GPa
+DONE normal_027_H2p25O: TOTEN=-919.839052880 eV, wall=103.8s
+LABEL normal_027_H2p25O: VASP−GRACE=+57.880404 eV (+164.901 meV/atom); force RMSE=1.212016 eV/Å; stress RMSE=9.6876 GPa
+DONE normal_028_H2p25O: TOTEN=-929.767131270 eV, wall=94.5s
+LABEL normal_028_H2p25O: VASP−GRACE=+54.419981 eV (+155.043 meV/atom); force RMSE=1.193663 eV/Å; stress RMSE=9.3902 GPa
+Progress: 38 complete; 2 running; 0 queued in this invocation
+DONE normal_039_pureH: TOTEN=-348.090353680 eV, wall=22.0s
+LABEL normal_039_pureH: VASP−GRACE=+21.043503 eV (+84.174 meV/atom); force RMSE=0.499495 eV/Å; stress RMSE=7.5778 GPa
+DONE normal_029_H2p25O: TOTEN=-928.570590120 eV, wall=99.9s
+LABEL normal_029_H2p25O: VASP−GRACE=+51.576628 eV (+146.942 meV/atom); force RMSE=1.237121 eV/Å; stress RMSE=11.5918 GPa
+40 selected points complete, 40 attempted now, 0 failed/incomplete; old attempts preserved

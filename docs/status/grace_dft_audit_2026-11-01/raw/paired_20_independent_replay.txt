@@ -1,0 +1,84 @@
+2026-11-01 07:18:43.152698: I external/local_xla/xla/service/service.cc:171]   StreamExecutor device (0): Host, Default Version
+2026-11-01 07:18:43.391289: I tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.cc:269] disabling MLIR crash reproducer, set env var `MLIR_CRASH_REPRODUCER_DIRECTORY` to enable.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1793546325.216049   60756 device_compiler.h:196] Compiled cluster using XLA!  This line is logged at most once for the lifetime of the process.
+AUDIT pair 000: E_VASP N/N+H=-936.209928790/-933.135690540; E_GRACE N/N+H=-944.635668278/-943.202962279; saved/recomputed ΔU=1.432775855064392/1.432705998; match=True
+AUDIT pair 001: E_VASP N/N+H=-954.878162020/-950.969627270; E_GRACE N/N+H=-963.313448489/-960.764041245; saved/recomputed ΔU=2.54941987991333/2.549407244; match=True
+AUDIT pair 002: E_VASP N/N+H=-930.852489110/-931.624428440; E_GRACE N/N+H=-954.952019036/-957.054952085; saved/recomputed ΔU=-2.10292911529541/-2.102933049; match=True
+AUDIT pair 003: E_VASP N/N+H=-942.381683970/-938.239726410; E_GRACE N/N+H=-963.860220492/-961.705195367; saved/recomputed ΔU=2.1550601720809937/2.155025125; match=True
+AUDIT pair 004: E_VASP N/N+H=-929.831684460/-928.049694270; E_GRACE N/N+H=-970.225629807/-968.824246883; saved/recomputed ΔU=1.4013631343841553/1.401382923; match=True
+AUDIT pair 005: E_VASP N/N+H=-929.284263600/-927.022845080; E_GRACE N/N+H=-978.474361062/-978.789426625; saved/recomputed ΔU=-0.3150586485862732/-0.315065563; match=True
+AUDIT pair 006: E_VASP N/N+H=-353.428243650/-352.299735160; E_GRACE N/N+H=-376.114580393/-375.189633131; saved/recomputed ΔU=0.9249526262283325/0.924947262; match=True
+AUDIT pair 007: E_VASP N/N+H=-346.873796120/-346.606552690; E_GRACE N/N+H=-367.555118084/-367.659036994; saved/recomputed ΔU=-0.10392212867736816/-0.103918910; match=True
+AUDIT pair 008: E_VASP N/N+H=-927.379674350/-923.500928700; E_GRACE N/N+H=-935.547026038/-933.597831726; saved/recomputed ΔU=1.9491826295852661/1.949194312; match=True
+AUDIT pair 009: E_VASP N/N+H=-957.879164170/-954.331584330; E_GRACE N/N+H=-964.750172019/-962.697647572; saved/recomputed ΔU=2.0525401830673218/2.052524447; match=True
+AUDIT pair 010: E_VASP N/N+H=-931.087246520/-926.883892570; E_GRACE N/N+H=-957.025753379/-954.675386906; saved/recomputed ΔU=2.350361943244934/2.350366473; match=True
+AUDIT pair 011: E_VASP N/N+H=-946.653662680/-941.294034380; E_GRACE N/N+H=-973.337599516/-971.015389323; saved/recomputed ΔU=2.3222110271453857/2.322210193; match=True
+AUDIT pair 012: E_VASP N/N+H=-948.979297150/-945.139879890; E_GRACE N/N+H=-992.693866849/-990.382902980; saved/recomputed ΔU=2.3109620809555054/2.310963869; match=True
+AUDIT pair 013: E_VASP N/N+H=-934.533770230/-930.534263960; E_GRACE N/N+H=-978.727744743/-977.208210036; saved/recomputed ΔU=1.5195622444152832/1.519534707; match=True
+AUDIT pair 014: E_VASP N/N+H=-349.998669390/-349.763664670; E_GRACE N/N+H=-370.644316256/-370.229085267; saved/recomputed ΔU=0.41521573066711426/0.415230989; match=True
+AUDIT pair 015: E_VASP N/N+H=-345.163949860/-345.407877960; E_GRACE N/N+H=-368.477890849/-368.637208462; saved/recomputed ΔU=-0.1593151092529297/-0.159317613; match=True
+AUDIT pair 016: E_VASP N/N+H=-959.653282510/-957.823145750; E_GRACE N/N+H=-966.357700884/-966.167240441; saved/recomputed ΔU=0.19044137001037598/0.190460443; match=True
+AUDIT pair 017: E_VASP N/N+H=-943.117803650/-943.323957920; E_GRACE N/N+H=-952.938281238/-954.207374394; saved/recomputed ΔU=-1.2690843343734741/-1.269093156; match=True
+AUDIT pair 018: E_VASP N/N+H=-949.519682960/-946.583041500; E_GRACE N/N+H=-977.091112196/-976.721596897; saved/recomputed ΔU=0.36950671672821045/0.369515300; match=True
+AUDIT pair 019: E_VASP N/N+H=-934.770057750/-932.830414290; E_GRACE N/N+H=-959.097166896/-959.641383529; saved/recomputed ΔU=-0.5441958904266357/-0.544216633; match=True
+Compared forces/stresses for 40 completed geometries; 0 unavailable
+[
+  {
+    "host": "H2O",
+    "direction": "insertion",
+    "pairs_complete": 3,
+    "mean_DFT_minus_MLP_eV": 1.3057072615636873,
+    "rms_DFT_minus_MLP_eV": 1.3181119426661945
+  },
+  {
+    "host": "H2O",
+    "direction": "deletion",
+    "pairs_complete": 3,
+    "mean_DFT_minus_MLP_eV": 1.7369199686623158,
+    "rms_DFT_minus_MLP_eV": 1.7422528444024474
+  },
+  {
+    "host": "H2p083O",
+    "direction": "insertion",
+    "pairs_complete": 3,
+    "mean_DFT_minus_MLP_eV": 2.5027368785376134,
+    "rms_DFT_minus_MLP_eV": 2.539249903845321
+  },
+  {
+    "host": "H2p083O",
+    "direction": "deletion",
+    "pairs_complete": 3,
+    "mean_DFT_minus_MLP_eV": 1.9170357854023148,
+    "rms_DFT_minus_MLP_eV": 1.9828635515451263
+  },
+  {
+    "host": "H2p25O",
+    "direction": "insertion",
+    "pairs_complete": 2,
+    "mean_DFT_minus_MLP_eV": 2.52822782282783,
+    "rms_DFT_minus_MLP_eV": 2.5286883142728405
+  },
+  {
+    "host": "H2p25O",
+    "direction": "deletion",
+    "pairs_complete": 2,
+    "mean_DFT_minus_MLP_eV": 0.9545303288894615,
+    "rms_DFT_minus_MLP_eV": 1.1137844629385412
+  },
+  {
+    "host": "pureH",
+    "direction": "insertion",
+    "pairs_complete": 2,
+    "mean_DFT_minus_MLP_eV": 0.1432759263372816,
+    "rms_DFT_minus_MLP_eV": 0.2691843394626927
+  },
+  {
+    "host": "pureH",
+    "direction": "deletion",
+    "pairs_complete": 2,
+    "mean_DFT_minus_MLP_eV": 0.011667479366735733,
+    "rms_DFT_minus_MLP_eV": 0.19224812329930205
+  }
+]
+Wrote runs/plots/vasp_edge_replay_1; no chemical potential reconstructed from biased diagnostic sampling
