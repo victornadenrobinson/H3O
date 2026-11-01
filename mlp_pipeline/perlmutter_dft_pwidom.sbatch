@@ -15,7 +15,8 @@ cd "${SLURM_SUBMIT_DIR:?Submit from repository root}"
 export GRACE_ENV="${GRACE_ENV:-$SCRATCH/grace-env}"
 export VASP_MODULE="${VASP_MODULE:-vasp/5.4.4-cpu}"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-if ! command -v vasp_gam >/dev/null 2>&1; then module load "$VASP_MODULE"; fi
+module load "$VASP_MODULE"
+command -v vasp_gam >/dev/null || { echo "vasp_gam unavailable"; exit 2; }
 source mlp_pipeline/perlmutter_python.sh
 h3o_select_python plot --dry-run
 exec "${H3O_PYTHON[@]}" -u mlp_pipeline/tdi/dft_pwidom_runner.py "${1:?Provide prepared plan directory}"

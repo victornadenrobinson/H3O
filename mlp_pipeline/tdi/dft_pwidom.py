@@ -13,6 +13,8 @@ import time
 def dft_plan(a):
     from tdi.perlmutter_vasp_check import save
     from tdi.vasp_backend import vasp_config
+    from tdi import pwidom
+    pwidom.proxy_params(a.ice_proxy);pwidom.proxy_params(a.h_proxy)
     state=json.loads(Path(a.state_json).read_text());out=Path(a.out).resolve()
     if out.exists():raise ValueError('Use fresh plan directory; existing plans are resumed with dft-worker')
     if a.replicates<1 or a.replicates>2:raise ValueError('Use one or two independent replicas of four hosts')
