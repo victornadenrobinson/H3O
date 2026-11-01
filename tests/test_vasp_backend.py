@@ -161,3 +161,12 @@ def test_bounded_runner_requests_checkpoint_stop(tmp_path,monkeypatch):
     with pytest.raises(SystemExit) as exit:runner.main()
     assert exit.value.code==0 and len(processes)==4
     assert all(p.returncode==-15 for p in processes)
+
+
+@pytest.mark.parametrize('action',['dft-stop-smokes','dft-layout','dft-h-size','dft-plan','dft-worker','vasp-config','timing'])
+def test_public_cli_parses(action):
+    import subprocess
+    script=Path(__file__).resolve().parents[1]/'mlp_pipeline'/'tdi'/'perlmutter_vasp_check.py'
+    result=subprocess.run([sys.executable,str(script),action,'--help'],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert 'usage:' in result.stdout
