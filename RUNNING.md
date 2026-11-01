@@ -466,3 +466,21 @@ see the final section of [Pure-VASP PWidom](docs/PWIDOM_PURE_VASP.md).
 Numerical evidence and current concerns are recorded in
 [GRACE/DFT audit, 2026-11-01](docs/status/GRACE_DFT_AUDIT_2026-11-01.md),
 including all supplied validation rows and the later three-job production tails.
+
+Original fully-DFT two-stage TDI (five DFT↔pair lambda windows, then classical/
+reference CMC) is distinct from the GRACE TDI workflow. Read-only discovery:
+
+```bash
+bash mlp_pipeline/perlmutter_legacy_tdi.sh --root .. \
+  --inventory runs/mined_h3o.csv runs/inventory_binned.csv \
+  --out runs/legacy_dft_tdi_audit_1
+```
+
+Use the unfiltered original inventory where possible: training/EOS preparation
+excludes lambda_* paths. Historical candidates documented in TDI_PLAN.md include
+`tdi/h3o/500gpa-3000K/...` and `500gpa-7000K-solid`. The command writes
+`discovery.json`, `windows.csv`, `files.csv`, `text_evidence.txt` and an audit
+checklist. It only reads directories and bounded small-text metadata; no VASP,
+MD, CMC or integration runs, and no POTCAR/WAVECAR/CHGCAR content is copied.
+CMC siblings may not appear in any OUTCAR inventory. Original CMC source and
+observables must be recovered before diagnosing or recomputing stage2.

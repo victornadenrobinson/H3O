@@ -781,3 +781,22 @@ recrystallising at high lambda. The Oct28 liquid_mix_grace.csv says frozen runs
 were excluded, but latest per-run phase checks, matching sources and consistent
 reference conventions remain necessary. Extrapolation below the stable liquid
 range alone cannot validate or falsify the SI mixing hull.
+
+## Original fully-DFT two-stage TDI to recover
+
+User clarified that older Perlmutter SI calculations were fully DFT-referenced
+TDI, with five lambda values in stage1 coupling DFT↔pair potentials, followed by
+a classical/reference second stage (possibly CMC) whose analysis/implementation
+is suspected. These are not the newer GRACE direct/stage1/stage2 calculations.
+No integrand, CMC acceptance history, reference constant or original analysis
+code from those runs has yet been supplied, so no error is established here.
+
+TDI_PLAN.md's historical census identifies `tdi/h3o/500gpa-3000K/...` and
+`500gpa-7000K-solid`. PROJECT.md and 01_bin_inventory.py explicitly exclude
+lambda_* paths from training/EOS data; use the ORIGINAL mined inventory, not
+only inventory_binned.csv. The new `perlmutter_legacy_tdi.sh` performs read-only
+campaign/window/sibling-code discovery. CMC may produce no OUTCAR and therefore
+requires sibling-file discovery beyond inventory paths. Five path values do not
+prove five actual Hamiltonians, correct quadrature, signs, normalization or
+complete stage2. Recover those definitions before integrating or comparing free
+energies. This could provide an independent DFT reference for the GRACE audit.
