@@ -100,6 +100,7 @@ def report_pairs(root,manifest,reported=None,changed=None):
         message=f'PAIR {pair["pair"]:03d} {pair["host"]} {pair["direction"]}: ΔU_VASP={delta:.6f} eV'
         if grace is not None:message+=f'; ΔU_GRACE={grace:.6f} eV; VASP−GRACE={(delta-grace)*1000:+.2f} meV/H'
         else:message+='; saved GRACE ΔU unavailable'
+        if pair.get('baseline_dU_DFT_eV') is not None:message+=f'; k-mesh shift={(delta-pair["baseline_dU_DFT_eV"])*1000:+.2f} meV/H'
         print(message,flush=True);reported.add(pair['pair'])
         rows.append(dict(pair=pair['pair'],dU_DFT_eV=delta,dU_MLP_eV=grace,
                          DFT_minus_MLP_eV=delta-grace if grace is not None else None))
@@ -332,6 +333,44 @@ def prep_queue(a):
         note='EXACT saved production pairs and GRACE ΔU; round-robin across available host/direction groups. Targeted/weight-selected diagnostics, not unbiased DFT ensemble samples.'))
 
 
+def mesh_check(a):
+    source=Path(a.directory).resolve();manifest=json.loads((source/'manifest.json').read_text())
+    if manifest.get('mode')!='paired_pwidom_energy_check':raise ValueError('Mesh check requires prepared paired energies')
+    if Path(a.out).exists():raise ValueError('Use a fresh mesh-check directory')
+    if len(a.mesh)!=3 or min(a.mesh)<1 or a.pairs_per_host<1:raise ValueError('Positive mesh and pair count required')
+    chosen=[]
+    for host in a.hosts:
+        eligible=[]
+        for pair in manifest['pairs']:
+            if pair['host']!=host:continue
+            records=[done(source/i) for i in pair['points']]
+            if all(records):eligible.append((pair,records))
+        if len(eligible)<a.pairs_per_host:raise ValueError(f'{host}: need {a.pairs_per_host} completed pairs in the source')
+        chosen.extend(eligible[:a.pairs_per_host])
+    out=Path(a.out).resolve();out.mkdir(parents=True,exist_ok=False)
+    points=[];pairs=[]
+    for i,(pair,records) in enumerate(chosen):
+        identities=[]
+        for role,old in zip(('without_H','with_H'),pair['points']):
+            identity=f'p{i:03d}_{role}';directory=out/identity;directory.mkdir()
+            for name in ('INCAR','KPOINTS','POSCAR','POTCAR','structure.extxyz'):
+                shutil.copy2(source/old/name,directory/name)
+            # Explicit KPOINTS controls the new mesh; remove unused spacing tags
+            # rather than leaving contradictory intent in the prepared INCAR.
+            lines=(directory/'INCAR').read_text().splitlines()
+            (directory/'INCAR').write_text('\n'.join(line for line in lines if line.split('=')[0].strip().upper() not in ('KSPACING','KGAMMA'))+'\n')
+            (directory/'KPOINTS').write_text('paired k-point convergence check\n0\nGamma\n'+' '.join(map(str,a.mesh))+'\n0 0 0\n')
+            identities.append(identity)
+            points.append(dict(id=identity,path=identity,input_sha256=input_hash(directory),natoms=len(read(directory/'structure.extxyz'))))
+        metadata={k:v for k,v in pair.items() if k not in ('pair','points')}
+        pairs.append(dict(metadata,pair=i,points=identities,baseline_pair=pair['pair'],baseline_directory=str(source),
+                          baseline_dU_DFT_eV=records[1]['TOTEN_eV']-records[0]['TOTEN_eV']))
+    save(out/'manifest.json',dict(schema=1,mode='paired_pwidom_energy_check',template=manifest['template'],
+        run=manifest.get('run'),pairs=pairs,points=points,mesh=list(a.mesh),
+        note='Exact source geometries; new explicit Gamma-centered k mesh. Baseline inputs/results untouched.'))
+    print(f'Prepared {len(pairs)} exact matched pairs / {len(points)} structures at mesh {a.mesh}; run with vasp_std')
+
+
 def snapshot(a):
     if Path(a.out).exists():raise ValueError('Use a fresh snapshot directory')
     tp=validated_template(a.template)
@@ -505,9 +544,10 @@ def analyze(a):
     for pair in pairs:
         ids=pair['points'];complete=all(records[i] for i in ids)
         row={k:v for k,v in pair.items() if k not in ('points',)}
-        row.update(complete=complete,dU_DFT_eV=None,dU_MLP_eV=None,DFT_minus_MLP_eV=None)
+        row.update(complete=complete,dU_DFT_eV=None,dU_MLP_eV=None,DFT_minus_MLP_eV=None,kmesh_shift_eV=None)
         if complete:
             row['dU_DFT_eV']=records[ids[1]]['TOTEN_eV']-records[ids[0]]['TOTEN_eV']
+            if pair.get('baseline_dU_DFT_eV') is not None:row['kmesh_shift_eV']=row['dU_DFT_eV']-pair['baseline_dU_DFT_eV']
             if pair.get('dU_mlp_eV') is not None:
                 row['dU_MLP_eV']=float(pair['dU_mlp_eV'])
                 row['DFT_minus_MLP_eV']=row['dU_DFT_eV']-row['dU_MLP_eV']
@@ -531,6 +571,8 @@ def analyze(a):
             summary.append(dict(host=host,direction=direction,pairs_complete=len(group),
                 mean_DFT_minus_MLP_eV=float(np.mean(residuals)) if residuals else None,
                 rms_DFT_minus_MLP_eV=float(np.sqrt(np.mean(np.square(residuals)))) if residuals else None))
+            shifts=[r['kmesh_shift_eV'] for r in group if r['kmesh_shift_eV'] is not None]
+            if shifts:summary[-1]['mean_kmesh_shift_eV']=float(np.mean(shifts))
     save(out/'summary.json',dict(groups=summary,note='Paired energy diagnostic on GRACE ensembles; not a DFT free energy or independent-sample uncertainty.'))
     usable=[r for r in rows if r['DFT_minus_MLP_eV'] is not None]
     if usable:
@@ -549,6 +591,9 @@ def analyze(a):
         fig.suptitle('Matched insertion/deletion energies — sampling/model check')
         for extension in ('png','pdf'):fig.savefig(out/f'paired_energies.{extension}',dpi=180)
         plt.close(fig)
+    if getattr(a,'forces_stress',False):
+        from tdi.vasp_force_check import compare
+        compare(root,manifest,records,out,a.device)
     print(json.dumps(summary,indent=2));print(f'Wrote {out}; no chemical potential reconstructed from biased diagnostic sampling')
 
 
@@ -558,6 +603,7 @@ def main():
     q=sub.add_parser('preflight');q.add_argument('--template',default='vasp_inputs');q.add_argument('--exe',default=os.environ.get('VASP_EXE','vasp_std'));q.add_argument('--train-outcar',type=Path)
     q=sub.add_parser('queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run');q.add_argument('--hosts',nargs='+')
     q=sub.add_parser('prep-queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run',required=True);q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--template',default='vasp_inputs');q.add_argument('--pairs',type=int,default=1);q.add_argument('--out',required=True)
+    q=sub.add_parser('mesh-check');q.add_argument('directory');q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--pairs-per-host',type=int,default=1);q.add_argument('--mesh',nargs=3,type=int,default=[2,2,2]);q.add_argument('--out',required=True)
     q=sub.add_parser('snapshot');q.add_argument('--frames',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--frame',type=int,default=-1);q.add_argument('--ensemble',choices=['host','full'],default='host')
     q=sub.add_parser('smoke');q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--T',type=float,default=3000);q.add_argument('--vpa',type=float,default=2.2)
     q=sub.add_parser('prep');q.add_argument('--run',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True)
@@ -568,7 +614,7 @@ def main():
     q.add_argument('--margin-seconds',type=float,default=60);q.add_argument('--max-points',type=int);q.add_argument('--index',type=int);q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('status');q.add_argument('directory')
     q=sub.add_parser('watch');q.add_argument('directory');q.add_argument('--interval',type=float,default=2.);q.add_argument('--once',action='store_true')
-    q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
+    q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--forces-stress',action='store_true',help='reevaluate GRACE forces/stress against completed OUTCARs; no new VASP calls');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
     a=p.parse_args()
     try:globals()[a.action.replace('-','_')](a)
     except (ValueError,OSError,KeyError) as exc:raise SystemExit(str(exc))

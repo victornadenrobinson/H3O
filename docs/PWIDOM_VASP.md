@@ -159,3 +159,32 @@ valid and need not be restarted. Template KPOINTS are copied to all points,
 including the reservoir. Whether that mesh is converged for metallic hydrogen is
 a separate calculation: compare paired energy differences against a denser mesh,
 not just cell size or the availability of vasp_gam.
+
+
+## Forces, stress and k-mesh controls
+
+`analyze DIRECTORY --forces-stress --device cpu --out FRESH` reads completed
+OUTCAR forces/stresses and reevaluates the saved model on `structure.extxyz`.
+It checks species/order, periodic geometry and cell; OUTCAR coordinate rounding
+is tolerated up to 1e-4 A, while GRACE sees the original prepared geometry.
+It produces force RMSEs (component/vector and H/O species), full matched arrays,
+stress/pressure differences and scatter plots. Unavailable OUTCAR quantities
+are recorded rather than replaced by zeros. No new VASP/MD is run. Do this after
+the packed VASP jobs finish, so the model evaluation does not compete for CPUs.
+The queue did not save GRACE forces or full stress tensors; those require this
+reevaluation. Comparisons use ASE tensile stress and Voigt xx yy zz yz xz xy,
+with eV/A^3 converted to GPa. Both exclude the ions' ideal-gas kinetic pressure.
+
+`mesh-check DIRECTORY --hosts H2O pureH --pairs-per-host 1 --mesh 2 2 2 --out FRESH`
+selects one already-complete pair for each host and copies its exact structures,
+POTCAR, INCAR and POSCAR into a new prepared set. It writes explicit KPOINTS and
+removes unused KSPACING/KGAMMA tags. No original file is changed. Baseline ΔU
+is recorded in the new manifest; `analyze` reports its difference as
+`kmesh_shift_eV` in the CSV. Force/stress comparison is also available there.
+Use vasp_std, not vasp_gam, for the denser mesh. Comparing Γ and 2×2×2 is the first
+check, not proof that 2×2×2 is converged; metallic H may need further tests.
+
+All requests in the example queue selection come from the 300-GPa/3000-K
+reference run: different host compositions and independent N/N+1 trajectories,
+not mixed state points. The pressure and temperature labels are target values;
+the instantaneous ionic state is not determined by those labels or a static SCF.

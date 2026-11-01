@@ -216,3 +216,17 @@ def test_gamma_eligibility_and_live_saved_pair(prepared,tmp_path,monkeypatch,cap
     assert 'VASP−GRACE=-50.00 meV/H' in capsys.readouterr().out
     check.watch(Namespace(directory=str(root),interval=1,once=True))
     assert 'ΔU_GRACE=-0.050000 eV' in capsys.readouterr().out
+
+
+def test_mesh_check_preserves_source_and_pair_geometry(prepared,tmp_path,monkeypatch):
+    out,_,_=prepared;exe=fake_vasp(tmp_path);monkeypatch.setenv('SLURM_JOB_ID','test')
+    check.run(runner_args(out,exe,max_points=2))
+    old=(out/'p000_without_H/KPOINTS').read_bytes()
+    mesh=tmp_path/'mesh'
+    check.mesh_check(Namespace(directory=str(out),hosts=['H2O'],pairs_per_host=1,mesh=[2,2,2],out=str(mesh)))
+    manifest=json.loads((mesh/'manifest.json').read_text())
+    assert len(manifest['points'])==2 and manifest['pairs'][0]['baseline_dU_DFT_eV']==pytest.approx(-.1)
+    assert (out/'p000_without_H/KPOINTS').read_bytes()==old
+    assert '2 2 2' in (mesh/'p000_without_H/KPOINTS').read_text()
+    assert not check.gamma_only(mesh/'p000_without_H')
+    assert (mesh/'p000_without_H/structure.extxyz').read_bytes()==(out/'p000_without_H/structure.extxyz').read_bytes()

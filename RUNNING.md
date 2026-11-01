@@ -332,6 +332,40 @@ analysis uses the queue's saved GRACE ΔU without model calls. At the measured
 not 10; shared-node throughput and SCF costs must be measured. Forty pairs means
 80 structures and roughly twice that time. Check allocation time remaining.
 
+Completed OUTCARs also supply forces and static stress without new VASP runs.
+To compare against GRACE on the same prepared geometries (a cheap model
+reevaluation, after CPU resources are available):
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_saved_40_1 \
+  --forces-stress --device cpu --out runs/plots/vasp_saved_40_forces_1
+```
+
+This writes per-structure/species force errors, matched force/stress arrays,
+scatter plots and unavailable-data reasons. ASE sign/order/units are used for
+both models; stresses are configurational, with no ionic NkBT/V contribution.
+The default energy comparison still uses the stored GRACE ΔU without model calls.
+
+To isolate k-point error, copy one completed ice and one completed reservoir
+pair into a separate explicit 2×2×2 mesh check:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh mesh-check runs/vasp_saved_40_1 \
+  --hosts H2O pureH --pairs-per-host 1 --mesh 2 2 2 \
+  --out runs/vasp_kmesh_2_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_kmesh_2_1 \
+  --exe vasp_std --ranks 32 --parallel 4 --minutes 20
+bash mlp_pipeline/perlmutter_vasp_check.sh analyze runs/vasp_kmesh_2_1 \
+  --out runs/plots/vasp_kmesh_2_1
+```
+
+There are four VASP structures (two pairs). Source inputs/results stay untouched;
+the same geometry, PAW, cutoff, smearing, and parallel settings are retained.
+The CSV `kmesh_shift_eV` reports the change in ΔU relative to the completed source
+mesh, not a total energy per-atom comparison. `vasp_std` is required for 2×2×2.
+Costs can be substantially higher than Γ; check allocation time remaining before
+starting. This is a convergence control, not new MD or a DFT free-energy estimate.
+
 The runner prints `PAIR ... ΔU_VASP ... ΔU_GRACE ... VASP−GRACE ...` as soon as
 both geometries finish. A single total energy cannot yet supply that difference.
 For a job started with an older runner, a separate terminal can watch the same
