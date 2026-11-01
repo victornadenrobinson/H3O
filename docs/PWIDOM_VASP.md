@@ -86,6 +86,9 @@ one geometry first; repeating it skips that completed geometry and runs its
 partner. Later request more pairs, or `--hosts H2O pureH`, subject to the available
 counts printed by `queue`. No samples are manufactured if fewer pairs exist.
 Each pair requires both VASP energies even though its GRACE difference is saved.
+The runner reports ΔU_VASP, ΔU_GRACE and their difference immediately after both
+members complete. `watch DIRECTORY` provides the same live read-only report for
+a job already running with an older runner; Ctrl-C stops the viewer only.
 No GRACE/model calls are made by queue preparation or the default saved-pair
 analysis. The source model identity and state must match the selected run.
 
@@ -144,3 +147,15 @@ reference. GRACE trajectories plus VASP probe energies are NOT automatically
 unbiased pure-DFT free energies; genuine DFT ensembles or validated ensemble
 reweighting/overlap are needed. PWidom avoids lambda windows, but the fastest
 converged VASP route is not established from the GRACE benchmarks.
+
+
+## Gamma executable versus k-point convergence
+
+Preflight prints KPOINTS and `gamma_only`. `VASP_EXE=vasp_gam` is supported for
+future launches only when the prepared mesh is Γ-only (zero shift, 1×1×1 automatic
+mesh or one explicit origin point) without SOC/noncollinear features. Incompatible
+inputs are rejected before launch. An already-running vasp_std Γ calculation is
+valid and need not be restarted. Template KPOINTS are copied to all points,
+including the reservoir. Whether that mesh is converged for metallic hydrogen is
+a separate calculation: compare paired energy differences against a denser mesh,
+not just cell size or the availability of vasp_gam.

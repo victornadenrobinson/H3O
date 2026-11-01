@@ -197,3 +197,22 @@ def test_parallel_srun_is_exclusive_and_exact(prepared,tmp_path,capsys):
     check.run(runner_args(out,exe,launcher='srun',parallel=4,max_points=4,dry_run=True))
     output=capsys.readouterr().out
     assert '--exclusive --exact --ntasks 1' in output
+
+
+def test_gamma_eligibility_and_live_saved_pair(prepared,tmp_path,monkeypatch,capsys):
+    out,_,_=prepared
+    point=out/'p000_without_H'
+    assert check.gamma_only(point)
+    kp=point/'KPOINTS';original=kp.read_text()
+    kp.write_text('mesh\n0\nGamma\n2 2 2\n0 0 0\n')
+    assert not check.gamma_only(point)
+    kp.write_text('mesh\n0\nGamma\n1 1 1\n.5 0 0\n')
+    assert not check.gamma_only(point)
+    kp.write_text(original)
+    queue,args=make_queue(prepared,tmp_path)
+    check.prep_queue(args);root=Path(args.out)
+    monkeypatch.setenv('SLURM_JOB_ID','test');exe=fake_vasp(tmp_path)
+    check.run(runner_args(root,exe))
+    assert 'VASP−GRACE=-50.00 meV/H' in capsys.readouterr().out
+    check.watch(Namespace(directory=str(root),interval=1,once=True))
+    assert 'ΔU_GRACE=-0.050000 eV' in capsys.readouterr().out

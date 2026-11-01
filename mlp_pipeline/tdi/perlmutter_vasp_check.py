@@ -71,6 +71,53 @@ def done(point):
     except FileNotFoundError:return None
 
 
+def gamma_only(directory):
+    """Conservative check of prepared k-points and real-wavefunction eligibility."""
+    directory=Path(directory);inc=dft.parse_incar(directory/'INCAR')
+    if any(inc.get(k,'F').strip('.').upper() in ('T','TRUE') for k in ('LSORBIT','LNONCOLLINEAR')):return False
+    lines=[line.split('!')[0].strip() for line in (directory/'KPOINTS').read_text().splitlines() if line.strip()]
+    try:
+        count=int(lines[1].split()[0])
+        if count==0 and lines[2].lower().startswith(('g','m')):
+            mesh=[int(v) for v in lines[3].split()[:3]]
+            shift=[float(v) for v in lines[4].split()[:3]] if len(lines)>4 else [0.,0.,0.]
+            return mesh==[1,1,1] and len(shift)==3 and np.allclose(shift,0,atol=1e-12,rtol=0)
+        if count==1 and lines[2].lower().startswith(('r','c','k')):
+            return np.allclose([float(v) for v in lines[3].split()[:3]],[0,0,0],atol=1e-12,rtol=0)
+    except (ValueError,IndexError):pass
+    return False
+
+
+def report_pairs(root,manifest,reported=None,changed=None):
+    reported=reported if reported is not None else set();rows=[]
+    for pair in manifest.get('pairs',[]):
+        if changed is not None and changed not in pair['points']:continue
+        if pair['pair'] in reported:continue
+        records=[done(Path(root)/identity) for identity in pair['points']]
+        if not all(records):continue
+        delta=records[1]['TOTEN_eV']-records[0]['TOTEN_eV']
+        grace=pair.get('dU_mlp_eV')
+        message=f'PAIR {pair["pair"]:03d} {pair["host"]} {pair["direction"]}: ΔU_VASP={delta:.6f} eV'
+        if grace is not None:message+=f'; ΔU_GRACE={grace:.6f} eV; VASP−GRACE={(delta-grace)*1000:+.2f} meV/H'
+        else:message+='; saved GRACE ΔU unavailable'
+        print(message,flush=True);reported.add(pair['pair'])
+        rows.append(dict(pair=pair['pair'],dU_DFT_eV=delta,dU_MLP_eV=grace,
+                         DFT_minus_MLP_eV=delta-grace if grace is not None else None))
+    return rows
+
+
+def watch(a):
+    root=Path(a.directory).resolve();manifest=json.loads((root/'manifest.json').read_text());reported=set()
+    if not manifest.get('pairs'):raise ValueError('This check has no saved pairs to watch')
+    if not np.isfinite(a.interval) or a.interval<=0:raise ValueError('Positive watch interval required')
+    try:
+        while True:
+            report_pairs(root,manifest,reported)
+            if a.once or len(reported)==len(manifest['pairs']):return
+            time.sleep(a.interval)
+    except KeyboardInterrupt:return
+
+
 def validated_template(path):
     path=Path(path).resolve()
     missing=[n for n in ('INCAR','KPOINTS','POTCAR','POSCAR') if not (path/n).is_file()]
@@ -123,6 +170,7 @@ def preflight(a):
             match=re.search(r'\b'+tag+r'\s*=\s*([-+\w.]+)',text)
             if match:training[tag]=match.group(1)
     print(json.dumps(dict(template=str(Path(a.template).resolve()),species=tp['species'],training_header=training,
+        gamma_only=gamma_only(a.template),KPOINTS=tp['kpoints'],
         settings={k:tp['incar'].get(k) for k in ('ENCUT','EDIFF','ISMEAR','SIGMA','PREC','GGA','LASPH','ISPIN','LREAL','ALGO','NELM','NCORE','NPAR','KPAR')},
         executable=exe,allocation=os.environ.get('SLURM_JOB_ID'),
         note='No VASP execution. POTCAR contents are not printed or committed.'),indent=2))
@@ -338,6 +386,8 @@ def run(a):
         directory=root/point['path']
         if input_hash(directory)!=point['input_sha256']:raise ValueError(f'{directory}: inputs changed since preparation')
         if done(directory):completed+=1;print(f'SKIP converged {point["id"]}',flush=True);continue
+        if 'vasp_gam' in Path(exe).name and not gamma_only(directory):
+            raise ValueError(f'{point["id"]}: vasp_gam requires confirmed Γ-only k-points and no SOC/noncollinear flags')
         inc=dft.parse_incar(directory/'INCAR');ncore=int(inc.get('NCORE','1'));kpar=int(inc.get('KPAR','1'))
         if ncore<1 or kpar<1 or a.ranks%(ncore*kpar):
             raise ValueError(f'{point["id"]}: ranks={a.ranks} incompatible with NCORE={ncore}, KPAR={kpar}; review parallel settings')
@@ -352,6 +402,7 @@ def run(a):
         for point in pending:print(f'{point["id"]}: {shlex.join(command)}',flush=True)
         return
     deadline=time.monotonic()+a.minutes*60;stopped=[None];previous={};active=[];ran=0;failed=0;budget_stop=False
+    reported=set();report_pairs(root,manifest,reported)
     def stop(signum,frame):stopped[0]=signum
     def launch(point):
         directory=root/point['path'];lock=(directory/'.run.lock').open('a')
@@ -385,6 +436,7 @@ def run(a):
                 save(job['directory']/'DONE.json',dict(energy,input_sha256=job['point']['input_sha256'],
                     attempt=str(job['attempt'].relative_to(job['directory'])),wall_seconds=timing,ranks=a.ranks))
                 completed+=1;print(f'DONE {job["point"]["id"]}: TOTEN={energy["TOTEN_eV"]:.9f} eV, wall={timing:.1f}s',flush=True)
+                report_pairs(root,manifest,reported,job['point']['id'])
             else:
                 failed+=1;print(f'INCOMPLETE {job["point"]["id"]}: exit={code}; converged TOTEN not accepted; inspect {job["attempt"]}',flush=True)
         finally:job['lock'].close()
@@ -515,6 +567,7 @@ def main():
     q.add_argument('--launcher',default='srun');q.add_argument('--ranks',type=int,default=32);q.add_argument('--parallel',type=int,default=1,help='independent concurrent VASP points; ranks are per point');q.add_argument('--minutes',type=float,default=20)
     q.add_argument('--margin-seconds',type=float,default=60);q.add_argument('--max-points',type=int);q.add_argument('--index',type=int);q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('status');q.add_argument('directory')
+    q=sub.add_parser('watch');q.add_argument('directory');q.add_argument('--interval',type=float,default=2.);q.add_argument('--once',action='store_true')
     q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
     a=p.parse_args()
     try:globals()[a.action.replace('-','_')](a)

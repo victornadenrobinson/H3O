@@ -332,6 +332,23 @@ analysis uses the queue's saved GRACE ΔU without model calls. At the measured
 not 10; shared-node throughput and SCF costs must be measured. Forty pairs means
 80 structures and roughly twice that time. Check allocation time remaining.
 
+The runner prints `PAIR ... ΔU_VASP ... ΔU_GRACE ... VASP−GRACE ...` as soon as
+both geometries finish. A single total energy cannot yet supply that difference.
+For a job started with an older runner, a separate terminal can watch the same
+files without restarting the calculations:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh watch runs/vasp_saved_40_1
+```
+
+Ctrl-C stops only the viewer. Preflight prints the actual KPOINTS and a
+conservative `gamma_only` check. Future runs may use `export VASP_EXE=vasp_gam`
+when the input is strictly Γ-only with no SOC/noncollinear flags. The runner
+rejects `vasp_gam` on incompatible inputs. `vasp_std` is also valid at Γ; let
+active calculations finish. Every prepared point currently copies the template
+KPOINTS, including pure H: convergence of Γ-only energies/paired ΔU with k-mesh
+must be tested for each cell/material, especially metallic hydrogen.
+
 A pair is two single-point geometries. Queue import filters to the selected
 run/host tags and checks the saved geometry hashes. Analysis uses `dU_mlp_eV`
 directly; no new GRACE evaluation is required. Weight-selected/extreme requests
