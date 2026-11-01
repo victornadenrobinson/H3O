@@ -65,8 +65,10 @@ sbatch --account=m3349 --qos=regular mlp_pipeline/perlmutter_dft_pwidom.sbatch r
 sbatch --account=m3349 --qos=regular mlp_pipeline/perlmutter_dft_pwidom.sbatch runs/dft_pwidom_600GPa_5000K_1
 ```
 
-Each job reserves two entire CPU nodes and 256 tasks. Eight independent 32-rank
-workers cover H2O, H2.083O, H2.25O and pure H, with two seeds each. Each worker
+Each job reserves two entire CPU nodes and 256 tasks. Four independent 64-rank
+workers cover H2O, H2.083O, H2.25O and pure H, with one seed each.
+The older layout used eight 32-rank workers and two seeds; the final section
+shows how to migrate existing plans. Each worker
 runs its two MD ensembles sequentially, then trial evaluations. No worker spans
 nodes; OMP/BLAS use one thread per process. VASP has no other concurrent GRACE
 model consuming memory. `--mem=0` reserves available node memory. Each state/job
@@ -143,3 +145,62 @@ OMP_NUM_THREADS=8 TF_NUM_INTRAOP_THREADS=8 TF_NUM_INTEROP_THREADS=1 \
 Reports model initialization separately and per-geometry first-call/warm medians
 for energy+forces+stress, resetting ASE's result cache between repeats. This is
 static calculator timing, not a guarantee of MD throughput.
+
+## Four systems × 64 ranks: 20-minute test and 48-hour jobs
+
+Current defaults are one replica, 64 ranks per system, 729 H atoms. To reuse an
+older eight-worker plan, stop its smoke workers and create a four-worker layout:
+
+```bash
+bash mlp_pipeline/perlmutter_vasp_check.sh dft-stop-smokes runs/dft_pwidom_500GPa_5000K_1
+wait
+bash mlp_pipeline/perlmutter_vasp_check.sh dft-h-size runs/dft_pwidom_500GPa_5000K_1 --natoms 729
+bash mlp_pipeline/perlmutter_vasp_check.sh dft-layout runs/dft_pwidom_500GPa_5000K_1 \
+  --ranks 64 --out runs/dft_pwidom_500GPa_5000K_4x64
+bash mlp_pipeline/perlmutter_dft_pwidom_run.sh runs/dft_pwidom_500GPa_5000K_4x64 \
+  --smoke --minutes 20
+```
+
+Requires an existing 256-task CPU allocation. The layout references the original
+first-replica data directories and updates MPI layout in their configs; it
+refuses changes while those workers hold simulation locks. Other replicas are
+not launched. Smoke output goes to each worker directory's smoke64.log. The
+runner sends checkpoint-stop requests at 18 minutes; at 20 minutes it terminates
+unfinished calls, preserving prior atomic checkpoints/results. A terminated
+partial SCF is not accepted. The full smoke estimator may remain unfinished.
+Re-running continues it. Check for 729/730 H and warm=True; do not infer warm
+speedup until measured. Production has separate MD/checkpoints from the smoke.
+
+For production, from a login shell in the repo root:
+
+```bash
+sbatch --account=m3349 --qos=regular mlp_pipeline/perlmutter_dft_pwidom_48h.sbatch \
+  runs/dft_pwidom_500GPa_5000K_4x64
+```
+
+The 48-hour script passes a 47-hour runner budget explicitly; it does not inherit
+the old 23-hour limit. Each job requests two full nodes and 256 MPI tasks, at
+most 96 node-hours. Existing 0.5 ps sampling / 1 ps equilibration budgets are
+unchanged; 48 hours is a wall-time allowance, not a convergence guarantee.
+Submit the same command to resume if unfinished. Do not run two jobs referencing
+the same worker data directories concurrently.
+
+Other candidate P/Ts, with exact-bin EOS checks and fresh four-worker plans:
+
+```bash
+for P in 400 600; do
+  bash mlp_pipeline/perlmutter_pwidom.sh --cpu --P "$P" --T 5000 \
+    --inspect-eos runs/inventory_binned.csv --save-eos "runs/dft_eos_${P}GPa_5000K_48h.json" || break
+  bash mlp_pipeline/perlmutter_vasp_check.sh dft-plan \
+    --state-json "runs/dft_eos_${P}GPa_5000K_48h.json" --template vasp_inputs \
+    --replicates 1 --ranks 64 --h-natoms 729 \
+    --out "runs/dft_pwidom_${P}GPa_5000K_4x64" || break
+  sbatch --account=m3349 --qos=regular mlp_pipeline/perlmutter_dft_pwidom_48h.sbatch \
+    "runs/dft_pwidom_${P}GPa_5000K_4x64" || break
+done
+```
+
+Use after assessing the real-VASP smoke test. Missing EOS coverage stops plan
+creation. Site QoS/account wall-time limits are enforced by sbatch; if your
+account rejects 48 hours, request its permitted duration and use the matching
+runner budget via DFT_MINUTES. No automatic submission is performed by helpers.

@@ -30,7 +30,7 @@ def dft_plan(a):
     for replica in range(a.replicates):
         for host,hper,key in [('H2O',2.,'ice'),('H2p083O',2+9/108,'mid'),('H2p25O',2.25,'h225'),('pureH',None,'H')]:
             directory=out/f'{host}_rep{replica}';directory.mkdir();config=directory/'vasp.json'
-            vasp_config(Namespace(template=a.template,T=state['T'],ranks=32,exe=a.exe,work=str(directory/'vasp_work'),out=str(config),timeout_seconds=1800))
+            vasp_config(Namespace(template=a.template,T=state['T'],ranks=getattr(a,'ranks',64),exe=a.exe,work=str(directory/'vasp_work'),out=str(config),timeout_seconds=1800))
             ice,rich=state['ice'],state['h225']
             if key=='mid':
                 # Same volume interpolation as the existing four-host launcher.
@@ -45,10 +45,10 @@ def dft_plan(a):
                 '--checkpoint-seconds','300','--label','vasp','--out',str(directory),'--tag','pw']
             if host=='pureH':args+=['--natoms',str(state['H']['natoms'])]
             else:args+=['--hper',str(hper),'--nrep',str(ice['nrep'])]
-            workers.append(dict(host=host,replica=replica,directory=str(directory),args=args))
+            workers.append(dict(ranks=getattr(a,'ranks',64),host=host,replica=replica,directory=str(directory),args=args))
     save(out/'dft_plan.json',dict(state=state,workers=workers,ps=a.ps,equil_ps=a.equil_ps,
         note='Same ASE Langevin MD, forward/reverse proposals and BAR as GRACE PWidom. VASP supplies all target energies/forces. Check phase, pressure correction and sampling convergence.'))
-    print(f'Prepared {len(workers)} isolated 32-rank workers. No MD/VASP executed. Plan: {out}')
+    print(f'Prepared {len(workers)} isolated workers. No MD/VASP executed. Plan: {out}')
 
 
 def dft_worker(a):
@@ -130,3 +130,40 @@ def dft_stop_smokes(a):
             os.kill(int(entry.name),signal.SIGTERM);matched.append(int(entry.name))
         except (OSError,ValueError,IndexError):continue
     print(f'Stop requested for smoke worker PIDs {matched}. Allow current force calls to finish and checkpoint before restarting.')
+
+
+def dft_layout(a):
+    """Clone a plan layout while reusing its first-replica simulation data."""
+    from tdi.perlmutter_vasp_check import save
+    from tdi.vasp_backend import config,fingerprint
+    root=Path(a.directory).resolve();plan=json.loads((root/'dft_plan.json').read_text())
+    destination=Path(a.out).resolve()
+    if destination.exists():raise ValueError('Use a fresh layout directory')
+    workers=[]
+    for host in a.hosts:
+        matches=[w for w in plan['workers'] if w['host']==host and w['replica']==0]
+        if len(matches)!=1:raise ValueError(f'Missing first replica for {host}')
+        worker=dict(matches[0]);directory=Path(worker['directory'])
+        # Configs can change MPI layout, but running workers must first exit.
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for folder in [directory,directory/'smoke']:
+                if not folder.exists():continue
+                lock=stack.enter_context((folder/'.worker.lock').open('a'))
+                try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError:raise ValueError(f'{host} still running; stop workers before changing layout')
+            path=Path(worker['args'][worker['args'].index('--model')+1].split(':',1)[1]);cfg=config(path)
+            from tdi import dft_check
+            inc=dft_check.parse_incar(Path(cfg['template'])/'INCAR')
+            divisor=int(inc.get('NCORE','1'))*int(inc.get('KPAR','1'))
+            if a.ranks<1 or a.ranks%divisor:raise ValueError('Ranks incompatible with NCORE*KPAR')
+            command=cfg['command'];command[command.index('--ntasks')+1]=str(a.ranks)
+            save(path,cfg)
+            smoke=directory/'smoke'/'vasp.json'
+            if smoke.exists():
+                cfg_smoke=config(smoke);cfg_smoke['command'][cfg_smoke['command'].index('--ntasks')+1]=str(a.ranks);save(smoke,cfg_smoke)
+            worker['ranks']=a.ranks;workers.append(worker)
+    destination.mkdir(parents=True)
+    plan['workers']=workers;plan['layout_source']=str(root)
+    save(destination/'dft_plan.json',plan)
+    print(f'Prepared {len(workers)} systems × {a.ranks} ranks = {len(workers)*a.ranks} tasks; data/checkpoints reused from original worker directories.')

@@ -76,15 +76,20 @@ class VaspEngine(Calculator):
             # Overwritten active files are scratch only. Completed results are atomic.
             for name in ('OUTCAR','vasprun.xml','CONTCAR'): (directory/name).unlink(missing_ok=True)
             command=self.settings['command'];started=time.perf_counter()
+            from tdi.perlmutter_vasp_check import save
+            active=self.root/'active_process.json'
             with (directory/'vasp.out').open('w') as log:
                 process=subprocess.Popen(command,cwd=directory,stdout=log,stderr=subprocess.STDOUT,
                     env=dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1'),start_new_session=True)
+                save(active,dict(pid=process.pid,owner_pid=os.getpid(),job=os.environ.get('SLURM_JOB_ID'),
+                    proc_start=Path(f'/proc/{process.pid}/stat').read_text().split()[21]))
                 try:code=process.wait(timeout=self.settings.get('timeout_seconds',1800))
                 except BaseException:
                     os.killpg(process.pid,signal.SIGTERM)
                     try:process.wait(timeout=10)
                     except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);process.wait()
                     wave.unlink(missing_ok=True);raise
+                finally:active.unlink(missing_ok=True)
             from tdi.perlmutter_vasp_check import converged,save
             energy=converged(directory/'OUTCAR')
             if code or energy is None:

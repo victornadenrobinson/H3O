@@ -116,3 +116,48 @@ def test_resize_h_preserves_old_workers_and_density(configured,tmp_path):
     assert new['args'][new['args'].index('--natoms')+1]=='729'
     from tdi.run_real import build_h_n
     assert build_h_n(1.5,729).get_volume()==pytest.approx(729*1.5)
+
+
+def test_four_system_64_rank_layout_reuses_data(configured,tmp_path):
+    _,exe,template=configured
+    state=tmp_path/'state.json';state.write_text(json.dumps(dict(P=500.,T=5000.,ice=dict(vpa=2.,B_GPa=1000.,nrep=3,source='test'),
+        h225=dict(vpa=2.1,B_GPa=1100.,nrep=3,source='test'),H=dict(vpa=1.5,B_GPa=1200.,natoms=250,source='test'))))
+    root=tmp_path/'old'
+    dft_pwidom.dft_plan(Namespace(state_json=str(state),out=str(root),replicates=2,ps=.5,equil_ps=1.,every_fs=20.,sel=4,ndel=4,
+        template=str(template),exe=str(exe),ice_proxy='none',h_proxy='none',ranks=32))
+    before=json.loads((root/'dft_plan.json').read_text())
+    old_fp=pwidom.model_fingerprint(before['workers'][0]['args'][2])
+    out=tmp_path/'four'
+    dft_pwidom.dft_layout(Namespace(directory=str(root),out=str(out),hosts=['H2O','H2p083O','H2p25O','pureH'],ranks=64))
+    after=json.loads((out/'dft_plan.json').read_text())
+    assert len(after['workers'])==4 and all(w['replica']==0 for w in after['workers'])
+    assert after['workers'][0]['directory']==before['workers'][0]['directory']
+    assert pwidom.model_fingerprint(after['workers'][0]['args'][2])==old_fp
+    from tdi.dft_pwidom_runner import rank_requirement
+    assert rank_requirement(after['workers'])==256
+
+
+def test_bounded_runner_requests_checkpoint_stop(tmp_path,monkeypatch):
+    from tdi import dft_pwidom_runner as runner
+    cfg=tmp_path/'vasp.json';cfg.write_text(json.dumps(dict(command=['srun','--ntasks','64','vasp_gam'])))
+    workers=[]
+    for i in range(4):
+        directory=tmp_path/f'w{i}';directory.mkdir()
+        workers.append(dict(host=f'h{i}',directory=str(directory),args=['run','--model','vasp:'+str(cfg)]))
+    (tmp_path/'dft_plan.json').write_text(json.dumps(dict(workers=workers)))
+    clock=[0.];processes=[]
+    class Process:
+        def __init__(self,*args,**kwargs):self.returncode=None;self.pid=900000+len(processes);processes.append(self)
+        def poll(self):return self.returncode
+        def terminate(self):self.returncode=-15
+        def kill(self):self.returncode=-9
+        def wait(self):return self.returncode
+    monkeypatch.setattr(runner.subprocess,'Popen',Process)
+    monkeypatch.setattr(runner.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(runner.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    monkeypatch.setattr(runner.signal,'signal',lambda *args:None)
+    monkeypatch.setenv('SLURM_JOB_ID','test');monkeypatch.setenv('SLURM_NTASKS','256')
+    monkeypatch.setattr(sys,'argv',['runner',str(tmp_path),'--minutes','.02','--stop-grace-seconds','.2'])
+    with pytest.raises(SystemExit) as exit:runner.main()
+    assert exit.value.code==0 and len(processes)==4
+    assert all(p.returncode==-15 for p in processes)

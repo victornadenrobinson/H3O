@@ -457,3 +457,8 @@ ASE force engine**, including an interactive smoke test, isolated restart caches
 CPU timing, and two-node 24-hour job recipes, see
 [Pure-VASP PWidom](docs/PWIDOM_PURE_VASP.md). Smoke-test before submitting pilots;
 this backend has local mock-executable tests, not a completed Perlmutter run.
+
+For four DFT PWidom systems × 64 ranks, use `dft-layout` followed by
+`bash mlp_pipeline/perlmutter_dft_pwidom_run.sh PLAN --smoke --minutes 20`.
+The 48-hour batch script is `mlp_pipeline/perlmutter_dft_pwidom_48h.sbatch`;
+see the final section of [Pure-VASP PWidom](docs/PWIDOM_PURE_VASP.md).

@@ -721,8 +721,9 @@ def main():
     q=sub.add_parser('mesh-check');q.add_argument('directory');q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--pairs-per-host',type=int,default=1);q.add_argument('--mesh',nargs=3,type=int,default=[2,2,2]);q.add_argument('--out',required=True)
     q=sub.add_parser('timing');q.add_argument('directory');q.add_argument('--model',required=True);q.add_argument('--device',default='cpu');q.add_argument('--count',type=int,default=8);q.add_argument('--repeats',type=int,default=3);q.add_argument('--out',required=True)
     q=sub.add_parser('vasp-config');q.add_argument('--template',default='vasp_inputs');q.add_argument('--T',type=float,required=True);q.add_argument('--ranks',type=int,default=32);q.add_argument('--exe',default='vasp_gam');q.add_argument('--work',required=True);q.add_argument('--out',required=True);q.add_argument('--timeout-seconds',type=float,default=1800)
-    q=sub.add_parser('dft-plan');q.add_argument('--state-json',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--exe',default='vasp_gam');q.add_argument('--out',required=True);q.add_argument('--replicates',type=int,default=2);q.add_argument('--h-natoms',type=int,default=729);q.add_argument('--ps',type=float,default=.5);q.add_argument('--equil-ps',type=float,default=1);q.add_argument('--every-fs',type=float,default=20);q.add_argument('--sel',type=int,default=4);q.add_argument('--ndel',type=int,default=4);q.add_argument('--ice-proxy',default='runs/pwidom_fit/proxy_ice.json');q.add_argument('--h-proxy',default='runs/pwidom_fit/proxy_H.json')
-    q=sub.add_parser('dft-stop-smokes');q.add_argument('directory')
+    q=sub.add_parser('dft-plan');q.add_argument('--state-json',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--exe',default='vasp_gam');q.add_argument('--out',required=True);q.add_argument('--replicates',type=int,default=1);q.add_argument('--ranks',type=int,default=64);q.add_argument('--h-natoms',type=int,default=729);q.add_argument('--ps',type=float,default=.5);q.add_argument('--equil-ps',type=float,default=1);q.add_argument('--every-fs',type=float,default=20);q.add_argument('--sel',type=int,default=4);q.add_argument('--ndel',type=int,default=4);q.add_argument('--ice-proxy',default='runs/pwidom_fit/proxy_ice.json');q.add_argument('--h-proxy',default='runs/pwidom_fit/proxy_H.json')
+    q=sub.add_parser('dft-layout');q.add_argument('directory');q.add_argument('--hosts',nargs='+',default=['H2O','H2p083O','H2p25O','pureH']);q.add_argument('--ranks',type=int,default=64);q.add_argument('--out',required=True)
+    q=sub.add_parser('dft-stop-smokes','dft-layout');q.add_argument('directory')
     q=sub.add_parser('dft-h-size');q.add_argument('directory');q.add_argument('--natoms',type=int,default=729)
     q=sub.add_parser('dft-worker');q.add_argument('directory');q.add_argument('--index',type=int,default=0);q.add_argument('--smoke',action='store_true')
     q=sub.add_parser('fitprep');q.add_argument('dataset');q.add_argument('--base-train',default='runs/train_m.extxyz');q.add_argument('--base-valid',default='runs/valid_m.extxyz');q.add_argument('--out',required=True)
@@ -745,7 +746,7 @@ def main():
     if a.action in ('normal','baseline','dataset','fitprep','timing'):
         from tdi import vasp_normal_check
         globals()[a.action]=getattr(vasp_normal_check,a.action)
-    if a.action in ('dft-plan','dft-worker','dft-h-size','dft-stop-smokes'):
+    if a.action in ('dft-plan','dft-worker','dft-h-size','dft-stop-smokes','dft-layout'):
         from tdi import dft_pwidom
         globals()[a.action.replace('-','_')]=getattr(dft_pwidom,a.action.replace('-','_'))
     if a.action=='vasp-config':
