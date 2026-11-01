@@ -440,3 +440,10 @@ plan. VASP 5.4.4 CPU and VASP 6 GPU modules are distinct choices; inspect a trai
 OUTCAR and template before preparing a submission. No automatic VASP submission
 or training is performed by the candidate queue. Raw structures/POTCARs stay out
 of Git. Source-specific summary snapshots: [docs/status](docs/status/README.md).
+
+For 40 original DFT-labelled snapshots with live energy/force/stress comparisons,
+see [training-label reproduction](docs/PWIDOM_VASP.md#reproduce-original-training-labels-two-cpu-nodes).
+Use `training --count 40 --source-root .. --out runs/vasp_training_40_1`, then
+`run runs/vasp_training_40_1 --exe vasp_gam --ranks 32 --parallel 8 --minutes 50`
+through `bash mlp_pipeline/perlmutter_vasp_check.sh`. Two nodes need
+`--ntasks-per-node=128` (256 tasks total); `-n 128` only supports four such points.

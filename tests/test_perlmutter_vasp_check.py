@@ -196,7 +196,7 @@ def test_parallel_srun_is_exclusive_and_exact(prepared,tmp_path,capsys):
     out,_,_=prepared;exe=fake_vasp(tmp_path)
     check.run(runner_args(out,exe,launcher='srun',parallel=4,max_points=4,dry_run=True))
     output=capsys.readouterr().out
-    assert '--exclusive --exact --ntasks 1' in output
+    assert '--exclusive --exact --nodes=1 --ntasks 1' in output
 
 
 def test_gamma_eligibility_and_live_saved_pair(prepared,tmp_path,monkeypatch,capsys):
@@ -230,3 +230,61 @@ def test_mesh_check_preserves_source_and_pair_geometry(prepared,tmp_path,monkeyp
     assert '2 2 2' in (mesh/'p000_without_H/KPOINTS').read_text()
     assert not check.gamma_only(mesh/'p000_without_H')
     assert (mesh/'p000_without_H/structure.extxyz').read_bytes()==(out/'p000_without_H/structure.extxyz').read_bytes()
+
+
+def test_training_label_order_and_reproduction(tmp_path,monkeypatch,capsys):
+    from ase import Atoms
+    from ase.io import write
+    from ase.calculators.singlepoint import SinglePointCalculator
+    template=tmp_path/'tdi'/'5000K'/'volume';fake_template(str(template))
+    inc=template/'INCAR';inc.write_text(inc.read_text().replace('SIGMA = 0.43','SIGMA = 0.43086652'))
+    at=Atoms('OH2',positions=[[0,0,0],[1,0,0],[0,1,0]],cell=[5,5,5],pbc=True)
+    forces=np.arange(9).reshape(3,3)/100
+    at.calc=SinglePointCalculator(at,energy=-1.,free_energy=-1.,forces=forces,stress=np.zeros(6))
+    at.info.update(source='tdi/5000K/volume/out10/OUTCAR.gz',frame=42,T_K=5000.,P_GPa=600.)
+    data=tmp_path/'train.extxyz';write(data,at)
+    out=tmp_path/'labels'
+    args=Namespace(data=[str(data)],out=str(out),count=20,source_root=str(tmp_path),template=None,T=5000.,P=600.,pressure_window=100.)
+    check.training(args)
+    manifest=json.loads((out/'manifest.json').read_text());point=manifest['points'][0]
+    with np.load(out/point['id']/'reference.npz') as ref:np.testing.assert_allclose(ref['forces'],forces[[1,2,0]])
+    assert point['frame']==42 and len(manifest['points'])==1
+    monkeypatch.setenv('SLURM_JOB_ID','fake')
+    check.run(runner_args(out,fake_vasp(tmp_path)))
+    result=json.loads((out/point['id']/'label_comparison.json').read_text())
+    assert result['energy_difference_eV']==pytest.approx(0.)
+    assert 'force_stress_error' in result # synthetic OUTCAR intentionally contains energy only
+    assert 'LABEL train_000' in capsys.readouterr().out
+    check.run(runner_args(out,tmp_path/'fake_vasp')) # completion remains resumable
+    with pytest.raises(ValueError,match='fresh'):check.training(args)
+
+
+def test_training_rejects_wrong_temperature_before_writing(tmp_path):
+    from ase import Atoms
+    from ase.io import write
+    from ase.calculators.singlepoint import SinglePointCalculator
+    template=tmp_path/'template';fake_template(str(template))
+    at=Atoms('H2O',positions=np.zeros((3,3)),cell=[5,5,5],pbc=True)
+    at.calc=SinglePointCalculator(at,energy=-1.,forces=np.zeros((3,3)))
+    at.info.update(source='tdi/OUTCAR.gz',frame=0,T_K=3000.)
+    data=tmp_path/'train.extxyz';write(data,at);out=tmp_path/'bad'
+    with pytest.raises(ValueError,match='SIGMA'):
+        check.training(Namespace(data=[str(data)],out=str(out),count=1,source_root=str(tmp_path),template=str(template),T=None,P=None,pressure_window=100.))
+    assert not out.exists()
+
+
+def test_replay_recomputes_saved_delta(prepared,tmp_path,monkeypatch):
+    import csv
+    _,args=make_queue(prepared,tmp_path);check.prep_queue(args);out=Path(args.out)
+    monkeypatch.setenv('SLURM_JOB_ID','test');check.run(runner_args(out,fake_vasp(tmp_path)))
+    class DirectModel:
+        def __init__(self,model,device,batch):assert batch==1
+        def energies(self,atoms):return np.array([-10.,-10.5])
+    monkeypatch.setattr(pw,'Model',DirectModel)
+    analysis=tmp_path/'replay'
+    check.analyze(Namespace(directory=str(out),out=str(analysis),compare_mlp=True,device='cpu',batch=1))
+    row=next(csv.DictReader((analysis/'paired_energies.csv').open()))
+    assert float(row['dU_MLP_saved_eV'])==pytest.approx(-.05)
+    assert float(row['dU_MLP_recomputed_eV'])==pytest.approx(-.5)
+    assert float(row['DFT_minus_MLP_eV'])==pytest.approx(.4)
+    assert json.loads((analysis/'summary.json').read_text())['mlp_replay_audit']['mismatched_pairs']==1

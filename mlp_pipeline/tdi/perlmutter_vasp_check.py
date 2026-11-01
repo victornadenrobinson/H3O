@@ -371,6 +371,94 @@ def mesh_check(a):
     print(f'Prepared {len(pairs)} exact matched pairs / {len(points)} structures at mesh {a.mesh}; run with vasp_std')
 
 
+def training(a):
+    """Prepare labelled original snapshots without running MD or GRACE."""
+    from ase.io import iread
+    out=Path(a.out).resolve()
+    if out.exists():raise ValueError('Use a fresh training check directory')
+    if a.count<1:raise ValueError('count must be positive')
+    candidates=[];seen=set()
+    for filename in a.data:
+        for index,at in enumerate(iread(filename,index=':')):
+            source=at.info.get('source');temperature=at.info.get('T_K')
+            if not source or temperature is None:continue
+            if source in seen:continue
+            if a.T is not None and abs(float(temperature)-a.T)>1:continue
+            if a.P is not None and abs(float(at.info.get('P_GPa',float('inf')))-a.P)>a.pressure_window:continue
+            if at.calc is None or 'forces' not in at.calc.results:continue
+            energy=at.calc.results.get('free_energy',at.calc.results.get('energy'))
+            if energy is None or not np.isfinite(energy):continue
+            candidates.append((filename,index,at,float(energy)));seen.add(source)
+    if not candidates:raise ValueError('No labelled snapshots match the filters')
+    indices=np.linspace(0,len(candidates)-1,min(a.count,len(candidates))).round().astype(int)
+    selected=[]
+    for i in indices:
+        filename,index,at,energy=candidates[i]
+        source=(Path(a.source_root)/at.info['source']).resolve()
+        template_dir=Path(a.template).resolve() if a.template else None
+        if template_dir is None:
+            # Restart subdirectories often inherit inputs from the volume directory.
+            for parent in [source.parent,*list(source.parents)[1:]]:
+                if all((parent/n).is_file() for n in ('INCAR','KPOINTS','POTCAR')):
+                    template_dir=parent;break
+        if template_dir is None:raise ValueError(f'No original input template found for {source}; supply --template only after checking shared settings')
+        tp=dft.template(str(template_dir))
+        if any(k in tp['incar'] for k in ('NELECT','MAGMOM','M_CONSTR')) or any('LAMBDA' in k for k in tp['incar']):
+            raise ValueError(f'{template_dir}: atom-specific or coupling settings require review')
+        if int(float(tp['incar'].get('ISMEAR','0')))!=-1:raise ValueError(f'{template_dir}: expected Fermi smearing ISMEAR=-1')
+        sigma=float(tp['incar'].get('SIGMA','nan'))
+        if not np.isfinite(sigma) or abs(sigma-dft.KB*float(at.info['T_K']))>2e-5:
+            raise ValueError(f'{template_dir}: SIGMA does not match snapshot T_K; select its original inputs')
+        selected.append((filename,index,at,energy,tp,template_dir))
+    out.mkdir(parents=True);points=[]
+    for i,(filename,index,at,energy,tp,template_dir) in enumerate(selected):
+        identity=f'train_{i:03d}';point=out/identity
+        order=[j for species in tp['species'] for j,symbol in enumerate(at.get_chemical_symbols()) if symbol==species]
+        dft.write_dft(str(point),at,float(at.info['T_K']),tp,'Original labelled DFT snapshot')
+        # Keep the original smearing precision and request an explicit stress tensor.
+        with (point/'INCAR').open('a') as f:f.write(f"ISIF = 2\nSIGMA = {tp['incar']['SIGMA']}\n")
+        results=at.calc.results
+        arrays=dict(forces=np.asarray(results['forces'])[order],energy=np.array(energy))
+        if 'stress' in results:arrays['stress']=at.get_stress()
+        np.savez(point/'reference.npz',**arrays)
+        points.append(dict(id=identity,path=identity,natoms=len(at),input_sha256=input_hash(point),
+            reference_sha256=hashlib.sha256((point/'reference.npz').read_bytes()).hexdigest(),
+            source=at.info['source'],frame=int(at.info['frame']),data=str(Path(filename).resolve()),data_index=index,
+            T_K=float(at.info['T_K']),P_GPa=at.info.get('P_GPa'),template=str(template_dir)))
+    save(out/'manifest.json',dict(schema=1,mode='training_label_check',pairs=[],points=points))
+    print(f'Prepared {len(points)} labelled snapshots in {out}; original inputs selected per source, no VASP launched',flush=True)
+
+
+def report_training(root,point):
+    if 'reference_sha256' not in point:return
+    directory=Path(root)/point['path'];record=done(directory)
+    reference=directory/'reference.npz'
+    if hashlib.sha256(reference.read_bytes()).hexdigest()!=point['reference_sha256']:
+        raise ValueError('Original reference labels changed after preparation')
+    with np.load(reference,allow_pickle=False) as labels:
+        delta=record['TOTEN_eV']-float(labels['energy'])
+        result=dict(id=point['id'],energy_difference_eV=delta,energy_difference_meV_atom=delta*1000/point['natoms'])
+        message=f"LABEL {point['id']}: VASP−original={delta:+.6f} eV ({result['energy_difference_meV_atom']:+.3f} meV/atom)"
+        try:
+            at=read(directory/record['attempt']/'OUTCAR',format='vasp-out',index=-1)
+            expected=read(directory/'POSCAR')
+            if not np.array_equal(at.numbers,expected.numbers) or not np.allclose(at.cell,expected.cell,atol=1e-5,rtol=0):raise ValueError('OUTCAR geometry/order mismatch')
+            displacement=at.positions-expected.positions
+            fractional=displacement@np.linalg.inv(expected.cell.array);fractional-=np.rint(fractional)
+            if np.max(np.abs(fractional@expected.cell.array))>1e-4:raise ValueError('OUTCAR positions mismatch')
+            force_error=at.get_forces()-labels['forces']
+            result['force_component_rmse_eV_A']=float(np.sqrt(np.mean(force_error**2)))
+            result['force_max_component_error_eV_A']=float(np.max(np.abs(force_error)))
+            message+=f"; force RMSE={result['force_component_rmse_eV_A']:.6f} eV/Å"
+            if 'stress' in labels:
+                error=(at.get_stress()-labels['stress'])*160.21766208
+                result['stress_rmse_GPa']=float(np.sqrt(np.mean(error**2)))
+                message+=f"; stress RMSE={result['stress_rmse_GPa']:.4f} GPa"
+        except Exception as exc:
+            result['force_stress_error']=str(exc);message+=f'; force/stress comparison unavailable: {exc}'
+    save(directory/'label_comparison.json',result);print(message,flush=True)
+
+
 def snapshot(a):
     if Path(a.out).exists():raise ValueError('Use a fresh snapshot directory')
     tp=validated_template(a.template)
@@ -419,12 +507,13 @@ def run(a):
         raise ValueError('Run VASP inside a Slurm allocation, not on the login node')
     launcher=shlex.split(a.launcher)
     is_srun=bool(launcher and Path(launcher[0]).name=='srun')
-    command=launcher+(['--exclusive','--exact','--ntasks',str(a.ranks),'--cpus-per-task=1','--cpu-bind=cores'] if is_srun else [])+[exe]
+    command=launcher+(['--exclusive','--exact','--nodes=1','--ntasks',str(a.ranks),'--cpus-per-task=1','--cpu-bind=cores'] if is_srun else [])+[exe]
     pending=[];completed=0
     for point in points:
         directory=root/point['path']
         if input_hash(directory)!=point['input_sha256']:raise ValueError(f'{directory}: inputs changed since preparation')
-        if done(directory):completed+=1;print(f'SKIP converged {point["id"]}',flush=True);continue
+        if done(directory):
+            completed+=1;print(f'SKIP converged {point["id"]}',flush=True);report_training(root,point);continue
         if 'vasp_gam' in Path(exe).name and not gamma_only(directory):
             raise ValueError(f'{point["id"]}: vasp_gam requires confirmed Γ-only k-points and no SOC/noncollinear flags')
         inc=dft.parse_incar(directory/'INCAR');ncore=int(inc.get('NCORE','1'));kpar=int(inc.get('KPAR','1'))
@@ -476,6 +565,7 @@ def run(a):
                     attempt=str(job['attempt'].relative_to(job['directory'])),wall_seconds=timing,ranks=a.ranks))
                 completed+=1;print(f'DONE {job["point"]["id"]}: TOTEN={energy["TOTEN_eV"]:.9f} eV, wall={timing:.1f}s',flush=True)
                 report_pairs(root,manifest,reported,job['point']['id'])
+                report_training(root,job['point'])
             else:
                 failed+=1;print(f'INCOMPLETE {job["point"]["id"]}: exit={code}; converged TOTEN not accepted; inspect {job["attempt"]}',flush=True)
         finally:job['lock'].close()
@@ -540,25 +630,44 @@ def analyze(a):
     out=Path(a.out)
     if out.exists():raise ValueError('Use a fresh analysis directory')
     pairs=manifest['pairs'];records={p['id']:done(root/p['path']) for p in manifest['points']}
-    model_cache={};rows=[]
+    model_cache={};fingerprints={};rows=[]
+    tolerance=getattr(a,"replay_tol",1e-3)
+    if not np.isfinite(tolerance) or tolerance<0:raise ValueError("Nonnegative finite replay tolerance required")
+    point_sizes={p["id"]:p["natoms"] for p in manifest["points"]}
     for pair in pairs:
         ids=pair['points'];complete=all(records[i] for i in ids)
         row={k:v for k,v in pair.items() if k not in ('points',)}
-        row.update(complete=complete,dU_DFT_eV=None,dU_MLP_eV=None,DFT_minus_MLP_eV=None,kmesh_shift_eV=None)
+        row.update(complete=complete,dU_DFT_eV=None,dU_MLP_eV=None,DFT_minus_MLP_eV=None,kmesh_shift_eV=None,
+            E_DFT_without_H_eV=None,E_DFT_with_H_eV=None,E_MLP_without_H_eV=None,E_MLP_with_H_eV=None,
+            dU_MLP_saved_eV=pair.get('dU_mlp_eV'),dU_MLP_recomputed_eV=None,GRACE_replay_difference_meV=None,
+            GRACE_replay_matches=None,DFT_minus_MLP_without_H_meV_atom=None,DFT_minus_MLP_with_H_meV_atom=None)
         if complete:
-            row['dU_DFT_eV']=records[ids[1]]['TOTEN_eV']-records[ids[0]]['TOTEN_eV']
+            row['E_DFT_without_H_eV']=records[ids[0]]['TOTEN_eV']
+            row['E_DFT_with_H_eV']=records[ids[1]]['TOTEN_eV']
+            row['dU_DFT_eV']=row['E_DFT_with_H_eV']-row['E_DFT_without_H_eV']
             if pair.get('baseline_dU_DFT_eV') is not None:row['kmesh_shift_eV']=row['dU_DFT_eV']-pair['baseline_dU_DFT_eV']
-            if pair.get('dU_mlp_eV') is not None:
-                row['dU_MLP_eV']=float(pair['dU_mlp_eV'])
-                row['DFT_minus_MLP_eV']=row['dU_DFT_eV']-row['dU_MLP_eV']
-            elif a.compare_mlp:
+            if a.compare_mlp:
                 model=pair['model']
-                if pw.model_fingerprint(model)!=pair['model_fp']:raise ValueError('Saved GRACE Hamiltonian changed; refuse comparison')
+                if model not in fingerprints:fingerprints[model]=pw.model_fingerprint(model)
+                if fingerprints[model]!=pair['model_fp']:raise ValueError('Saved GRACE Hamiltonian changed; refuse comparison')
                 if model not in model_cache:model_cache[model]=pw.Model(model,a.device,a.batch)
                 atoms=[read(root/i/'structure.extxyz') for i in ids]
                 values=model_cache[model].energies(atoms)
-                row['dU_MLP_eV']=float(values[1]-values[0])
-                row['DFT_minus_MLP_eV']=row['dU_DFT_eV']-row['dU_MLP_eV']
+                row['E_MLP_without_H_eV'],row['E_MLP_with_H_eV']=map(float,values)
+                row['dU_MLP_recomputed_eV']=float(values[1]-values[0])
+                row['dU_MLP_eV']=row['dU_MLP_recomputed_eV']
+                if pair.get('dU_mlp_eV') is not None:
+                    difference=row['dU_MLP_eV']-float(pair['dU_mlp_eV'])
+                    row['GRACE_replay_difference_meV']=difference*1000
+                    row['GRACE_replay_matches']=abs(difference)<=tolerance
+                for identity,role in zip(ids,['without_H','with_H']):
+                    row[f'DFT_minus_MLP_{role}_meV_atom']=(row[f'E_DFT_{role}_eV']-row[f'E_MLP_{role}_eV'])*1000/point_sizes[identity]
+                print(f'AUDIT pair {pair["pair"]:03d}: E_VASP N/N+H={row["E_DFT_without_H_eV"]:.9f}/{row["E_DFT_with_H_eV"]:.9f}; '
+                      f'E_GRACE N/N+H={values[0]:.9f}/{values[1]:.9f}; saved/recomputed ΔU={pair.get("dU_mlp_eV")}/{row["dU_MLP_eV"]:.9f}; '
+                      f'match={row["GRACE_replay_matches"]}',flush=True)
+            elif pair.get('dU_mlp_eV') is not None:
+                row['dU_MLP_eV']=float(pair['dU_mlp_eV'])
+            if row['dU_MLP_eV'] is not None:row['DFT_minus_MLP_eV']=row['dU_DFT_eV']-row['dU_MLP_eV']
         rows.append(row)
     out.mkdir(parents=True,exist_ok=False)
     with (out/'paired_energies.csv').open('w',newline='') as f:
@@ -573,7 +682,13 @@ def analyze(a):
                 rms_DFT_minus_MLP_eV=float(np.sqrt(np.mean(np.square(residuals)))) if residuals else None))
             shifts=[r['kmesh_shift_eV'] for r in group if r['kmesh_shift_eV'] is not None]
             if shifts:summary[-1]['mean_kmesh_shift_eV']=float(np.mean(shifts))
-    save(out/'summary.json',dict(groups=summary,note='Paired energy diagnostic on GRACE ensembles; not a DFT free energy or independent-sample uncertainty.'))
+    audited=[r for r in rows if r['dU_MLP_recomputed_eV'] is not None]
+    differences=[abs(r['GRACE_replay_difference_meV']) for r in audited if r['GRACE_replay_difference_meV'] is not None]
+    audit=dict(evaluated_pairs=len(audited),mismatched_pairs=sum(r['GRACE_replay_matches'] is False for r in audited),
+               max_saved_recomputed_difference_meV=max(differences) if differences else None,tolerance_eV=tolerance,
+               batch=a.batch if a.compare_mlp else None)
+    if audit['mismatched_pairs']:print('WARNING: saved GRACE ΔU did not reproduce; inspect replay audit before interpreting model error',flush=True)
+    save(out/'summary.json',dict(groups=summary,mlp_replay_audit=audit,note='Paired energy diagnostic on GRACE ensembles; not a DFT free energy or independent-sample uncertainty.'))
     usable=[r for r in rows if r['DFT_minus_MLP_eV'] is not None]
     if usable:
         import matplotlib
@@ -604,6 +719,7 @@ def main():
     q=sub.add_parser('queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run');q.add_argument('--hosts',nargs='+')
     q=sub.add_parser('prep-queue');q.add_argument('--queue',default='runs/dft_candidates');q.add_argument('--run',required=True);q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--template',default='vasp_inputs');q.add_argument('--pairs',type=int,default=1);q.add_argument('--out',required=True)
     q=sub.add_parser('mesh-check');q.add_argument('directory');q.add_argument('--hosts',nargs='+',default=['H2O','pureH']);q.add_argument('--pairs-per-host',type=int,default=1);q.add_argument('--mesh',nargs=3,type=int,default=[2,2,2]);q.add_argument('--out',required=True)
+    q=sub.add_parser('training');q.add_argument('--data',nargs='+',default=['runs/train_m.extxyz','runs/valid_m.extxyz']);q.add_argument('--count',type=int,default=20);q.add_argument('--source-root',default='..');q.add_argument('--template');q.add_argument('--T',type=float);q.add_argument('--P',type=float);q.add_argument('--pressure-window',type=float,default=100);q.add_argument('--out',required=True)
     q=sub.add_parser('snapshot');q.add_argument('--frames',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--frame',type=int,default=-1);q.add_argument('--ensemble',choices=['host','full'],default='host')
     q=sub.add_parser('smoke');q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True);q.add_argument('--T',type=float,default=3000);q.add_argument('--vpa',type=float,default=2.2)
     q=sub.add_parser('prep');q.add_argument('--run',required=True);q.add_argument('--template',default='vasp_inputs');q.add_argument('--out',required=True)
@@ -614,7 +730,7 @@ def main():
     q.add_argument('--margin-seconds',type=float,default=60);q.add_argument('--max-points',type=int);q.add_argument('--index',type=int);q.add_argument('--dry-run',action='store_true')
     q=sub.add_parser('status');q.add_argument('directory')
     q=sub.add_parser('watch');q.add_argument('directory');q.add_argument('--interval',type=float,default=2.);q.add_argument('--once',action='store_true')
-    q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true');q.add_argument('--forces-stress',action='store_true',help='reevaluate GRACE forces/stress against completed OUTCARs; no new VASP calls');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
+    q=sub.add_parser('analyze');q.add_argument('directory');q.add_argument('--out',required=True);q.add_argument('--compare-mlp',action='store_true',help='reevaluate both GRACE energies, even for saved pairs; use --batch 1 for an independent nonbatched audit');q.add_argument('--replay-tol',type=float,default=1e-3);q.add_argument('--forces-stress',action='store_true',help='reevaluate GRACE forces/stress against completed OUTCARs; no new VASP calls');q.add_argument('--device',default='cpu');q.add_argument('--batch',type=int,default=8)
     a=p.parse_args()
     try:globals()[a.action.replace('-','_')](a)
     except (ValueError,OSError,KeyError) as exc:raise SystemExit(str(exc))

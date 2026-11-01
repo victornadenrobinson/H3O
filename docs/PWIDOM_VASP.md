@@ -188,3 +188,36 @@ All requests in the example queue selection come from the 300-GPa/3000-K
 reference run: different host compositions and independent N/N+1 trajectories,
 not mixed state points. The pressure and temperature labels are target values;
 the instantaneous ionic state is not determined by those labels or a static SCF.
+
+### Reproduce original training labels (two CPU nodes)
+
+From the Perlmutter repository root, use the existing labelled files. No transfer
+from Young is needed. Forty distinct source OUTCARs are selected across training
+and validation, optionally restricted by `--T 5000 --P 600` (±100 GPa).
+The command prints the actual count if fewer sources match. It searches the
+original source directory and its ancestors for INCAR/KPOINTS/POTCAR; no common
+7000 K template is silently substituted. Missing original inputs stop preparation.
+`--template DIR` is an explicit alternative only after verifying shared settings.
+Smearing must match the label's T_K and its original precision is retained.
+
+```bash
+salloc -N 2 -C cpu -q interactive -t 01:00:00 --ntasks-per-node=128 -A m3349
+export GRACE_ENV="$SCRATCH/grace-env"
+export VASP_MODULE=vasp/5.4.4-cpu
+bash mlp_pipeline/perlmutter_vasp_check.sh training \
+  --data runs/train_m.extxyz runs/valid_m.extxyz --count 40 \
+  --source-root .. --out runs/vasp_training_40_1
+bash mlp_pipeline/perlmutter_vasp_check.sh run runs/vasp_training_40_1 \
+  --exe vasp_gam --ranks 32 --parallel 8 --minutes 50
+```
+
+`-n 128` requests 128 tasks **total**, sufficient for four 32-rank points;
+eight require 256 total. Each point stays on one node. `vasp_gam` is rejected
+for non-Gamma meshes; use `vasp_std` for a mixed-mesh selection.
+On completion, `LABEL` prints new VASP minus original TOTEN (eV and meV/atom),
+force component RMSE (eV/Å), and stress component RMSE (GPa). Labels are reordered
+to the POSCAR species order; parsed OUTCAR geometry is checked before comparing
+forces. Missing force/stress data are reported explicitly. Each point retains
+`reference.npz` and `label_comparison.json`. Rerunning the same `run` command
+skips converged points and prints their comparisons again. No GRACE evaluation
+is needed for this DFT reproducibility check.
