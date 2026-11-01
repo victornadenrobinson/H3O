@@ -742,3 +742,42 @@ See [validation workflow](../PWIDOM_DFT_VALIDATION.md),
 [pure-VASP workflow](../PWIDOM_PURE_VASP.md), and [VASP checks](../PWIDOM_VASP.md).
 This report adds evidence; it does not modify simulation inputs, submit/cancel
 jobs, publish an environment, or replace existing result provenance.
+
+## Follow-up concern: liquid extrapolation versus superionic mixing
+
+User notes that extrapolating the liquid mixing hull downward in T appears to
+put the nonmixing crossover near the H2O melting point, making a renewed SI
+mixing preference look suspicious. This is a valid phase-consistency question,
+not a thermodynamic proof of a model error or a demonstrated reentrant miscibility
+boundary. Liquid and SI mixing energies have different H2O reference branches.
+
+For per-atom formation values f_L(n), f_S(n) at H(2+n)O, define melting differences
+m(n)=[G_liquid(n)-G_SI(n)]/(3+n), in the same per-atom units and with one O in each
+formula. At fixed P,T and common pure-H reference,
+
+    f_S(n) = f_L(n) + [3/(3+n)] m(0) - m(n).
+
+This identity includes the differing atom counts; simply adding per-atom melting
+values without the 3/(3+n) factor would be incorrect. Homogeneous-liquid mixing
+and finite H uptake into SI ice are also different questions: instability at
+n=.25 does not exclude a shallow minimum at smaller n.
+
+Numerical illustration from the existing Oct28 tables at400GPa/5000K,n=.25:
+f_L=-21.56+/-10.54meV/atom; m(0)=+50.36+/-7.33meV/atom;
+m(.25)=+7.72+/-8.33meV/atom. Algebra gives
+
+    f_S(.25) = -21.56 + (3/3.25)*50.36 - 7.72
+              = +17.206154 meV/atom.
+
+The liquid mixture relative to SI-H2O+H instead is+24.926154meV/atom. This is
+bookkeeping applied to tabulated means, not a fresh free-energy calculation;
+shared references/correlations and the exact run selections must be reconciled
+before assigning propagated uncertainty or treating the recombination as an
+independent result. It does not rule out low-n SI uptake. Some other melting
+rows explicitly carry different-timestep/lambda-grid caveats.
+
+CURRENT_ISSUES.md D1/D7 documents earlier pure-H reference overwrites and liquids
+recrystallising at high lambda. The Oct28 liquid_mix_grace.csv says frozen runs
+were excluded, but latest per-run phase checks, matching sources and consistent
+reference conventions remain necessary. Extrapolation below the stable liquid
+range alone cannot validate or falsify the SI mixing hull.
