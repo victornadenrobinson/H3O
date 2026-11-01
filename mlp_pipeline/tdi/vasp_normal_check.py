@@ -184,3 +184,25 @@ def fitprep(a):
         train=len(train),valid=len(valid_unique),test=len(test),removed_training_overlaps=removed,
         note='Geometry-disjoint splits; no new hyperparameter tuning on test. No fitting executed. Source/time correlations require separate assessment.'))
     print(f'Ready for conversion: train={len(train)}, valid={len(valid_unique)}, untouched test={len(test)}; removed train overlaps={removed}')
+
+
+def timing(a):
+    import time
+    root=Path(a.directory);manifest=json.loads((root/'manifest.json').read_text())
+    if a.repeats<1 or a.count<1:raise ValueError('Positive repeats/count required')
+    started=time.perf_counter();model=pw.Model(a.model,a.device,1);startup=time.perf_counter()-started
+    selected=manifest['points'][::max(1,len(manifest['points'])//a.count)][:a.count]
+    rows=[]
+    for point in selected:
+        at=read(root/point['path']/'structure.extxyz');durations=[]
+        for iteration in range(a.repeats+1):
+            fresh=at.copy();model.calc.reset();fresh.calc=model.calc;t0=time.perf_counter()
+            energy=float(fresh.get_potential_energy());fresh.get_forces();fresh.get_stress()
+            durations.append(time.perf_counter()-t0)
+        row=dict(point=point['id'],natoms=len(at),first_seconds=durations[0],warm_median_seconds=float(np.median(durations[1:])))
+        rows.append(row);print(f"TIMING {row['point']} {len(at)} atoms: first={durations[0]:.3f}s; warm median E/F/stress={row['warm_median_seconds']:.3f}s",flush=True)
+    from tdi import perlmutter_vasp_check as check
+    out=Path(a.out)
+    if out.exists():raise ValueError('Use a fresh timing output file')
+    check.save(out,dict(model=a.model,device=a.device,model_startup_seconds=startup,rows=rows,
+        note='One discarded first call per geometry; repeat medians include energy/forces/static stress. Explicit calculator reset prevents ASE result-cache timing.'))

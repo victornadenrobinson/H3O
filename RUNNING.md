@@ -451,3 +451,9 @@ through `bash mlp_pipeline/perlmutter_vasp_check.sh`. Two nodes need
 The complete four-part sequence (original-label baseline, ordinary MD, paired
 edge-case replay, and a split retraining dataset) is in
 [PWidom DFT validation](docs/PWIDOM_DFT_VALIDATION.md).
+
+For the **same PWidom MD + insertion/deletion/BAR calculation with VASP as its
+ASE force engine**, including an interactive smoke test, isolated restart caches,
+CPU timing, and two-node 24-hour job recipes, see
+[Pure-VASP PWidom](docs/PWIDOM_PURE_VASP.md). Smoke-test before submitting pilots;
+this backend has local mock-executable tests, not a completed Perlmutter run.

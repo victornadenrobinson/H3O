@@ -41,6 +41,9 @@ def model_fingerprint(spec):
     toyice: the TOYICE_FIT file. Cached MD frames and pressures belong to ONE Hamiltonian: another model's frames are not an equilibrium ensemble of this one."""
     import hashlib
     kind, _, rest = spec.partition(":"); h = hashlib.sha256(kind.encode())
+    if kind == "vasp":
+        from tdi.vasp_backend import fingerprint
+        return fingerprint(rest)
     if kind.endswith("-ft") and rest and os.path.exists(rest):
         root = rest if os.path.isdir(rest) else os.path.dirname(rest)
         for f in ([rest] if os.path.isfile(rest) else sorted(os.path.join(d, x) for d, _, fs in os.walk(rest) for x in fs))[:200]:
@@ -251,7 +254,10 @@ def cmd_run(a):
     if a.resume_from and not any(os.path.isfile(a.resume_from + suffix) for suffix in
                                 ("_frames.npz", "_host_md.npz", "_full_md.npz")):
         raise SystemExit("No saved frames/checkpoints for --resume-from; legacy unfinished MD cannot be recovered")
-    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
+    model = Model(a.model, a.device, a.batch)
+    if hasattr(model.calc,"temperature") and abs(model.calc.temperature-a.T)>1e-6:
+        raise ValueError("VASP electronic temperature/config must match PWidom T")
+    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
     if os.path.exists(source_ff):
         z = np.load(source_ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
         if "model_fp" in z.files:

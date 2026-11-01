@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 action=${1:---help}
 # Only run/preflight need the licensed VASP executable and site modules.
-if [[ "$action" == run || "$action" == preflight ]]; then
+if [[ "$action" == run || "$action" == preflight || "$action" == vasp-config || "$action" == dft-plan || "$action" == dft-worker ]]; then
     if [[ -n "${VASP_MODULE:-}" ]]; then
         if ! type module >/dev/null 2>&1; then
             echo 'module command unavailable; use a Perlmutter login shell or load your site setup.' >&2
