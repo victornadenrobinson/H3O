@@ -16,8 +16,8 @@ L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 SETS = {
     "B": ([L("chain", "*.extxyz")], 0, 1), "C": ([R("sel_pwidom.extxyz")], 200, 1),
     "A": ([L("ins_grid", "ins_*.extxyz")], 520, 2), "A_b1": ([L("ins_batch1", "ins_*.extxyz")], 150, 2), "A_part": ([L("partial", "ins_*.extxyz")], 100, 3),
-    "E": ([R("runs", "eos_lowp", "*", "traj.extxyz")], 180, 3), "H": ([L("h3o_sc", "*.extxyz")], 220, 3),
-    "D_melt": ([R("sel_meltcomp.extxyz")], 74, 4), "D_eos": ([R("sel_eos.extxyz")], 74, 4), "G": ([L("H729_md.extxyz")], 30, 4),
+    "E": ([R("runs", "eos_lowp", "*", "traj.extxyz"), R("runs", "eos_lowp2", "*", "traj.extxyz")], 180, 3), "H": ([L("h3o_sc", "*.extxyz")], 220, 3),
+    "D_melt": ([R("sel_meltcomp.extxyz")], 74, 4), "D_eos": ([R("sel_eos.extxyz")], 74, 4), "G": ([L("H729_md.extxyz"), L("H729_md_s2.extxyz")], 30, 4),
     "F": ([L("toy", n + ".extxyz") for n in ("h2o", "h2.25o", "h2.5o", "h3o")], 220, 5), "F_H": ([L("toy", "H729.extxyz")], 32, 5)}
 
 
