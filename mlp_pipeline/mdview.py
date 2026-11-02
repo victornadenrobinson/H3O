@@ -56,7 +56,7 @@ if __name__ == "__main__":
     finally: sys.stdout.write("\033[?25h\n")
 
 
-def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=2.0, bonds=True, box=True, clip=0.0, hi=1.0, view_dir=None, ortho=False):
+def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=2.0, bonds=True, box=True, clip=0.0, hi=1.0, view_dir=None, ortho=False, braille=False):
     """Orbiting 3D view with perspective: atoms sorted far-to-near, shaded by depth (near = bright, far = dim), oxygen drawn bigger, the periodic box as a wireframe.
     ascii_only=True draws with plain characters (O/o/. for oxygen, +/:/, for protons by depth) for terminals without 24-bit colour."""
     cell = np.asarray(at.cell.array); L = np.array([cell[0, 0], cell[1, 1], cell[2, 2]]); pos = at.get_scaled_positions(wrap=True) * L - L / 2
@@ -65,7 +65,7 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
     if view_dir is not None:                                   # look along a lattice direction (e.g. [0,0,1], [1,0,1], [1,1,1]); yaw then still orbits around it
         fwd = np.asarray(view_dir, float); fwd = fwd / np.linalg.norm(fwd); up0 = np.array([0.0, 1.0, 0.0]) if abs(fwd[1]) < 0.9 else np.array([1.0, 0.0, 0.0])
         right = np.cross(up0, fwd); right /= np.linalg.norm(right); up = np.cross(fwd, right); R = np.array([right, up, fwd]); R = np.array([[np.cos(ya), np.sin(ya), 0], [-np.sin(ya), np.cos(ya), 0], [0, 0, 1]]) @ R
-    P = pos @ R.T; half = np.linalg.norm(L) / 2; D = 2.6 * half; px, py = (width, height) if ascii_only else (width, height * 2)
+    P = pos @ R.T; half = np.linalg.norm(L) / 2; D = 2.6 * half; res = 2 if braille else 1; px, py = (width, height) if ascii_only else (width * res, height * 2 * res)
     f = zoom * min(px, py * (1.0 if not ascii_only else 2.0)) * 0.46 * D / (half * 1.0)
 
     def proj(p):
@@ -79,7 +79,7 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
     for i in (range(8) if box else []):
         for j in range(i + 1, 8):
             if np.sum(np.abs((corners[i] - corners[j]) / np.maximum(L, 1e-9)) > 0.99) == 1:
-                for t in np.linspace(0, 1, 60):
+                for t in np.linspace(0, 1, 60 * res):
                     p = corners[i] * (1 - t) + corners[j] * t; x, y, s = proj(p); put(x, y, p[2] - 50, (45, 55, 85), "·")
     order = np.argsort(P[:, 2]); zmin, zmax = P[:, 2].min(), P[:, 2].max()
     if bonds:                                                  # O-H bonds (minimum image) as short grey lines: molecules become readable
@@ -88,7 +88,7 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
         for i, j, v in zip(i_, j_, vec):
             if at.numbers[i] == 8 and at.numbers[j] == 1:
                 a0 = P[i]; a1 = a0 + v @ R.T
-                for t in np.linspace(0, 1, 7):
+                for t in np.linspace(0, 1, 7 * res):
                     q = a0 * (1 - t) + a1 * t; x, y, s = proj(q); nb = (q[2] - zmin) / max(zmax - zmin, 1e-9); g = int(25 + 190 * min(max(nb, 0), 1) ** 1.5); put(x, y, q[2] - 0.2, (g, g, g), "-")
     for k in order:
         p = P[k]; x, y, s = proj(p); near = (p[2] - zmin) / max(zmax - zmin, 1e-9)
@@ -96,13 +96,26 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
         br = 0.16 + 0.84 * near ** 1.4; isO = at.numbers[k] == 8
         base = (255, 70, 60) if isO else (90, 230, 255); col = tuple(int(c * br) for c in base)
         ch = ("O" if near > 0.66 else "o" if near > 0.33 else ".") if isO else ("+" if near > 0.66 else ":" if near > 0.33 else ",")
-        rr = 1 if (isO and near > 0.5) else 0                       # only near oxygens are big (3x3); far ones and all protons are single pixels
+        rr = (1 if (isO and near > 0.5) else 0) if res == 1 else ((2 if near > 0.5 else 1) if isO else (1 if near > 0.6 else 0))      # braille mode: twice the pixel radius
         for dx in range(-rr, rr + 1):
             for dy in range(-rr, rr + 1):
                 put(x + dx, y + dy * (1 if not ascii_only else 0), p[2] + (0.05 if rr == 0 else 0.0), col, ch)
     lines = []
     if ascii_only:
         for r in range(py): lines.append("│" + "".join((img[r][x][1] if img[r][x] else " ") for x in range(px)) + "│")
+    elif braille:                                              # 2x4 dots per character cell; the cell takes the colour of its nearest dot
+        bits = {(0, 0): 1, (0, 1): 2, (0, 2): 4, (1, 0): 8, (1, 1): 16, (1, 2): 32, (0, 3): 64, (1, 3): 128}
+        for r in range(0, py, 4):
+            row = ""
+            for x in range(0, px, 2):
+                mask = 0; best = None; bz = -1e18
+                for (dx, dy), b in bits.items():
+                    v = img[r + dy][x + dx]
+                    if v is not None:
+                        mask |= b
+                        if zbuf[r + dy, x + dx] > bz: bz = zbuf[r + dy, x + dx]; best = v[0]
+                row += " " if not mask else f"\033[38;2;{best[0]};{best[1]};{best[2]}m{chr(0x2800 + mask)}\033[0m"
+            lines.append("│" + row + "│")
     else:
         for r in range(0, py, 2):
             row = ""
