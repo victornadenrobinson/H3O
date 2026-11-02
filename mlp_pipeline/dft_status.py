@@ -108,10 +108,15 @@ def board(db, header=True):
         if r["db_id"] not in seen_ids: per_set[r["set"]]["pending"] = per_set[r["set"]].get("pending", 0) + 1
     # ---- slurm
     print(W("\nSlurm jobs of the campaign"))
-    q = sh('squeue -u $USER -h -o "%i|%j|%T|%M|%l|%D|%R|%Z" 2>/dev/null')
-    if q is None: print("   " + R("squeue timed out (Slurm busy): the job list below is unknown, not empty")); q = ""
-    rows = [l.split("|") for l in q.splitlines() if l.strip()]; mine = [r for r in rows if not r[1].startswith("dft-pwid") and (re.match(r"^(c\d+|snap|smoke|vasp)", r[1]) or db in r[7] or True)]
-    mine = [r for r in rows if re.match(r"^(c\d+|snap|smoke|vasp)", r[1])]
+    q = ""; qerr = ""
+    try:
+        rr = subprocess.run(["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i|%j|%T|%M|%l|%D|%R|%Z"], capture_output=True, text=True, timeout=60); q = rr.stdout; qerr = rr.stderr.strip()
+    except subprocess.TimeoutExpired: print("   " + R("squeue timed out (Slurm busy): the job list below is unknown, not empty"))
+    except FileNotFoundError: qerr = "squeue not found"
+    rows = [l.split("|") for l in q.splitlines() if l.count("|") >= 7]
+    mine = [r for r in rows if re.match(r"^([a-z]\d{3}|snap|smoke|vasp)", r[1])]
+    if qerr and not rows: print("   " + R(f"squeue said: {qerr[:100]}"))
+    if rows and not mine: print("   " + Y(f"{len(rows)} jobs of yours are queued, none named like a chunk (c000 / p001 / q000 ...)"))
     if not mine: print("   " + D("none queued or running" + ("" if rows or shutil.which("squeue") else " (squeue not available here)")))
     for r in mine:
         col = G if r[2] == "RUNNING" else Y; extra = ""
