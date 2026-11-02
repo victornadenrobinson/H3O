@@ -56,16 +56,20 @@ if __name__ == "__main__":
     finally: sys.stdout.write("\033[?25h\n")
 
 
-def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=2.0, bonds=True, box=True, clip=0.0):
+def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=2.0, bonds=True, box=True, clip=0.0, hi=1.0, view_dir=None, ortho=False):
     """Orbiting 3D view with perspective: atoms sorted far-to-near, shaded by depth (near = bright, far = dim), oxygen drawn bigger, the periodic box as a wireframe.
     ascii_only=True draws with plain characters (O/o/. for oxygen, +/:/, for protons by depth) for terminals without 24-bit colour."""
     cell = np.asarray(at.cell.array); L = np.array([cell[0, 0], cell[1, 1], cell[2, 2]]); pos = at.get_scaled_positions(wrap=True) * L - L / 2
     ya, ta = np.radians(yaw), np.radians(tilt); Ry = np.array([[np.cos(ya), 0, np.sin(ya)], [0, 1, 0], [-np.sin(ya), 0, np.cos(ya)]]); Rx = np.array([[1, 0, 0], [0, np.cos(ta), -np.sin(ta)], [0, np.sin(ta), np.cos(ta)]])
-    R = Rx @ Ry; P = pos @ R.T; half = np.linalg.norm(L) / 2; D = 2.6 * half; px, py = (width, height) if ascii_only else (width, height * 2)
+    R = Rx @ Ry
+    if view_dir is not None:                                   # look along a lattice direction (e.g. [0,0,1], [1,0,1], [1,1,1]); yaw then still orbits around it
+        fwd = np.asarray(view_dir, float); fwd = fwd / np.linalg.norm(fwd); up0 = np.array([0.0, 1.0, 0.0]) if abs(fwd[1]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        right = np.cross(up0, fwd); right /= np.linalg.norm(right); up = np.cross(fwd, right); R = np.array([right, up, fwd]); R = np.array([[np.cos(ya), np.sin(ya), 0], [-np.sin(ya), np.cos(ya), 0], [0, 0, 1]]) @ R
+    P = pos @ R.T; half = np.linalg.norm(L) / 2; D = 2.6 * half; px, py = (width, height) if ascii_only else (width, height * 2)
     f = zoom * min(px, py * (1.0 if not ascii_only else 2.0)) * 0.46 * D / (half * 1.0)
 
     def proj(p):
-        s = D / (D - p[..., 2]); return px / 2 + f / D * p[..., 0] * s * (1.0 if not ascii_only else 2.0) * 0.9, py / 2 - f / D * p[..., 1] * s * 0.9, s
+        s = (D / (D - p[..., 2])) if not ortho else 1.0 + 0 * p[..., 2]; return px / 2 + f / D * p[..., 0] * s * (1.0 if not ascii_only else 2.0) * 0.9, py / 2 - f / D * p[..., 1] * s * 0.9, s
     img = [[None] * px for _ in range(py)]; zbuf = np.full((py, px), -1e9)
 
     def put(x, y, z, col, ch=None):
@@ -88,7 +92,7 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
                     q = a0 * (1 - t) + a1 * t; x, y, s = proj(q); nb = (q[2] - zmin) / max(zmax - zmin, 1e-9); g = int(25 + 190 * min(max(nb, 0), 1) ** 1.5); put(x, y, q[2] - 0.2, (g, g, g), "-")
     for k in order:
         p = P[k]; x, y, s = proj(p); near = (p[2] - zmin) / max(zmax - zmin, 1e-9)
-        if near < clip: continue                                    # --clip 0.3 hides the farthest 30%: far less clutter
+        if near < clip or near > hi: continue                                    # --clip 0.3 hides the farthest 30%: far less clutter
         br = 0.16 + 0.84 * near ** 1.4; isO = at.numbers[k] == 8
         base = (255, 70, 60) if isO else (90, 230, 255); col = tuple(int(c * br) for c in base)
         ch = ("O" if near > 0.66 else "o" if near > 0.33 else ".") if isO else ("+" if near > 0.66 else ":" if near > 0.33 else ",")
