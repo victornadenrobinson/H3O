@@ -34,6 +34,12 @@ def cmd_build(a):
     from ase.io import read, write
     rng = np.random.default_rng(a.seed); os.makedirs(a.out, exist_ok=True); seen = set(); rows = []; db = os.path.join(a.out, "db.extxyz")
     if os.path.exists(db): os.remove(db)
+    for sd in a.skip_db:                                   # geometries already assigned to a chunk in an earlier database are not labelled twice
+        import pandas as pd
+        ixo = pd.read_csv(os.path.join(sd, "index.csv")); done_ids = set(ixo.db_id[ixo.chunk.notna()]); n0 = len(seen)
+        for f in read(os.path.join(sd, "db.extxyz"), index=":"):
+            if f.info.get("db_id") in done_ids: seen.add(frame_hash(f))
+        print(f"skip-db {sd}: {len(seen) - n0} chunked frames excluded")
     for spec in a.sets:
         name, rest = spec.split("=", 1); parts = rest.split(":"); path = parts[0]; mx = int(parts[1]) if len(parts) > 1 and parts[1] else 0; prio = int(parts[2]) if len(parts) > 2 else 5
         fr = read(path, index=":"); take = stratified(fr, mx, rng); n0 = len(rows); dup = 0
@@ -47,6 +53,7 @@ def cmd_build(a):
             rows.append(dict(db_id=did, set=name, prio=prio, split=str(f.info.get("split", "train")), natoms=len(f), nO=int((f.numbers == 8).sum()), nH=int((f.numbers == 1).sum()), T_K=f.info.get("T_K", ""), config_type=f.info.get("config_type", ""),
                              P=f.info.get("P_grace_GPa", f.info.get("P_target", f.info.get("P_static", ""))), status="pending", chunk=""))
         print(f"{name:14s} {len(fr):6d} frames in {path}: took {len(take)}, duplicates dropped {dup}, now {len(rows)}")
+    if not rows: print("no frames left to add (everything was empty or excluded by --skip-db)"); sys.exit(0)
     with open(os.path.join(a.out, "index.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
     print(f"database: {len(rows)} frames -> {db}, {os.path.join(a.out, 'index.csv')}")
@@ -189,7 +196,7 @@ def cmd_plot(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sp = ap.add_subparsers(dest="cmd", required=True)
-    b = sp.add_parser("build"); b.add_argument("--sets", nargs="+", required=True); b.add_argument("--out", required=True); b.add_argument("--seed", type=int, default=1)
+    b = sp.add_parser("build"); b.add_argument("--sets", nargs="+", required=True); b.add_argument("--out", required=True); b.add_argument("--seed", type=int, default=1); b.add_argument("--skip-db", nargs="*", default=[], help="earlier database dirs: frames already chunked there (sent or being sent to DFT) are left out of this one")
     c = sp.add_parser("chunk"); c.add_argument("db"); c.add_argument("--budget-min", type=int, default=50); c.add_argument("--slots", type=int, default=4); c.add_argument("--ranks", type=int, default=32); c.add_argument("--prio-max", type=int, default=99)
     c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m3349"); c.add_argument("--qos", default="regular")
     s = sp.add_parser("status"); s.add_argument("db"); k = sp.add_parser("collect"); k.add_argument("db"); v = sp.add_parser("verify"); v.add_argument("db"); v.add_argument("--strict", action="store_true")
