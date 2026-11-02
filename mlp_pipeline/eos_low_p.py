@@ -24,6 +24,7 @@ def main():
     for c, v in (("branch", "solid"), ("hper", 2.0)):
         if c not in df: df[c] = v
     df = df[np.isfinite(df.vpa) & (df.P_GPa > 1)]; out = []
+    df = df.assign(vpa=df.vpa.round(3)).groupby(["phase", "hper", "branch", "T_set", "vpa"], as_index=False).P_GPa.mean()   # runs repeated at the same volume (eos_scan starts) count once
     print(f"{'phase':5s} {'H/O':>5s} {'branch':7s} {'T':>5s} {'runs':>4s} {'Pmeas':>12s} " + " ".join(f"v@{p:g}".rjust(9) for p in a.P) + "  flag", file=sys.stderr)
     for (ph, h, b, T), g in df.groupby(["phase", "hper", "branch", "T_set"]):
         if len(g) < 4: continue

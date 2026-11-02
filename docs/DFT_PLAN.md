@@ -43,3 +43,17 @@ Existing: 82 stock-VASP points + the tier frames (counts per tier: `dataset_inve
 - Toy and close-contact frames: never in the validation set that decides the model (they are stress tests); keep a separate toy-valid set.
 - Label cap: frames with DFT max force > 50 eV/A get the Huber loss or are flagged `stress_test`.
 - Validation hosts for 3000/7000 K and 5000 K/400 GPa are missing in valid_l: take them from pool runs outside the train tier (Young melt_comp, tdi_fb) instead.
+
+## Update: free-energy-grade sets (heavy) and gap fill
+
+Free-energy methods (PWidom, TDI) need the DFT-minus-GRACE offset D at exactly their states and at every n, so these sets are labelled densely (all Young GRACE snapshots; select with `young_select.py`, copy the small extxyz / npz subsets to Perlmutter).
+
+| id | what | how | DFT points ~ |
+|----|------|-----|--------------|
+| B+ | paired n -> n+1 insertion chains (20 chains x n = 0..8) | build_insertion_set --equil-ps 0 --chain | 180 (was 40) |
+| C2 | PWidom reverse test: host + 1 H at 2 proxy-chosen sites per cached frame | `tdi/dft_check.py prep-widom <pw_*_frames.npz> --template ... --proxy docs/data/toyfit_t4.json --frames-n 20 --sel 2` (3 DFT per frame), ~7 states: 400/500/600 GPa x 4000/5000/6000 K, H2O, H2.25O, pure H | 420 |
+| C3 | TDI-state D statistics: >= 40 independent GRACE frames per end state (pure H, H2O, H2.25O) x 6 states | young_select.py on pwidom host caches / tdi lambda=1 nodes | 240 (some exist: frame_batch --count) |
+| D2 | T-gap fill 4000 / 6000 K (training data: H2.5O / H2.75O only at 3000 K, nothing at 4000 / 6000) | young_select.py on melt_comp: H2.1O, H2.25O, H2.5O x 300-600 GPa x {free, hold} | ~100 |
+
+New grand total ~2,200 points (~5 four-node hours, plus the 729-atom points). Priority order if capacity is short: C2 and B+ (they decide whether the mixing free energy can be trusted), then A, C, E, D, D2, F, G.
+Known issue: eos_scan H3O 5000 K starts at ~460 GPa (all four lowest-volume runs repeat one volume): its low-P guess is an extrapolation over a decade of pressure, so pass 2 of eos_low_p.py matters most there.
