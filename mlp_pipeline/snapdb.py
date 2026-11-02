@@ -116,14 +116,16 @@ def cmd_verify(a):
     import pandas as pd
     from ase.io import read
     from ase.neighborlist import neighbor_list
-    fr = read(os.path.join(a.db, "db.extxyz"), index=":"); ix = pd.read_csv(os.path.join(a.db, "index.csv")); err = []; warn = []
+    import time; t0 = time.time(); fr = read(os.path.join(a.db, "db.extxyz"), index=":"); print(f"read {len(fr)} frames in {time.time() - t0:.0f} s", flush=True); ix = pd.read_csv(os.path.join(a.db, "index.csv")); err = []; warn = []
     def bad(lst, msg, ids):
         if ids: lst.append(f"{msg}: {len(ids)} frames, e.g. {', '.join(ids[:4])}")
     ids = [f.info.get("db_id", "?") for f in fr]
     if len(set(ids)) != len(ids): err.append("duplicate db_id in db.extxyz")
     if set(ids) != set(ix.db_id): err.append(f"db.extxyz ({len(ids)}) and index.csv ({len(ix)}) disagree on the set of db_ids")
     B = {k: [] for k in ("species", "nonfinite", "volume", "width5", "width6", "HH", "OH", "OO", "vpa", "size", "nometa")}
-    for f in fr:
+    slow = []; t1 = time.time()
+    for n_, f in enumerate(fr):
+        if n_ and n_ % 250 == 0: print(f"  checked {n_}/{len(fr)} frames, {time.time() - t1:.0f} s", flush=True)
         i = f.info.get("db_id", "?"); z = set(f.numbers.tolist())
         if not z <= {1, 8}: B["species"].append(i)
         if not (np.isfinite(f.positions).all() and np.isfinite(np.asarray(f.cell)).all()): B["nonfinite"].append(i); continue
@@ -135,11 +137,12 @@ def cmd_verify(a):
         vpa = vol / len(f)
         if not 0.9 <= vpa <= 6.5: B["vpa"].append(i)
         if len(f) < 50 or len(f) > 800: B["size"].append(i)
-        d_i, d_j, d = neighbor_list("ijd", f, 2.2); zz = f.numbers
+        tt = time.time(); d_i, d_j, d = neighbor_list("ijd", f, 2.2); zz = f.numbers; slow.append((time.time() - tt, i, len(f), round(float(vol), 1)))
         for name, (p_, q_), lo in (("HH", (1, 1), 0.35), ("OH", (8, 1), 0.50), ("OO", (8, 8), 1.0)):
             m = ((zz[d_i] == p_) & (zz[d_j] == q_)) | ((zz[d_i] == q_) & (zz[d_j] == p_))
             if m.any() and d[m].min() < lo: B[name].append(i)
         if not all(k in f.info for k in ("config_type", "split", "T_K")): B["nometa"].append(i)
+    slow.sort(reverse=True); print("slowest neighbour lists (s, db_id, atoms, volume):", [(round(a_, 2), b_, c_, d_) for a_, b_, c_, d_ in slow[:3]], flush=True)
     bad(err, "species other than H, O", B["species"]); bad(err, "non-finite positions / cell", B["nonfinite"]); bad(err, "non-positive cell volume", B["volume"]); bad(err, "cell width < 5 A", B["width5"])
     bad(err, "H-H closer than 0.35 A", B["HH"]); bad(err, "O-H closer than 0.50 A", B["OH"]); bad(err, "O-O closer than 1.0 A", B["OO"])
     bad(warn, "cell width 5-6 A (below the 6 A GRACE cutoff)", B["width6"]); bad(warn, "volume per atom outside 0.9-6.5 A^3", B["vpa"]); bad(warn, "atom count < 50 or > 800", B["size"]); bad(warn, "missing config_type / split / T_K", B["nometa"])
