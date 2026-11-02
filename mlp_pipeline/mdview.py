@@ -11,17 +11,19 @@ import numpy as np
 W_DEFAULT, H_DEFAULT = 96, 30            # character columns, character rows (each row shows 2 pixels with half blocks)
 
 
-def render(at, step=None, width=W_DEFAULT, height=H_DEFAULT, slab=2.5, sweep=True, note=""):
+def render(at, step=None, width=W_DEFAULT, height=H_DEFAULT, slab=2.5, sweep=True, note="", atom_scale=None):
     cell = np.asarray(at.cell.array); L = np.array([cell[0, 0], cell[1, 1], cell[2, 2]]) if np.allclose(cell, np.diag(np.diag(cell))) else cell.sum(axis=0)
     pos = at.get_scaled_positions(wrap=True) * L; z0 = (time.time() * 0.6 % 1.0 if sweep else 0.5) * L[2]
-    px, py = width, height * 2; img = np.zeros((py, px, 3), dtype=np.uint8) if False else [[None] * px for _ in range(py)]; dep = np.full((py, px), 1e9)
+    ps = atom_scale if atom_scale else max(1, round(width / 90.0)); px, py = width, height * 2; img = np.zeros((py, px, 3), dtype=np.uint8) if False else [[None] * px for _ in range(py)]; dep = np.full((py, px), 1e9)
     dz = np.abs(pos[:, 2] - z0); dz = np.minimum(dz, L[2] - dz)
     for p, z, num in sorted(zip(pos, dz, at.numbers), key=lambda t: -t[1]):
         ix = min(int(p[0] / L[0] * px), px - 1); iy = min(int(p[1] / L[1] * py), py - 1)
         bright = z < slab; col = (255, 70, 60) if num == 8 else (90, 230, 255)
         if not bright: col = tuple(int(c * 0.28) for c in col)
-        if z < dep[iy, ix] or bright: img[iy][ix] = col; dep[iy, ix] = z
-        if num == 8 and bright and ix + 1 < px: img[iy][ix + 1] = col                      # oxygen drawn two pixels wide
+        b = ps * (2 if num == 8 else 1)                                                  # oxygen 2x2 'pixel units', proton 1x1; one unit = ps pixels so the picture keeps its look at any resolution
+        for yy in range(iy, min(iy + b, py)):
+            for xx in range(ix, min(ix + b, px)):
+                if z < dep[yy, xx] or bright: img[yy][xx] = col; dep[yy, xx] = z
     lines = []
     for r in range(0, py, 2):
         row = ""
