@@ -28,6 +28,10 @@ def main():
     ap.add_argument("--allow-tdi", action="store_true"); ap.add_argument("--as-hosts", action="store_true", help="write host frames for build_insertion_set.py: config_type like the tiers (h2o_5000K), P_GPa, T_K"); ap.add_argument("--dry", action="store_true"); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     df = pd.read_csv(a.csv); df = df[df.kind.isin(a.kind)]
+    def from_path(col, pat):   # gen_inventory parsed P / T from the file name only; trajectories are all called traj.extxyz, the state is in the directory name
+        got = df.path.apply(lambda p: (lambda m: float(m.group(1)) if m else np.nan)(re.search(pat, p)))
+        df[col] = df[col].fillna(got)
+    from_path("P", r"(\d+)GPa"); from_path("T", r"_(\d{4})K")
     df = df[~df.path.str.contains("|".join(EXCL_ALWAYS))]
     if not a.allow_tdi: df = df[~df.path.apply(lambda p: any(x in p for x in EXCL_TDI))]
     if a.P: df = df[df.P.between(*a.P)]
