@@ -57,3 +57,10 @@ Free-energy methods (PWidom, TDI) need the DFT-minus-GRACE offset D at exactly t
 
 New grand total ~2,200 points (~5 four-node hours, plus the 729-atom points). Priority order if capacity is short: C2 and B+ (they decide whether the mixing free energy can be trusted), then A, C, E, D, D2, F, G.
 Known issue: eos_scan H3O 5000 K starts at ~460 GPa (all four lowest-volume runs repeat one volume): its low-P guess is an extrapolation over a decade of pressure, so pass 2 of eos_low_p.py matters most there.
+
+## Update 2: A and B+ widened to a grid
+A: T = 3000, 4000, 5000, 6000, 7000 K x P = 300, 400, 500, 600 GPa (+-50 GPa windows), H2O host + n = 1,2,4,8,16,27 H (full n list at 5000 K / 500 GPa), dv per H = 1.26 (500/P)^0.75 A^3, 40 jobs (20 states x train/valid). ~770 points.
+B+: chains at 4000 / 5000 / 6000 K x 300-600 GPa, 2 chains per state, ~210 points.
+Hosts: tiers (train_l / valid_l) where they exist; elsewhere pick host frames from the Young pool with `young_select.py --as-hosts` and pass HOSTS_TRAIN / HOSTS_VALID to run_insertion_batch.sh (valid hosts must come from runs that are not in train_l).
+Below 300 GPa (50-200): E only (GRACE NVT at guessed volumes); insertions there come after E has produced hosts (build_insertion_set --hosts on the E trajectories).
+New total ~2,540 points (~5.6 four-node hours + 729-atom points).

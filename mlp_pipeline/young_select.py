@@ -25,7 +25,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csv"); ap.add_argument("--runs", default="runs"); ap.add_argument("--kind", nargs="+", default=["extxyz"]); ap.add_argument("--P", nargs=2, type=float); ap.add_argument("--T", nargs=2, type=float)
     ap.add_argument("--ratio", nargs=2, type=float, help="H/O range (pure H = inf is excluded unless --ratio 0 inf)"); ap.add_argument("--path-re"); ap.add_argument("--max-vpa", type=float); ap.add_argument("--per-file", type=int, default=3)
-    ap.add_argument("--allow-tdi", action="store_true"); ap.add_argument("--dry", action="store_true"); ap.add_argument("--out", required=True)
+    ap.add_argument("--allow-tdi", action="store_true"); ap.add_argument("--as-hosts", action="store_true", help="write host frames for build_insertion_set.py: config_type like the tiers (h2o_5000K), P_GPa, T_K"); ap.add_argument("--dry", action="store_true"); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     df = pd.read_csv(a.csv); df = df[df.kind.isin(a.kind)]
     df = df[~df.path.str.contains("|".join(EXCL_ALWAYS))]
@@ -58,6 +58,9 @@ def main():
             at = at.copy(); at.calc = None; at.info = {}; at.arrays.pop("forces", None)
             nO, nH = int((at.numbers == 8).sum()), int((at.numbers == 1).sum())
             at.info.update(base, src_frame=int(i), nO=nO, nH=nH, config_type=f"{r.kind.split('-')[0]}_{nH}H{nO}O_{base['T_K']:.0f}K")
+            if a.as_hosts:
+                rr = nH / nO if nO else np.inf; lab = "h" if not nO else "h%go" % min((2.0, 2.25, 2.5, 2.75, 3.0), key=lambda x: abs(x - rr)) if min(abs(rr - x) / x for x in (2.0, 2.25, 2.5, 2.75, 3.0)) < 0.04 else "h%.3fo" % rr
+                at.info.update(config_type=f"{lab}_{int(round(base['T_K'] / 1000.0) * 1000)}K", P_GPa=base["P_target"])
             write(a.out, at, append=True); nout += 1
     print(f"wrote {nout} frames to {a.out}", file=sys.stderr)
 

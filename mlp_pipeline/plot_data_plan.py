@@ -8,8 +8,8 @@ TS = [3000, 4000, 5000, 6000, 7000]
 ROWS = ["pure H", "H2O", "H2O+dilute H (2.0-2.1)", "H2.25O", "H2.5O", "H2.75O", "H3O"]
 # set -> (label, group, {row: {T: points}})
 PLAN = {
- "A  GRACE-MD + n H":        ("generated here", {2: {3000: 90, 5000: 330, 7000: 90}}),
- "B+ n->n+1 chains":         ("generated here", {2: {5000: 180}}),
+ "A  GRACE-MD + n H":        ("generated here", {2: {3000: 110, 4000: 110, 5000: 330, 6000: 110, 7000: 110}}),
+ "B+ n->n+1 chains":         ("generated here", {2: {4000: 70, 5000: 70, 6000: 70}}),
  "C  pwidom caches":         ("Young GRACE", {2: {4000: 30, 5000: 90, 6000: 30}, 3: {5000: 30}, 4: {5000: 20}}),
  "C2 pwidom reverse test":   ("Young GRACE", {0: {4000: 30, 5000: 80, 6000: 30}, 1: {4000: 30, 5000: 80, 6000: 30}, 3: {4000: 30, 5000: 80, 6000: 30}}),
  "C3 TDI-state D stats":     ("Young GRACE", {0: {5000: 40, 6000: 40}, 1: {5000: 40, 6000: 40}, 3: {5000: 40, 6000: 40}}),
