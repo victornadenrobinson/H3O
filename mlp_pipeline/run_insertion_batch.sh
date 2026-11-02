@@ -7,7 +7,7 @@ set -u
 OUT=${1:?outdir}; MODEL=${2:?model spec}; PER_GPU=${3:-2}; NGPU=${4:-4}; HOSTDIR=${HOSTDIR:-runs}
 STATES=${STATES:-"5000:450:550:1.26 3000:450:550:1.26 7000:450:550:1.26 5000:350:450:1.47 5000:550:650:1.11"}
 NLIST=${NLIST:-1,2,3,4,6,8,12,16,20,24,27}
-PY=${PY:-$SCRATCH/grace-env/bin/python}; SCRIPT=${SCRIPT:-$HOME/build_insertion_set.py}
+PY=${PY:-${SCRATCH:-$HOME}/grace-env/bin/python}; SCRIPT=${SCRIPT:-$HOME/build_insertion_set.py}
 mkdir -p "$OUT"; cmds=()
 for st in $STATES; do IFS=: read -r T P0 P1 DV <<< "$st"; Pm=$(( (P0 + P1) / 2 ))
   for split in train valid; do
