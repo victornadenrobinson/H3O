@@ -44,7 +44,10 @@ def main():
         at = f.copy(); at.calc = None
         dft.write_dft(d, at, T, tp, f"{os.path.basename(a.frames)} frame {i}")
         pts.append(dict(id=name, path=name, input_sha256=input_hash(d), natoms=len(at)))
-        meta.append(dict(id=name, frame=int(i), natoms=len(at), **{k: v for k, v in f.info.items() if isinstance(v, (int, float, str, np.integer, np.floating))}))
+        row = dict(id=name, frame=int(i), natoms=len(at))                    # frame = index in frames.extxyz (collect relies on it); a frame's own info keys of the same name are kept as info_<key>
+        for k, v in f.info.items():
+            if isinstance(v, (int, float, str, np.integer, np.floating)): row[("info_" + k) if k in row else k] = v
+        meta.append(row)
     json.dump(dict(schema=1, mode="vasp_smoke", template=os.path.abspath(a.template), source_frames=os.path.abspath(a.frames), pairs=[], points=pts), open(os.path.join(a.out, "manifest.json"), "w"), indent=2)
     open(os.path.join(a.out, "dirs.txt"), "w").write("".join(os.path.join(os.path.abspath(a.out), p["path"]) + "\n" for p in pts))
     keys = sorted({k for m in meta for k in m}); w = csv.DictWriter(open(os.path.join(a.out, "frames_meta.csv"), "w", newline=""), fieldnames=keys); w.writeheader(); w.writerows(meta)
