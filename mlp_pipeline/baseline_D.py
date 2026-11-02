@@ -19,6 +19,7 @@ from importlib import import_module
 calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
 frames = [f for p in a.files for f in read(p, index=":") if "E_sigma0_eV" in f.info]
 if a.limit: frames = frames[:a.limit]
+frames.sort(key=len)          # same-size frames back to back: the compiled GRACE kernels are reused (a new size can trigger a recompile)
 bar = Bar(len(frames), "GRACE-D"); rows = []; n = 0
 if True:
     for f in frames:
