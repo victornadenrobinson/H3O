@@ -17,7 +17,8 @@ ORDER = ["ok", "unconv", "dead", "running", "queued", "chunked", "pending"]
 
 
 def sh(cmd):
-    try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=20).stdout
+    try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60).stdout
+    except subprocess.TimeoutExpired: return None
     except Exception: return ""
 
 
@@ -86,13 +87,15 @@ def board():
         if r["db_id"] not in seen_ids: per_set[r["set"]]["pending"] = per_set[r["set"]].get("pending", 0) + 1
     # ---- slurm
     print(W("\nSlurm jobs of the campaign"))
-    q = sh('squeue -u $USER -h -o "%i|%j|%T|%M|%l|%D|%R|%Z" 2>/dev/null'); rows = [l.split("|") for l in q.splitlines() if l.strip()]; mine = [r for r in rows if not r[1].startswith("dft-pwid") and (re.match(r"^(c\d+|snap|smoke|vasp)", r[1]) or db in r[7] or True)]
+    q = sh('squeue -u $USER -h -o "%i|%j|%T|%M|%l|%D|%R|%Z" 2>/dev/null')
+    if q is None: print("   " + R("squeue timed out (Slurm busy): the job list below is unknown, not empty")); q = ""
+    rows = [l.split("|") for l in q.splitlines() if l.strip()]; mine = [r for r in rows if not r[1].startswith("dft-pwid") and (re.match(r"^(c\d+|snap|smoke|vasp)", r[1]) or db in r[7] or True)]
     mine = [r for r in rows if re.match(r"^(c\d+|snap|smoke|vasp)", r[1])]
     if not mine: print("   " + D("none queued or running" + ("" if rows or shutil.which("squeue") else " (squeue not available here)")))
     for r in mine:
         col = G if r[2] == "RUNNING" else Y; extra = ""
         if r[2] == "PENDING":
-            st_ = sh(f"squeue -h --start -j {r[0]} -o %S").strip(); extra = f"  est. start {st_}" if st_ and "N/A" not in st_ else ""
+            st_ = (sh(f"squeue -h --start -j {r[0]} -o %S") or "").strip(); extra = f"  est. start {st_}" if st_ and "N/A" not in st_ else ""
         print(f"   {r[0]:>9s} {r[1]:8s} {col(r[2]):>9s}  {r[3]:>9s} of {r[4]:>8s}  {r[5]} node  {r[6]}{extra}")
     # ---- bars
     print(W("\nProgress by set") + D("   █ ok  █ unconverged  █ dead  ▓ running  ▒ queued  ░ chunked  · not chunked"))
