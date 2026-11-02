@@ -10,24 +10,26 @@ sd(D) within groups of identical state (set, T, nO, nH) shows which of them the 
 import argparse, collections, csv, os, sys
 import numpy as np
 from ase.io import read
+from gamebar import Bar
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--model", required=True); ap.add_argument("--device", default="cuda"); ap.add_argument("--out", default="baseline_D.csv")
 ap.add_argument("--min-group", type=int, default=6); ap.add_argument("--limit", type=int, default=0); a = ap.parse_args()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
-rows = []; n = 0
-for p in a.files:
-    for f in read(p, index=":"):
-        if "E_sigma0_eV" not in f.info: continue
+frames = [f for p in a.files for f in read(p, index=":") if "E_sigma0_eV" in f.info]
+if a.limit: frames = frames[:a.limit]
+bar = Bar(len(frames), "GRACE-D"); rows = []; n = 0
+if True:
+    for f in frames:
         n += 1
-        if a.limit and n > a.limit: break
         F = f.get_potential_energy(); E0 = float(f.info["E_sigma0_eV"]); Ens = 2 * E0 - F; Fd = f.get_forces()
         g = f.copy(); g.calc = calc; Em = float(g.get_potential_energy()); Fm = g.get_forces()
         s = str(f.info.get("db_set", "?")); T = float(f.info.get("T_K", np.nan)); nO = int((f.numbers == 8).sum()); nH = int((f.numbers == 1).sum())
         rows.append(dict(db_id=f.info.get("db_id", ""), set=s, split=f.info.get("split", ""), T_K=T, nO=nO, nH=nH, natoms=len(f), E_model=Em, F=F, E0=E0, E=Ens, ts=Ens - F,
                          D_F=F - Em, D_E0=E0 - Em, D_E=Ens - Em, f_rmse=float(np.sqrt(((Fd - Fm) ** 2).mean())), f_rms=float(np.sqrt((Fd ** 2).mean()))))
-        if n % 200 == 0: print(f"  {n} frames done", flush=True)
+        bar.update(n, f"set {s}  {len(f)} atoms")
+bar.done("all frames scored")
 w = csv.DictWriter(open(a.out, "w", newline=""), fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows); print(f"{len(rows)} frames -> {a.out}")
 grp = collections.defaultdict(list)
 for r in rows: grp[(r["set"], int(round(r["T_K"] / 1000.0)) * 1000 if r["T_K"] == r["T_K"] else -1, r["nO"], r["nH"])].append(r)
