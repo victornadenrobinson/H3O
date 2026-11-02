@@ -2,6 +2,8 @@
   build   python mlp_pipeline/snapdb.py build --sets NAME=path.extxyz[:max[:prio]] ... --out snapdb      -> snapdb/db.extxyz (all frames, db_id) + snapdb/index.csv
   chunk   python mlp_pipeline/snapdb.py chunk snapdb --budget-min 50 --slots 4 [--prio-max 2]            -> snapdb/chunks/chunk_NNN/frames.extxyz, snapdb/submit_all.sh, snapdb/vasp_chunk.sbatch
   status  python mlp_pipeline/snapdb.py status snapdb                                                     -> counts per set / chunk / state
+  verify  python mlp_pipeline/snapdb.py verify snapdb [--strict]                                          -> integrity report (exit 1 on any ERROR): species, finite numbers, cell widths, closest contacts, volumes, id/index consistency, split leakage, metadata
+  plot    python mlp_pipeline/snapdb.py plot snapdb [--out snapdb/coverage.png]                          -> P-T coverage by set, H/O histogram, cell sizes, kinds
   collect python mlp_pipeline/snapdb.py collect snapdb                                                    -> snapdb/labelled.extxyz from the finished OUTCARs (energy, forces, stress), index.csv status updated
 Cost model: seconds per point = ref_sec * (natoms / ref_natoms)^exp (default 105 s at 330 atoms, exponent 2: a 729-atom point ~ 510 s; calibrate with the first 729-atom run). One job = one node = `slots` concurrent
 single points of 32 ranks each (4 slots on a 128-core node); points are packed (first-fit decreasing, highest priority first) so no lane exceeds --budget-min minutes.
@@ -108,13 +110,85 @@ def cmd_collect(a):
     ix.to_csv(os.path.join(a.db, "index.csv"), index=False); print(f"collected {ok} labelled frames -> {out}; {bad} points without a usable OUTCAR (not run yet or failed)")
 
 
+def cmd_verify(a):
+    import pandas as pd
+    from ase.io import read
+    from ase.neighborlist import neighbor_list
+    fr = read(os.path.join(a.db, "db.extxyz"), index=":"); ix = pd.read_csv(os.path.join(a.db, "index.csv")); err = []; warn = []
+    def bad(lst, msg, ids):
+        if ids: lst.append(f"{msg}: {len(ids)} frames, e.g. {', '.join(ids[:4])}")
+    ids = [f.info.get("db_id", "?") for f in fr]
+    if len(set(ids)) != len(ids): err.append("duplicate db_id in db.extxyz")
+    if set(ids) != set(ix.db_id): err.append(f"db.extxyz ({len(ids)}) and index.csv ({len(ix)}) disagree on the set of db_ids")
+    B = {k: [] for k in ("species", "nonfinite", "volume", "width5", "width6", "HH", "OH", "OO", "vpa", "size", "nometa")}
+    for f in fr:
+        i = f.info.get("db_id", "?"); z = set(f.numbers.tolist())
+        if not z <= {1, 8}: B["species"].append(i)
+        if not (np.isfinite(f.positions).all() and np.isfinite(np.asarray(f.cell)).all()): B["nonfinite"].append(i); continue
+        vol = np.linalg.det(np.asarray(f.cell))
+        if vol <= 1e-6: B["volume"].append(i); continue
+        c = np.asarray(f.cell); w = min(vol / np.linalg.norm(np.cross(c[(j + 1) % 3], c[(j + 2) % 3])) for j in range(3))
+        if w < 5.0: B["width5"].append(i)
+        elif w < 6.0: B["width6"].append(i)
+        vpa = vol / len(f)
+        if not 0.9 <= vpa <= 6.5: B["vpa"].append(i)
+        if len(f) < 50 or len(f) > 800: B["size"].append(i)
+        d_i, d_j, d = neighbor_list("ijd", f, 2.2); zz = f.numbers
+        for name, (p_, q_), lo in (("HH", (1, 1), 0.35), ("OH", (8, 1), 0.50), ("OO", (8, 8), 1.0)):
+            m = ((zz[d_i] == p_) & (zz[d_j] == q_)) | ((zz[d_i] == q_) & (zz[d_j] == p_))
+            if m.any() and d[m].min() < lo: B[name].append(i)
+        if not all(k in f.info for k in ("config_type", "split", "T_K")): B["nometa"].append(i)
+    bad(err, "species other than H, O", B["species"]); bad(err, "non-finite positions / cell", B["nonfinite"]); bad(err, "non-positive cell volume", B["volume"]); bad(err, "cell width < 5 A", B["width5"])
+    bad(err, "H-H closer than 0.35 A", B["HH"]); bad(err, "O-H closer than 0.50 A", B["OH"]); bad(err, "O-O closer than 1.0 A", B["OO"])
+    bad(warn, "cell width 5-6 A (below the 6 A GRACE cutoff)", B["width6"]); bad(warn, "volume per atom outside 0.9-6.5 A^3", B["vpa"]); bad(warn, "atom count < 50 or > 800", B["size"]); bad(warn, "missing config_type / split / T_K", B["nometa"])
+    for key in ("base_id", "run_id", "host_source", "source"):   # whole runs / bases / sources must stay on one side of the split
+        g = {}
+        for f in fr:
+            k = f.info.get(key)
+            if k is not None: g.setdefault(str(k) + (f":{f.info.get('host_frame')}" if key == "host_source" else ""), set()).add(str(f.info.get("split", "train")))
+        leak = [k for k, v in g.items() if len(v) > 1]
+        if leak: err.append(f"split leakage by {key}: {len(leak)} groups in both train and valid, e.g. {leak[:3]}")
+    print(f"{len(fr)} frames, {ix.set.nunique()} sets; split {ix.split.value_counts().to_dict()}")
+    t = ix.groupby("set").agg(frames=("db_id", "size"), natoms_min=("natoms", "min"), natoms_max=("natoms", "max"), train=("split", lambda x: int((x == "train").sum())), valid=("split", lambda x: int((x == "valid").sum())),
+                              T_min=("T_K", lambda x: pd.to_numeric(x, errors="coerce").min()), T_max=("T_K", lambda x: pd.to_numeric(x, errors="coerce").max()), P_min=("P", lambda x: pd.to_numeric(x, errors="coerce").min()), P_max=("P", lambda x: pd.to_numeric(x, errors="coerce").max()))
+    print(t.round(0).to_string())
+    r = (ix.nH / ix.nO.replace(0, np.nan)).round(2); print("H/O (rounded 0.01) counts: " + ", ".join(f"{k}:{v}" for k, v in r.value_counts().sort_index().head(40).items()) + f"; pure H {int((ix.nO == 0).sum())}")
+    for m in warn: print("WARN ", m)
+    for m in err: print("ERROR", m)
+    print("integrity:", "FAILED" if err else "ok", f"({len(err)} errors, {len(warn)} warnings)")
+    if err or (a.strict and warn): sys.exit(1)
+
+
+def cmd_plot(a):
+    import pandas as pd, matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    from ase.io import read
+    ix = pd.read_csv(os.path.join(a.db, "index.csv")); fr = read(os.path.join(a.db, "db.extxyz"), index=":"); ix["vpa"] = [f.get_volume() / len(f) for f in fr]
+    for c in ("P", "T_K"): ix[c] = pd.to_numeric(ix[c], errors="coerce")
+    sets = sorted(ix.set.unique()); cm = plt.get_cmap("tab10"); col = {s_: cm(i % 10) for i, s_ in enumerate(sets)}
+    fig, ax = plt.subplots(2, 3, figsize=(19, 9))
+    for s_ in sets:
+        d = ix[ix.set == s_]; ax[0, 0].scatter(d.T_K, d.P, s=14, alpha=0.6, color=col[s_], label=f"{s_} ({len(d)})")
+    ax[0, 0].set_xlabel("T (K)"); ax[0, 0].set_ylabel("P (GPa; GRACE pressure / target / static)"); ax[0, 0].set_title(f"P-T coverage; {int(ix.P.isna().sum())} frames without P not shown"); ax[0, 0].legend(fontsize=7, frameon=False)
+    ax[0, 0].axhspan(300, 600, color="grey", alpha=0.08); ax[0, 0].axvspan(3000, 7000, color="grey", alpha=0.08)
+    r = (ix.nH / ix.nO.replace(0, np.nan)); bins = np.arange(1.9, 3.3, 0.02); ax[0, 1].hist([r[ix.set == s_].dropna() for s_ in sets], bins=bins, stacked=True, color=[col[s_] for s_ in sets]); ax[0, 1].set_yscale("log")
+    ax[0, 1].set_xlabel("H / O"); ax[0, 1].set_title(f"composition (pure H: {int((ix.nO == 0).sum())} frames, not shown)")
+    ax[1, 0].hist([ix.natoms[ix.set == s_] for s_ in sets], bins=np.arange(280, 800, 20), stacked=True, color=[col[s_] for s_ in sets]); ax[1, 0].set_xlabel("atoms per cell"); ax[1, 0].set_title("cell sizes")
+    k = ix.config_type.astype(str).str.replace(r"_\d+K$", "", regex=True).value_counts().head(25)[::-1]; ax[1, 1].barh(k.index, k.values); ax[1, 1].tick_params(axis="y", labelsize=6); ax[1, 1].set_title("config types (top 25)")
+    for s_ in sets:
+        d = ix[ix.set == s_]; ax[0, 2].scatter(d.T_K, d.vpa, s=14, alpha=0.6, color=col[s_])
+    ax[0, 2].set_xlabel("T (K)"); ax[0, 2].set_ylabel("volume per atom (A^3)"); ax[0, 2].set_title("volume-T coverage (all frames, also those without P)")
+    sp = ix.groupby(["set", "split"]).size().unstack(fill_value=0).reindex(columns=["train", "valid"], fill_value=0); sp.plot.barh(stacked=True, ax=ax[1, 2], color=["#4c78a8", "#f58518"]); ax[1, 2].set_title("frames per set and split")
+    fig.tight_layout(); out = a.out or os.path.join(a.db, "coverage.png"); fig.savefig(out, dpi=120); print("wrote", out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sp = ap.add_subparsers(dest="cmd", required=True)
     b = sp.add_parser("build"); b.add_argument("--sets", nargs="+", required=True); b.add_argument("--out", required=True); b.add_argument("--seed", type=int, default=1)
     c = sp.add_parser("chunk"); c.add_argument("db"); c.add_argument("--budget-min", type=int, default=50); c.add_argument("--slots", type=int, default=4); c.add_argument("--ranks", type=int, default=32); c.add_argument("--prio-max", type=int, default=99)
     c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m3349"); c.add_argument("--qos", default="regular")
-    s = sp.add_parser("status"); s.add_argument("db"); k = sp.add_parser("collect"); k.add_argument("db")
-    a = ap.parse_args(); {"build": cmd_build, "chunk": cmd_chunk, "status": cmd_status, "collect": cmd_collect}[a.cmd](a)
+    s = sp.add_parser("status"); s.add_argument("db"); k = sp.add_parser("collect"); k.add_argument("db"); v = sp.add_parser("verify"); v.add_argument("db"); v.add_argument("--strict", action="store_true")
+    pl = sp.add_parser("plot"); pl.add_argument("db"); pl.add_argument("--out")
+    a = ap.parse_args(); {"build": cmd_build, "chunk": cmd_chunk, "status": cmd_status, "collect": cmd_collect, "verify": cmd_verify, "plot": cmd_plot}[a.cmd](a)
 
 
 if __name__ == "__main__":
