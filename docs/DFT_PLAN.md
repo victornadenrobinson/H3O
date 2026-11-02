@@ -64,3 +64,7 @@ B+: chains at 4000 / 5000 / 6000 K x 300-600 GPa, 2 chains per state, ~210 point
 Hosts: tiers (train_l / valid_l) where they exist; elsewhere pick host frames from the Young pool with `young_select.py --as-hosts` and pass HOSTS_TRAIN / HOSTS_VALID to run_insertion_batch.sh (valid hosts must come from runs that are not in train_l).
 Below 300 GPa (50-200): E only (GRACE NVT at guessed volumes); insertions there come after E has produced hosts (build_insertion_set --hosts on the E trajectories).
 New total ~2,540 points (~5.6 four-node hours + 729-atom points).
+
+## Update 3: H  Huang H3O supercells (+ H2.75O / H2.5O / H2.25O channel variants)
+`build_h3o_supercells.py` from the static relaxations (runs/h3o_static/P<P>, H3O at 300-800 GPa, variants at 300-800): supercell of 360-392 atoms with the best-conditioned cell (min width ~7.5 A, not a skinny 3x2x1), frames: static, rattle x3, strain x4, defects x8, GRACE-MD at 1000/2000/3000/4000 K x3.
+27 relaxed structures x ~28 frames = ~750 candidates; label ~8 per structure = ~220 points. One pressure (--valid-P 450) goes to the validation side whole. Plan total ~2,760 points.
