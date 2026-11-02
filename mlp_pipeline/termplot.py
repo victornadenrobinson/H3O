@@ -113,6 +113,23 @@ def hist(cols, yk, by, w, h, bins, centre, clip, ys=None, title=""):
     return frame(cv, (lo, hi), (0, top), yk + (" (centred on the group median)" if centre else ""), "density", title or f"distribution of {yk} by {by}", legend_line(u, cmap))
 
 
+def ridge(cols, yk, by, w, rows_per=3, centre=True, clip=(1, 99), title="", ys=None):
+    """one horizontal band per category, each a filled density outline on a shared x axis: far easier to read than 13 overlapping curves"""
+    y = cols[yk] if ys is None else ys
+    if centre: y = centred({**cols, "_y": y}, "_y")
+    u, cmap = categories(cols, by); lo, hi = np.percentile(y, clip[0]), np.percentile(y, clip[1]); lab = 9; out = ["\033[1m" + (title or f"{yk} per cell, by {by}" + (" (centred on the group median)" if centre else "")) + "\033[0m"]
+    for k in u:
+        v = y[cols[by] == k]; cv = Canvas(w, rows_per); e = np.linspace(lo, hi, cv.w + 1); hh, _ = np.histogram(np.clip(v, lo, hi), e); hh = np.convolve(hh.astype(float), np.ones(3) / 3, mode="same"); hh = hh / max(hh.max(), 1e-9)
+        for xdot in range(cv.w):
+            n = int(round(hh[xdot] * (cv.h - 1)))
+            if n > 0: cv.dots(np.full(n + 1, xdot), np.arange(cv.h - 1 - n, cv.h), cmap[k])
+        z = int(round((0 - lo) / (hi - lo) * (cv.w - 1)))
+        if 0 <= z < cv.w: cv.dots(np.array([z]), np.array([0]), 7)
+        rows = cv.rows_text(); mid = rows_per // 2
+        for r, line in enumerate(rows): out.append((str(k)[:lab - 1].ljust(lab) if r == mid else " " * lab) + line + (f"  sd {np.std(v):5.1f}  n={len(v)}" if r == mid else ""))
+    out.append(" " * lab + "".join(f"{fmt(t):<{max(cv.cols // 6, 6)}}" for t in nice(lo, hi, 6)[:6]) + "  " + yk); return "\n".join(out)
+
+
 def bars(cols, key, by, w, title):
     u, cmap = categories(cols, by); stats = []
     for k in u:
@@ -128,13 +145,15 @@ def bars(cols, key, by, w, title):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("mode", choices=["report", "scatter", "hist"]); ap.add_argument("csv")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("mode", choices=["report", "scatter", "hist", "ridge"]); ap.add_argument("csv")
     ap.add_argument("--x", default="T_K"); ap.add_argument("--y", default="D_F_pa"); ap.add_argument("--color", default="set"); ap.add_argument("--width", type=int, default=100); ap.add_argument("--height", type=int, default=24)
-    ap.add_argument("--clip", type=float, nargs=2, default=[1, 99]); ap.add_argument("--bins", type=int, default=50); ap.add_argument("--centre", action="store_true"); a = ap.parse_args(); cols = load(a.csv)
+    ap.add_argument("--clip", type=float, nargs=2, default=[1, 99]); ap.add_argument("--tmin", type=float, default=500, help="report: leave out frames below this temperature in the D-vs-T panel (static 0 K frames stretch the axis)"); ap.add_argument("--bins", type=int, default=50); ap.add_argument("--centre", action="store_true"); a = ap.parse_args(); cols = load(a.csv)
     if a.mode == "scatter": print(scatter(cols, a.x, a.y, a.color, a.width, a.height, a.clip))
+    elif a.mode == "ridge": print(ridge(cols, a.y, a.color, a.width - 25, 3, a.centre, a.clip))
     elif a.mode == "hist": print(hist(cols, a.y, a.color, a.width, a.height, a.bins, a.centre, a.clip))
     else:
         print(scatter(cols, "f_rms", "f_rmse", "set", a.width, a.height, [0, 99.5], title="force error against force size (lines: 8 % target, 20 %)", ref=[(0.08, 7), (0.2, 7)])); print()
-        print(scatter(cols, "T_K", "D_F", "set", a.width, a.height, a.clip, ys=centred(cols, "D_F"), title="D_F per cell (eV), centred on the group median, against temperature")); print()
-        print(hist(cols, "D_F", "set", a.width, a.height, a.bins, True, [2, 98], title="spread of D_F per cell within identical states, by set")); print()
+        m = cols["T_K"] >= a.tmin; sub = {k: v[m] for k, v in cols.items()}
+        print(scatter(sub, "T_K", "D_F", "set", a.width, a.height, a.clip, ys=centred(sub, "D_F"), title=f"D_F per cell (eV), centred on the group median, against temperature (T >= {a.tmin:.0f} K)")); print()
+        print(ridge(cols, "D_F", "set", a.width - 25, 3, True, (1, 99), title="spread of D_F (eV per cell) within identical states, one band per set; thin white tick = zero")); print()
         print(bars(cols, "f_rel", "set", a.width - 35, "relative force error by set"))
