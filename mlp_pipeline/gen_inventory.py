@@ -24,6 +24,17 @@ def count_frames(path, key=b"Lattice="):
     return n
 
 
+def first_frame_bytes(path):
+    """bytes of the first extxyz frame (atom-count line, comment line, N atom lines), or None"""
+    with open(path, "rb") as f:
+        l1 = f.readline()
+        try: n = int(l1.split()[0])
+        except (ValueError, IndexError): return None
+        tot = len(l1) + len(f.readline())
+        for _ in range(n): tot += len(f.readline())
+    return tot
+
+
 def first_frame_comp(path):
     with open(path, "r", errors="replace") as f:
         try: n = int(f.readline().split()[0])
@@ -48,12 +59,14 @@ def comp_label(cnt):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs"); ap.add_argument("--csv"); ap.add_argument("--min-frames", type=int, default=1)
+    ap.add_argument("--exact-below-mb", type=float, default=300.0, help="extxyz files above this size get an estimated frame count (size / first-frame bytes, marked ~) instead of a full read")
     a = ap.parse_args()
     rows = []
     for d, dirs, files in os.walk(a.runs):
         dirs[:] = [x for x in dirs if x not in ("cache", "plots", "__pycache__")]
         for fn in sorted(files):
             p = os.path.join(d, fn)
+            if fn.endswith((".extxyz", "_frames.npz")): print(f"scanning {os.path.relpath(p, a.runs)}", file=sys.stderr, flush=True)
             try:
                 if fn.endswith("_frames.npz"):
                     with np.load(p, allow_pickle=False) as z:
@@ -65,18 +78,22 @@ def main():
                                 if ens == "full": c["H"] = c.get("H", 0) + 1
                                 P, Tn, nn = tags(fn); rows.append(dict(kind=f"pwidom-{ens}", P=P, T=T or Tn, n_ins=nn, comp=comp_label(c), natoms=sum(c.values()), frames=nf, MB=round(os.path.getsize(p) / 1e6, 1), path=os.path.relpath(p, a.runs)))
                 elif fn.endswith(".extxyz"):
-                    nf = count_frames(p); fc = first_frame_comp(p)
+                    size = os.path.getsize(p); approx = size > a.exact_below_mb * 1e6
+                    if approx:
+                        fb = first_frame_bytes(p); nf = int(round(size / fb)) if fb else 0              # fixed-size frames: size / bytes of the first frame (within a few %)
+                    else: nf = count_frames(p)
+                    fc = first_frame_comp(p)
                     if fc is None: continue
-                    P, Tn, nn = tags(fn); rows.append(dict(kind="extxyz", P=P, T=Tn, n_ins=nn, comp=comp_label(fc[1]), natoms=fc[0], frames=nf, MB=round(os.path.getsize(p) / 1e6, 1), path=os.path.relpath(p, a.runs)))
+                    P, Tn, nn = tags(fn); rows.append(dict(kind="extxyz", P=P, T=Tn, n_ins=nn, comp=comp_label(fc[1]), natoms=fc[0], frames=nf, approx=approx, MB=round(os.path.getsize(p) / 1e6, 1), path=os.path.relpath(p, a.runs)))
             except Exception as e:
                 print(f"skip {p}: {e}", file=sys.stderr)
     rows = [r for r in rows if r["frames"] >= a.min_frames]
     if not rows: print("nothing found"); return
     rows.sort(key=lambda r: (r["kind"], r["P"] or 0, r["T"] or 0, r["comp"], r["path"]))
     print(f"{len(rows)} files, {sum(r['frames'] for r in rows)} frames in total, {sum(r['MB'] for r in rows) / 1e3:.1f} GB\n")
-    print(f"{'kind':14s} {'P':>5s} {'T':>6s} {'n_ins':>5s} {'atoms':>5s} {'frames':>7s} {'MB':>8s}  {'composition':22s} path")
+    print(f"{'kind':14s} {'P':>5s} {'T':>6s} {'n_ins':>5s} {'atoms':>5s} {'frames':>7s} {'MB':>9s}  {'composition':22s} path")
     for r in rows:
-        print(f"{r['kind']:14s} {str(r['P'] or '-'):>5s} {str(int(r['T']) if r['T'] else '-'):>6s} {str(r['n_ins'] if r['n_ins'] is not None else '-'):>5s} {r['natoms']:5d} {r['frames']:7d} {r['MB']:8.1f}  {r['comp']:22s} {r['path']}")
+        print(f"{r['kind']:14s} {str(r['P'] or '-'):>5s} {str(int(r['T']) if r['T'] else '-'):>6s} {str(r['n_ins'] if r['n_ins'] is not None else '-'):>5s} {r['natoms']:5d} {r['frames']:7d}{'~' if r.get('approx') else ' '}{r['MB']:8.1f}  {r['comp']:22s} {r['path']}")
     print("\n== frames per (kind, P, T, composition) ==")
     tot = {}
     for r in rows:
