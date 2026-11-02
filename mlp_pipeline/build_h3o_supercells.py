@@ -48,7 +48,7 @@ def main():
     ap.add_argument("--static-dir", default="runs/h3o_static"); ap.add_argument("--P", type=float, nargs="*"); ap.add_argument("--phases", nargs="+", default=["H3O", "H2.75O", "H2.5O", "H2.25O"])
     ap.add_argument("--target", type=int, default=384); ap.add_argument("--valid-P", type=float, nargs="*", default=[]); ap.add_argument("--model"); ap.add_argument("--no-md", action="store_true"); ap.add_argument("--device", default="cuda")
     ap.add_argument("--T-list", type=float, nargs="+", default=[1000, 2000, 3000, 4000]); ap.add_argument("--equil-ps", type=float, default=0.2); ap.add_argument("--save-every-ps", type=float, default=0.1); ap.add_argument("--dt", type=float, default=1.0)
-    ap.add_argument("--md-frames", type=int, default=3); ap.add_argument("--seed", type=int, default=1); ap.add_argument("--out", required=True)
+    ap.add_argument("--md-frames", type=int, default=3); ap.add_argument("--ins-n", type=int, nargs="*", default=[], help="also insert n extra H (e.g. 1 2 3 4 5 6) into the static supercell and run a short GRACE-MD at --ins-T (needs --model)"); ap.add_argument("--ins-T", type=float, nargs="+", default=[3000.0]); ap.add_argument("--seed", type=int, default=1); ap.add_argument("--out", required=True)
     a = ap.parse_args(); rng = np.random.default_rng(a.seed)
     from build_toy_cells import PERT, ok
     from build_insertion_set import get_calc, relax_md, finish
@@ -89,6 +89,16 @@ def main():
                     fin = finish(fr, calc, dict(T_K=T))
                     emit(fin, "md", f"T={T:g}", T=T, extra=dict(P_target=P, md_frame=j, P_grace_GPa=fin.info.get("P_grace_GPa", float("nan")), E_grace=fin.info.get("E_grace", float("nan")), T_inst=fin.info.get("T_inst", float("nan"))))
                 print(f"   md {T:g} K done in {time.time() - t0:.0f} s", flush=True)
+            if a.ins_n:
+                from build_insertion_set import insert_H
+                ia = SimpleNamespace(cand=400, min_d_O=0.85, min_d_H=0.60, power=4.0); dv = 1.26 * (500.0 / P) ** 0.75   # H partial volume, A^3, scaled from 1.26 at 500 GPa
+                for nn in a.ins_n:
+                    for T in a.ins_T:
+                        b = insert_H(sc, nn, rng, ia); f = ((sc.get_volume() + dv * nn) / sc.get_volume()) ** (1 / 3); b.set_cell(sc.cell.array * f, scale_atoms=True)
+                        md_a = SimpleNamespace(T=T, dt=a.dt, equil_ps=a.equil_ps, sample_ps=a.save_every_ps * (a.md_frames - 1), save_every_ps=a.save_every_ps)
+                        for j, fr in enumerate(relax_md(b, calc, md_a, rng)):
+                            fin = finish(fr, calc, dict(T_K=T)); emit(fin, "ins_md", f"n={nn} T={T:g}", T=T, extra=dict(P_target=P, n_add=nn, md_frame=j, P_grace_GPa=fin.info.get("P_grace_GPa", float("nan")), E_grace=fin.info.get("E_grace", float("nan"))))
+                print(f"   insertion MD n={a.ins_n} at T={a.ins_T} done", flush=True)
     print(f"wrote {n} frames to {a.out}")
 
 
