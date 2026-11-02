@@ -109,6 +109,7 @@ def cmd_collect(a):
         d = os.path.dirname(mf); meta = pd.read_csv(mf)
         for r in meta.itertuples():
             pd_ = os.path.join(d, r.id); oc = os.path.join(pd_, "OUTCAR"); dj = os.path.join(pd_, "DONE.json")
+            import json
             if os.path.exists(dj):                                    # worker layout: the successful run is <point>/attempts/<stamp>/OUTCAR
                 import json
                 att = json.load(open(dj)).get("attempt"); oc = os.path.join(pd_, att, "OUTCAR") if att else oc
@@ -116,10 +117,16 @@ def cmd_collect(a):
             try:
                 at = read(oc, index=-1, format="vasp-out")
                 src = read(os.path.join(os.path.dirname(d), "frames.extxyz"), index=int(r.frame)); at.info = dict(src.info); at.info["db_set"] = set_of.get(src.info.get("db_id"), str(src.info.get("db_set")))      # F is read back as the boolean False
-                at.calc = SinglePointCalculator(at, energy=at.get_potential_energy(), free_energy=at.get_potential_energy(force_consistent=True), forces=at.get_forces(), stress=at.get_stress())
+                e0 = at.get_potential_energy(); ef = at.get_potential_energy(force_consistent=True)       # ASE: energy = sigma->0 value, free_energy = TOTEN
+                at.info["E_sigma0_eV"] = float(e0)
+                if os.path.exists(dj):
+                    tot = json.load(open(dj)).get("TOTEN_eV")
+                    if tot is not None and abs(tot - ef) > 1e-3: raise ValueError(f"TOTEN in DONE.json ({tot}) differs from the OUTCAR free energy ({ef})")
+                at.calc = SinglePointCalculator(at, energy=ef, free_energy=ef, forces=at.get_forces(), stress=at.get_stress())      # label = FREE energy (TOTEN): ISMEAR=-1 forces and stress are its derivatives
                 write(out, at, append=True); ix.loc[ix.db_id == src.info["db_id"], "status"] = "done"; ok += 1
             except Exception as e:
                 bad += 1
+                if bad <= 5: print(f"  collect: {d}/{r.id}: {type(e).__name__}: {str(e)[:120]}")
                 if hasattr(r, "db_id"): ix.loc[ix.db_id == r.db_id, "status"] = "failed"
     ix.to_csv(os.path.join(a.db, "index.csv"), index=False); print(f"collected {ok} labelled frames -> {out}; {bad} points without a usable OUTCAR (not run yet or failed)")
 
