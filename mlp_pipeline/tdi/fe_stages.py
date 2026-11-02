@@ -419,12 +419,14 @@ def dft_stage(case, discard=0.2, tag="totenminuseffpot", verbose=True, com=False
     order = np.argsort(lam); lam = np.array(lam)[order]; mean = np.array(mean)[order]; err = np.array(err)[order]; ser = [ser[i] for i in order]
     res = dict(lambdas=lam.tolist(), info=[info[i] for i in order], com=bool(com))
     if com: res["dV_unprimed_means"] = [unprimed[i] for i in order]; res["S_com_means"] = [scom_mean[i] for i in order]
+    from scipy.interpolate import CubicSpline
+    wt = np.zeros(len(lam)); wt[:-1] += np.diff(lam) / 2; wt[1:] += np.diff(lam) / 2          # trapezoid weights (any node set)
+    res["trapezoid"] = float(np.trapezoid(mean, lam)); res["trap_err"] = float(np.sqrt(((wt * err) ** 2).sum()))
+    res["spline"] = float(CubicSpline(lam, mean).integrate(0, 1))
     if len(lam) == 5 and np.allclose(lam, [0, .25, .5, .75, 1.0]):
         w = np.array([7, 32, 12, 32, 7]) * 2 * 0.25 / 45
         res["boole"] = float(boole(mean)); res["boole_err"] = float(np.sqrt(((w * err) ** 2).sum()))
-        res["trapezoid"] = float(np.trapezoid(mean, lam)); res["simpson3"] = float((mean[0] + 4 * mean[2] + mean[4]) / 6)
-        from scipy.interpolate import CubicSpline
-        res["spline"] = float(CubicSpline(lam, mean).integrate(0, 1))
+        res["simpson3"] = float((mean[0] + 4 * mean[2] + mean[4]) / 6)
     T = float(read_incar(os.path.join(ldirs[0], "INCAR"))["TEBEG"].split()[0])
     beta = 1.0 / (KB_HA * T)
     # fluctuation-dissipation check: d<dV>/dlambda = -beta var(dV) must equal the finite difference of the means if every window is in equilibrium
@@ -436,7 +438,8 @@ def dft_stage(case, discard=0.2, tag="totenminuseffpot", verbose=True, com=False
     f = mbar(du, cnt, beta * lam)
     res["mbar"] = float(f[-1] / beta) if abs(lam[-1] - 1) < 1e-9 else None
     res["T"] = T
-    res["dF_dft"] = res.get("boole", res.get("mbar")); res["dF_dft_err"] = res.get("boole_err")
+    if "boole" in res: res["dF_dft"] = res["boole"]; res["dF_dft_err"] = res["boole_err"]                  # five equal nodes (the original ladders)
+    else: res["dF_dft"] = res["spline"]; res["dF_dft_err"] = res["trap_err"]; print("  non-standard lambda ladder: dF_dft = cubic spline over the nodes (statistical error from the trapezoid weights); compare the other estimators", flush=True)
     return res
 
 
