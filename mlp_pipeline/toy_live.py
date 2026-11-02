@@ -35,7 +35,7 @@ try:
         dyn.run(a.every); Tk = 2 / 3 * at.get_kinetic_energy() / (len(at) * units.kB); at.info["T_inst"] = Tk
         now = time.time(); sps = a.every / max(now - t_prev, 1e-9); t_prev = now
         note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s"
-        if a.view3d: n += 1; print(render3d(at, yaw=n * a.spin, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox, zoom=a.zoom, clip=a.clip, hi=a.hi, view_dir=([float(c) for c in a.view] if a.view else None), ortho=a.ortho or bool(a.view)), flush=True)
+        if a.view3d or a.view: n += 1; print(render3d(at, yaw=n * a.spin, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox, zoom=a.zoom, clip=a.clip, hi=a.hi, view_dir=([float(c) for c in a.view] if a.view else None), ortho=a.ortho or bool(a.view)), flush=True)
         else: print(render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=note), flush=True)
         time.sleep(max(0.0, 1.0 / a.fps - (time.time() - now)))
 except KeyboardInterrupt: pass
