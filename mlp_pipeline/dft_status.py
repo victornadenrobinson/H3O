@@ -87,14 +87,15 @@ def board(db, header=True):
         try: chunk_of[r["db_id"]] = int(float(r["chunk"]))
         except (ValueError, TypeError): pass
     # ---- gather point states
-    per_set = {s: {} for s in sets}; chunks = []; times = []; dead = []; unconv = []; seen_ids = set(); slow = []
+    per_set = {s: {} for s in sets}; chunks = []; times = []; dead = []; unconv = []; seen_ids = set(); slow = []; fin_ids = set(); set_times = {}
     for cd in sorted(glob.glob(os.path.join(db, "chunks", "chunk_*"))):
         name = os.path.basename(cd); pts = os.path.join(cd, "points"); mf = os.path.join(pts, "frames_meta.csv"); st = {}; ct = []
         if os.path.exists(mf):
             for r in csv.DictReader(open(mf)):
                 d = os.path.join(pts, r["id"]); s, el, err = point_state(d, now); st[s] = st.get(s, 0) + 1; seen_ids.add(r.get("db_id")); setn = r.get("db_set", "?")
                 per_set.setdefault(setn, {}); per_set[setn][s] = per_set[setn].get(s, 0) + 1
-                if el: ct.append(el); times.append((int(r.get("natoms", 0) or 0), el))
+                if el: ct.append(el); times.append((int(r.get("natoms", 0) or 0), el)); set_times.setdefault(setn, []).append((int(r.get("natoms", 0) or 0), el))
+                if s in ("ok", "unconv"): fin_ids.add(r.get("db_id"))
                 if s == "dead": dead.append((name, r["id"], err))
                 if s == "unconv": unconv.append((name, r["id"]))
         else:
@@ -118,14 +119,30 @@ def board(db, header=True):
             st_ = (sh(f"squeue -h --start -j {r[0]} -o %S") or "").strip(); extra = f"  est. start {st_}" if st_ and "N/A" not in st_ else ""
         print(f"   {r[0]:>9s} {r[1]:8s} {col(r[2]):>9s}  {r[3]:>9s} of {r[4]:>8s}  {r[5]} node  {r[6]}{extra}")
     # ---- bars
+    DESC = {"B": "paired n->n+1 H insertion chains on the same cell (no MD): insertion-energy test", "C": "PWidom host / host+H frames at 400-600 GPa, 4000-6000 K: end-state D statistics",
+            "C2": "PWidom reverse test: host and host+H at proxy-chosen sites (E_ins directly)", "A": "H2O + n H insertion, short GRACE-MD, T x P grid 3000-7000 K / 300-600 GPa",
+            "A_b1": "same as A, older batch-1 run (5 states, more hosts)", "A_part": "same as A, partial files of jobs that were killed", "E": "low-P GRACE-MD, 50-200 GPa fill (H2O..H2.5O, 3000-7000 K)",
+            "H": "Huang H3O-phase supercells: static / rattle / strain / defects / GRACE-MD", "D_eos": "EOS-scan frames, fcc/bcc, 3000-7000 K", "D_melt": "melt-composition trajectories, 4000-6000 K, H2O..H3O",
+            "G": "pure H, 729 atoms, GRACE-MD (Gamma-point needs the big cell)", "F": "toy-model cells: shakes, voids, vacancies, insertions, compressions, close contacts", "F_H": "pure-H 729-atom toy cells (same perturbations)"}
+    allt = [(n, t) for v in set_times.values() for n, t in v if n]; ratio = sorted(t / (105.0 * (n / 330.0) ** 2) for n, t in allt)[len(allt) // 2] if allt else 1.0
+    by_set_atoms = {}
+    for r in ix: by_set_atoms.setdefault(r["set"], []).append((r["db_id"], int(float(r["natoms"] or 0))))
+    nodes_run = sum(int(r[5]) for r in mine if r[2] == "RUNNING") if mine else 0
     print(W("\nProgress by set") + D("   █ ok  █ unconverged  █ dead  ▓ running  ▒ queued  ░ chunked  · not chunked"))
-    tot = {}; ntot = 0
+    tot = {}; ntot = 0; left_h_all = 0.0
     for s in sorted(sets, key=lambda s: (int(sets[s]["prio"]) if str(sets[s]["prio"]).isdigit() else 9, s)):
         cn = per_set.get(s, {}); n = sets[s]["n"]; ntot += n
         for k, v in cn.items(): tot[k] = tot.get(k, 0) + v
         okn = cn.get("ok", 0); bad = cn.get("dead", 0) + cn.get("unconv", 0)
         print(f"   {s:8s} p{sets[s]['prio']} {bar(cn, n)} {okn:4d}/{n:<4d} {100 * okn / max(n, 1):3.0f}%" + (R(f"  {bad} bad") if bad else "") + (B(f"  {cn['running']} running") if cn.get("running") else ""))
+        ts = set_times.get(s, []); avg = sum(t for _, t in ts) / len(ts) if ts else None
+        left = [na for i_, na in by_set_atoms.get(s, []) if i_ not in fin_ids]
+        est = sum((avg if avg and abs(na - sum(n_ for n_, _ in ts) / len(ts)) < 40 else 105.0 * (na / 330.0) ** 2 * ratio) for na in left) if left else 0.0
+        left_h = est / 4 / 3600; left_h_all += left_h
+        print("            " + D(f"{DESC.get(s, '')}  |  " + (f"avg {avg:.0f} s/pt over {len(ts)} pts" if avg else "no timing yet") + f"  |  ~{(sum(na for _, na in by_set_atoms.get(s, [])) / max(len(by_set_atoms.get(s, [])), 1)):.0f} atoms  |  {len(left)} left ~{left_h:.2f} node-h"))
     okn = tot.get("ok", 0); print(f"   {'OVERALL':11s} {bar(tot, ntot)} {okn:4d}/{ntot:<4d} {100 * okn / max(ntot, 1):3.0f}%")
+    eta = left_h_all / max(nodes_run, 1)
+    print("   " + B("ETA ") + f"{left_h_all:.1f} node-hours left (4 lanes per node, {ratio:.2f}x the cost model where no timing exists); " + (f"{nodes_run} node(s) running now -> ~{eta:.1f} h if the rest start at once" if nodes_run else "no node running now"))
     # ---- chunks
     print(W("\nChunks"))
     print("   " + D(f"{'chunk':14s}{'pts':>5s}{'ok':>5s}{'unconv':>7s}{'dead':>6s}{'run':>5s}{'queued':>7s}{'s/pt':>8s}   directory"))
