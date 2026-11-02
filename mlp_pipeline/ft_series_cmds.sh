@@ -15,5 +15,15 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh ${B}EF_f100 ${B} $V $UPD $W $M";;
   len) W=${2:-10 10 1}; M=${3:-frozen}; B=${4:-n}; V=n; [ "$B" = mn ] && V=mn
        for u in 1000 3000 10000; do echo "bash mlp_pipeline/ft_one.sh ${B}_u$u ${B} $V $u $W $M"; done;;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len ..." >&2; exit 1;;
+  lrA) W=${2:-10 10 1}   # overnight grid, node A: learning rate and length with the frozen (light) fine-tune, replay data
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-4_u6k   mn mn 6000 $W frozen 0.0003"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-3_u6k   mn mn 6000 $W frozen 0.001"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_u6k   mn mn 6000 $W frozen 0.003"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-3_u30k  mn mn 30000 $W frozen 0.001";;
+  lrB) W=${2:-10 10 1}   # node B: everything trainable (more capacity, forgetting risk), plus one no-replay control
+       echo "bash mlp_pipeline/ft_one.sh mn_n_lr1e-4_u10k   mn mn 10000 $W naive 0.0001"
+       echo "bash mlp_pipeline/ft_one.sh mn_n_lr3e-4_u10k   mn mn 10000 $W naive 0.0003"
+       echo "bash mlp_pipeline/ft_one.sh mn_n_lr1e-4_u30k   mn mn 30000 $W naive 0.0001"
+       echo "bash mlp_pipeline/ft_one.sh n_n_lr1e-4_u10k    n  n  10000 $W naive 0.0001";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB ..." >&2; exit 1;;
 esac
