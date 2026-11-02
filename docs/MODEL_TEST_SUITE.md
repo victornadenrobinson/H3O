@@ -20,6 +20,7 @@ Thresholds below are provisional starting points (reasons given); change them in
 | insertion / deletion sets | host + n H, n = -8 ... +54, labelled with VASP, hosts from valid tiers | being built (`build_insertion_set.py`, `prepare_points.py`) |
 | paired chains | n -> n+1 on the same geometry, `--chain` | same |
 | DFT-MD reference | structure/dynamics of DFT AIMD at the key states (RDFs, MSD, D_H) | from pool OUTCARs (to extract) |
+| general hold-out | OMat24 / MPtrj sample or low-P ice, H2, O2 DFT frames (not in any fine-tune set) for G1 | to be assembled (check what the base model's data release provides) |
 | literature | Cheng 2021 / Wilson 2013 fcc-bcc and melting, Huang H3O static enthalpies | in docs/data |
 
 ## Tests
@@ -68,7 +69,7 @@ Columns: id, scenario, what it detects, tool (exists = already in the repo; writ
 |---|---|---|---|
 | E1 | isolated dimer curves H-H, O-H, O-O: finite, monotone core, no spurious wells at r < 0.6 A | `tdi/pair_scan.py` (exists) | no E(r) minimum below r = 0.6 A |
 | E2 | out-of-distribution states (P < 200 or > 1450 GPa, T 13000 K, untrained compositions/T such as H2.5O above 3000 K) | write | D and forces degrade gracefully (<= 2x in-domain); no crash |
-| E3 | committee disagreement of 3 seeds on the held-out frames (uncertainty proxy) vs actual error | write (needs 3 seeds) | rank correlation >= 0.5 so it can steer active learning |
+| E3 | committee disagreement of 3 seeds (the same 3 trainings as G6) on the held-out frames (uncertainty proxy) vs actual error | write (needs 3 seeds) | rank correlation >= 0.5 so it can steer active learning |
 
 ### F. Numerical and practical
 | id | test | pass criterion |
@@ -77,13 +78,32 @@ Columns: id, scenario, what it detects, tool (exists = already in the repo; writ
 | F2 | k-mesh sensitivity of the DFT labels themselves (Gamma vs 2x2x2 vs 3x3x3 on 20 H-rich frames) | composition-dependent difference <= 50 meV/H, else relabel |
 | F3 | throughput and memory at 324 / 432 / 729 atoms | recorded, not pass/fail |
 
+### G. Forgetting and fine-tuning settings (added 2026-11-02 after a literature check)
+Reasons: fine-tuning a universal potential on a narrow set can erase what it knew, and how much depends on the architecture (Mohandas et al. 2026 found catastrophic forgetting for MACE even with frozen layers and replay; Kim et al. 2025, arXiv 2506.15223, combine replay with an elastic-weight penalty). GRACE's own `-OMAT` models were produced by raising the energy weight over an equal E/F/S base. We have not tested forgetting at all, and set E (50-200 GPa) reaches the region where the base model is most reliable, so a regression there would be a real loss. Pass criteria are provisional.
+| id | test | tool | pass criterion |
+|---|---|---|---|
+| G1 | general hold-out: ~500 frames the base model was trained on or is known to describe well (OMat24 / MPtrj sample, if accessible; otherwise ice Ih / VII / X and H2 / O2 at 0-100 GPa from DFT), base vs fine-tuned | write | fine-tuned energy and force error <= 2x the base error (anything worse is forgetting, not specialisation) |
+| G2 | low-P regression: E and F error on the new 50/100/200 GPa labels (set E) for base, ft_m2 and each new fine-tune | `frame_batch.py` on the set-E labels | new fine-tune not worse than the base on set E, and better than ft_m2 |
+| G3 | loss-weight ladder: baseline, wE/wF raised with stress lowered (`grace_make_input.py --wE --wF --wS`), same plus Huber deltas; same data and seed | write | choose by sd(D) (A1) and c (A2) first, then G1 |
+| G4 | replay ablation: 0 / 10 / 30 % of training batches from the general set (or from the old `train_l` tier) | write | G1 improves with replay without increasing sd(D) by more than 20 % |
+| G5 | freezing ablation: all trainable, last layer only, via `trainable_variable_names`; 10k updates | write | the setting with the lowest sd(D) among those that pass G1 |
+| G6 | seed spread: 3 trainings of the chosen setting; spread of A1/A2 numbers across seeds | write (same trainings as E3) | A1 sd(D) spread across seeds <= 15 %, otherwise differences between settings are noise |
+
+### H. Training-set coverage (before and after labelling)
+| id | test | tool | pass criterion |
+|---|---|---|---|
+| H1 | extrapolation ranking: distance (or D-optimality grade) of every candidate from the existing labelled set, in the model's per-atom feature space; used to rank candidates when the DFT budget is cut, and to show that the held-out frames lie inside the labelled set | write | held-out frames' median rank within the labelled set's range; no candidate group (set, state) that is entirely beyond it unlabelled |
+| H2 | error vs novelty: sd(D) per feature-distance bin on the held-out frames | write | error rises smoothly with novelty (so the ranking is a usable error proxy) |
+| H3 | coverage maps of the database: `snapdb.py plot` (P-T, V-T, H/O, atoms, config types, splits) plus `snapdb.py verify --strict` | exists | no empty cell inside the production domain (300-600 GPa x 3000-7000 K x H2O ... H3O) |
+
 ## Running it
 `runs/suite/<model>/` collects one JSON per test; `suite_report.py` (to write) prints a scorecard with a column per model and a pass/fail line per test, plus a short list of the worst offenders (states and frames).
 Parallel layout: A, B, F on CPU nodes (frame scoring is cheap there); C, D, E on GPU nodes as a Slurm array, one job per (test, state); the aggregator runs when the array finishes.
-Policy: no model is used for TDI or Widom production until A1, A2, B1, D1 and E1 pass; the full suite runs for every candidate and for every later retrain.
+Policy: no model is used for TDI or Widom production until A1, A2, B1, D1, E1 and G1 pass; the full suite runs for every candidate and for every later retrain.
 
 ## Order of implementation
 1. A1/A2 (done as `frame_batch.py`) and the sealed-set definition.
 2. B1/B2/B4 as soon as the first labelled insertion set exists.
 3. D1/D2/D7 (stability, drift, minimum distances), which would also have caught problems with the old thermostat settings early.
-4. The runner and `suite_report.py`, then the rest.
+4. G1/G2 as soon as set E is labelled (they are the cheapest forgetting check); G3-G6 as the fine-tune ladder runs.
+5. The runner and `suite_report.py`, then the rest.
