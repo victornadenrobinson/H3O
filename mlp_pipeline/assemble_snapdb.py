@@ -4,13 +4,13 @@ Looks for the standard outputs, concatenates each set's files (reading with ASE,
 snapdb.py build -> verify -> plot. Missing sets are reported, not fatal. Caps and priorities follow docs/DFT_PLAN.md (prio 1 = label first). Edit SETS to change them.
 Set -> source:  A ins_grid/*  A_b1 ins_batch1/*  A_part partial/*  B chain/*  C sel_pwidom  D_melt sel_meltcomp  D_eos sel_eos  E runs/eos_lowp/*/traj.extxyz  F toy/{h2o,h2.25o,h2.5o,h3o}  F_H toy/H729  G H729_md  H h3o_sc/*
 """
-import argparse, glob, hashlib, os, re, subprocess, sys
+import argparse, glob, hashlib, os, re, subprocess, sys, time
 import numpy as np
 from ase.io import read, write
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser(); ap.add_argument("--leg", default=os.path.expanduser("~/leg")); ap.add_argument("--root", default="."); ap.add_argument("--out", default="snapdb"); ap.add_argument("--dry", action="store_true")
-ap.add_argument("--seed", type=int, default=1); ap.add_argument("--e-per-traj", type=int, default=8, help="low-P MD trajectories: frames kept per trajectory file (they are 5000+ highly correlated frames, 180 are used)"); a = ap.parse_args()
+ap.add_argument("--seed", type=int, default=1); ap.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1), help="processes for the collapsed-contact check"); ap.add_argument("--e-per-traj", type=int, default=8, help="low-P MD trajectories: frames kept per trajectory file (they are 5000+ highly correlated frames, 180 are used)"); a = ap.parse_args()
 L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 # name: (file globs, cap (0 = all), prio)
 # C 440 = C 200 + C3 240 (the end-state D statistics come from the same pwidom caches); C2 has no cap because host and site geometries of a frame must stay together;
@@ -35,6 +35,19 @@ def bad_contact(f):
     return None
 
 
+def _contact_arrays(t):
+    from ase import Atoms
+    return bad_contact(Atoms(numbers=t[0], positions=t[1], cell=t[2], pbc=True))
+
+
+def check_contacts(frames):
+    """list of 'HH' / 'OH' / 'OO' / None per frame, computed in parallel (the neighbour lists dominate the run time on big sets)"""
+    from concurrent.futures import ProcessPoolExecutor
+    work = [(f.numbers, f.positions, np.asarray(f.cell)) for f in frames]
+    if a.jobs <= 1 or len(work) < 50: return [_contact_arrays(t) for t in work]
+    with ProcessPoolExecutor(a.jobs) as ex: return list(ex.map(_contact_arrays, work, chunksize=32))
+
+
 def tag_lowp(f, path):
     d = os.path.basename(os.path.dirname(path)); T = re.search(r"(\d+)K", d); nO = int((f.numbers == 8).sum()); nH = int((f.numbers == 1).sum())
     f.info.update(kind="eos_md", run_id=d, source=path, split="valid" if int(hashlib.md5(d.encode()).hexdigest(), 16) % 3 == 0 else "train", nO=nO, nH=nH, T_K=float(T.group(1)) if T else np.nan,
@@ -51,9 +64,13 @@ for name, (globs, cap, prio) in SETS.items():
         if name == "E" and len(fr) > a.e_per_traj: fr = [fr[i] for i in np.linspace(0, len(fr) - 1, a.e_per_traj).round().astype(int)]      # evenly spaced; MD frames 20 fs apart are nearly identical
         for f in fr:
             if name == "E": f = tag_lowp(f, p)
-            f.calc = None; why = bad_contact(f)
-            if why: k = f'{why} {os.path.basename(os.path.dirname(p)) if name == "E" else os.path.basename(p)}'; dropped[k] = dropped.get(k, 0) + 1; continue      # collapsed geometry: never send to DFT
-            frames.append(f)
+            f.calc = None; f.info["_src"] = os.path.basename(os.path.dirname(p)) if name == "E" else os.path.basename(p); frames.append(f)
+    t0 = time.time(); why_all = check_contacts(frames); keep = []
+    for f, why in zip(frames, why_all):
+        src = f.info.pop("_src")
+        if why: k = f"{why} {src}"; dropped[k] = dropped.get(k, 0) + 1
+        else: keep.append(f)
+    frames = keep; print(f"  {name}: {len(frames)} frames kept, contact check {time.time() - t0:.0f} s", flush=True)
     report.append((name, len(files), len(frames), bad, cap, prio))
     if dropped: print(f"  {name}: dropped {sum(dropped.values())} frames with collapsed contacts: " + "; ".join(f"{k} x{v}" for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])[:6]), flush=True)
     if frames and not a.dry: out = os.path.join(work, name + ".extxyz"); write(out, frames); specs.append(f"{name}={out}:{cap or ''}:{prio}")
