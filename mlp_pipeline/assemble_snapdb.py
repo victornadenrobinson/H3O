@@ -14,10 +14,10 @@ ap.add_argument("--seed", type=int, default=1); a = ap.parse_args()
 L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 # name: (file globs, cap (0 = all), prio)
 SETS = {
-    "B": ([L("chain", "*.extxyz")], 0, 1), "C": ([R("sel_pwidom.extxyz")], 200, 1),
+    "B": ([L("chain", "*.extxyz")], 0, 1), "C": ([R("sel_pwidom.extxyz")], 440, 1), "C2": ([L("widom_c2.extxyz")], 0, 1),   # C 440 = C 200 + C3 240 (end-state D statistics come from the same pwidom caches); C2: no cap, host and site geometries of a frame must stay together
     "A": ([L("ins_grid", "ins_*.extxyz")], 520, 2), "A_b1": ([L("ins_batch1", "ins_*.extxyz")], 150, 2), "A_part": ([L("partial", "ins_*.extxyz")], 100, 3),
     "E": ([R("runs", "eos_lowp", "*", "traj.extxyz"), R("runs", "eos_lowp2", "*", "traj.extxyz")], 180, 3), "H": ([L("h3o_sc", "*.extxyz")], 220, 3),
-    "D_melt": ([R("sel_meltcomp.extxyz")], 74, 4), "D_eos": ([R("sel_eos.extxyz")], 74, 4), "G": ([L("H729_md.extxyz"), L("H729_md_s2.extxyz")], 30, 4),
+    "D_melt": ([R("sel_meltcomp.extxyz")], 144, 4), "D_eos": ([R("sel_eos.extxyz")], 100, 4)   # D_melt 144 = D + D2 (4000/6000 K fill), "G": ([L("H729_md.extxyz"), L("H729_md_s2.extxyz")], 30, 4),
     "F": ([L("toy", n + ".extxyz") for n in ("h2o", "h2.25o", "h2.5o", "h3o")], 220, 5), "F_H": ([L("toy", "H729.extxyz")], 32, 5)}
 
 
