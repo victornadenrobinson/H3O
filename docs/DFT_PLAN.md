@@ -1,0 +1,45 @@
+# DFT labelling plan (insertion / defect / low-P / validation snapshots)
+
+Numbers marked ~ are plan targets or estimates, not measurements. DFT cost: stock VASP, Gamma only, mean 105 s/point (max 181 s) for ~330 atoms on 32 ranks; about 450 points per 4-node hour.
+729-atom pure-H points: estimated 5-10x that (~10-15 min each), to be measured with the first one.
+
+## Tree of what feeds the training / validation sets
+
+```
+DFT labels
+├─ HAVE
+│  ├─ training tiers s/m/l + valid_*   (MD runs mined from old OUTCARs; Perlmutter train_l/valid_l = 324-atom H2O..H2.75O, H729 on Young)
+│  ├─ lambda=1 frames of the old custom-VASP TDI campaigns (frame_batch.py --count): evaluation only, no insertion pairs
+│  └─ 82 stock-VASP single points (Perlmutter timing run: insertion/audit tests)
+└─ TO ADD (GRACE or toy geometry -> prepare_points.py -> perlmutter_vasp_check.sh)
+   ├─ A  GRACE-MD + insertion      build_insertion_set.py / run_insertion_batch.sh   (running)  H2O host + n=1..27 H, 4 frames/run, train hosts from train_l, valid from valid_l
+   ├─ B  raw insertion chains      --equil-ps 0 --chain: exact n -> n+1 pairs from one growing cell
+   ├─ C  Young pwidom caches       host/full ensembles, H/O 2.009..2.5, 400/500/600 GPa, 4000-6000 K  (dilute H; GRACE-sampled = reverse test)
+   ├─ D  Young EOS / melt_comp     H2.25..H3O at 5000/7000 K, H2.1O, volumes in 300-700 GPa
+   ├─ E  low-P EOS states          eos_low_p.py -> 17_eos_md.py at 50/100/200 GPa x {H2O,H2.25O,H2.5O,H2.75O,H3O} x {3000,5000,7000} K
+   ├─ F  toy-potential cells       build_toy_cells.py: shake / vacancy / void / insertion / cramp / expand / close contact / hot, 324-432 atoms and 729 H
+   └─ G  pure-H 729 GRACE-MD       build_insertion_set.py --comp h --natoms 729 --n-list 0
+```
+
+## Table
+
+| id | what | geometry source | atoms | states | DFT points ~ | split |
+|----|------|-----------------|-------|--------|--------------|-------|
+| A  | H2O + n H, n = 1,2,3,4,6,8,12,16,20,24,27 | GRACE-MD, 4 frames/run (label 2 of 4) | 325-351 | 3000/500, 5000/400, 5000/500, 7000/500, 5000/600 GPa; ~19 train hosts | ~420 train | train |
+| A  | same, validation | valid_l hosts: only 5000 K / 500 GPa has any (4 hosts) | 325-351 | 1 | ~90 | valid |
+| B  | n -> n+1 chains, raw | build_insertion_set --chain | 324-351 | 5000 K, 500 GPa, 4 chains x n=0..8 | ~40 | valid + train |
+| C  | pwidom host/full, dilute H | Young caches, ~4 frames per composition/state | 324-379 | 16 compositions x (500, 600 GPa) x 5000 K (+4000/6000 K at 2.25) | ~150 | 2/3 train, 1/3 valid by cache |
+| D  | EOS / melt_comp H-rich | Young eos_scan, melt_comp | 351-432 | H2.25-H3O, 5000/7000 K, v <= 2.4 A^3/atom | ~150 | train |
+| E  | low-P states | GRACE NVT at guessed volumes | 324-432 | 5 comps x 3 T x 3 P = 45 states x 4 frames | ~180 | train; 1 of 4 per state valid |
+| F  | toy defect cells | build_toy_cells.py | 310-432 | 4 comps x 8 kinds x ~6 | ~190 | train/valid by base |
+| F  | toy defect cells, pure H | same, sc 9^3 | 714-756 | 8 kinds x ~4 | ~32 | train |
+| G  | pure H, GRACE-MD | 729-atom hosts | 729 | 3 hosts x ~10 frames | ~30 | train |
+|    | **total new** | | | | **~1280** (about 3 four-node hours; 729-atom points ~60 of them cost ~5-10x each) | |
+
+Existing: 82 stock-VASP points + the tier frames (counts per tier: `dataset_inventory.py`); lambda=1 frames per campaign: `frame_batch.py --count`.
+
+## Rules
+- Whole MD runs / host frames stay on one side of the train / valid split (run_id, base_id, host_source in the frame info).
+- Toy and close-contact frames: never in the validation set that decides the model (they are stress tests); keep a separate toy-valid set.
+- Label cap: frames with DFT max force > 50 eV/A get the Huber loss or are flagged `stress_test`.
+- Validation hosts for 3000/7000 K and 5000 K/400 GPa are missing in valid_l: take them from pool runs outside the train tier (Young melt_comp, tdi_fb) instead.
