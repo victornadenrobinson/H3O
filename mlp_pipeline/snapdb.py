@@ -76,7 +76,8 @@ def cmd_chunk(a):
 #SBATCH -A {a.account} -C cpu -q {a.qos} -N 1 -t {a.budget_min + 10}:00 -J vasp_chunk
 # usage: sbatch --export=ALL,CH=snapdb/chunks/chunk_000,TEMPLATE=<dir with INCAR KPOINTS POTCAR POSCAR> snapdb/vasp_chunk.sbatch   (repo root)
 set -e; cd ${{SLURM_SUBMIT_DIR:-.}}
-[ -d "$CH/points" ] || python3 mlp_pipeline/prepare_points.py $CH/frames.extxyz --template $TEMPLATE --out $CH/points
+export PYTHONPATH=${{PYTHONPATH:-}}:$PWD/mlp_pipeline; PY=${{PY:-$SCRATCH/grace-env/bin/python}}      # plain python3 on Perlmutter has no ase
+[ -d "$CH/points" ] || $PY mlp_pipeline/prepare_points.py $CH/frames.extxyz --template $TEMPLATE --out $CH/points
 export VASP_MODULE=${{VASP_MODULE:-vasp/5.4.4-cpu}}
 bash mlp_pipeline/perlmutter_vasp_check.sh run $CH/points --exe vasp_gam --ranks {a.ranks} --parallel {a.slots} --minutes {a.budget_min + 5}
 """)
