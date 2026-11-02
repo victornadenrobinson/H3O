@@ -23,6 +23,18 @@ SETS = {
     "F": ([L("toy", n + ".extxyz") for n in ("h2o", "h2.25o", "h2.5o", "h3o")], 220, 5), "F_H": ([L("toy", "H729.extxyz")], 32, 5)}
 
 
+FLOOR = {"HH": 0.35, "OH": 0.50, "OO": 1.0}          # same floors as snapdb verify: DFT must not meet collapsed geometries
+
+
+def bad_contact(f):
+    from ase.neighborlist import neighbor_list
+    i, j, d = neighbor_list("ijd", f, 2.2); z = f.numbers
+    for name, (p_, q_) in {"HH": (1, 1), "OH": (8, 1), "OO": (8, 8)}.items():
+        m = ((z[i] == p_) & (z[j] == q_)) | ((z[i] == q_) & (z[j] == p_))
+        if m.any() and d[m].min() < FLOOR[name]: return name
+    return None
+
+
 def tag_lowp(f, path):
     d = os.path.basename(os.path.dirname(path)); T = re.search(r"(\d+)K", d); nO = int((f.numbers == 8).sum()); nH = int((f.numbers == 1).sum())
     f.info.update(kind="eos_md", run_id=d, source=path, split="valid" if int(hashlib.md5(d.encode()).hexdigest(), 16) % 3 == 0 else "train", nO=nO, nH=nH, T_K=float(T.group(1)) if T else np.nan,
@@ -31,14 +43,17 @@ def tag_lowp(f, path):
 
 work = a.out + "_src"; os.makedirs(work, exist_ok=True); specs = []; report = []
 for name, (globs, cap, prio) in SETS.items():
-    files = sorted({p for g in globs for p in glob.glob(g)}); frames = []; bad = 0
+    files = sorted({p for g in globs for p in glob.glob(g)}); frames = []; bad = 0; dropped = {}
     for p in files:
         try: fr = read(p, index=":")
         except Exception as e: bad += 1; print(f"  skipped unreadable {p}: {str(e)[:60]}"); continue
         for f in fr:
             if name == "E": f = tag_lowp(f, p)
-            f.calc = None; frames.append(f)
+            f.calc = None; why = bad_contact(f)
+            if why: k = f'{why} {os.path.basename(os.path.dirname(p)) if name == "E" else os.path.basename(p)}'; dropped[k] = dropped.get(k, 0) + 1; continue      # collapsed geometry: never send to DFT
+            frames.append(f)
     report.append((name, len(files), len(frames), bad, cap, prio))
+    if dropped: print(f"  {name}: dropped {sum(dropped.values())} frames with collapsed contacts: " + "; ".join(f"{k} x{v}" for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])[:6]), flush=True)
     if frames and not a.dry: out = os.path.join(work, name + ".extxyz"); write(out, frames); specs.append(f"{name}={out}:{cap or ''}:{prio}")
 print(f"{'set':8s} {'files':>5s} {'frames':>7s} {'unreadable':>10s} {'cap':>5s} {'prio':>4s}")
 for r in report: print(f"{r[0]:8s} {r[1]:5d} {r[2]:7d} {r[3]:10d} {r[4]:5d} {r[5]:4d}" + ("   MISSING" if r[2] == 0 else ""))

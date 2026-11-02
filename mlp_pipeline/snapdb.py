@@ -41,7 +41,7 @@ def cmd_build(a):
             f = fr[i]; h = frame_hash(f)
             if h in seen: dup += 1; continue
             seen.add(h); did = f"s{len(rows):06d}"; f = f.copy(); f.calc = None
-            f.info.update(db_id=did, db_set=name, db_prio=prio)
+            f.info.update(db_id=did, db_set=name, db_prio=prio, split=("valid" if "valid" in str(f.info.get("split", "train")).lower() else "train"))   # host-file names (train_l, hosts_pwidom_valid, ...) -> train / valid
             if "run_id" in f.info: f.info["run_id"] = f"{name}:{f.info['run_id']}"      # same output file name in different dirs (batch1 / partial / grid) must not share a run id
             write(db, f, append=True)
             rows.append(dict(db_id=did, set=name, prio=prio, split=str(f.info.get("split", "train")), natoms=len(f), nO=int((f.numbers == 8).sum()), nH=int((f.numbers == 1).sum()), T_K=f.info.get("T_K", ""), config_type=f.info.get("config_type", ""),
