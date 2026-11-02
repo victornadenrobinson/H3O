@@ -80,7 +80,7 @@ def cmd_chunk(a):
         ix.loc[ix.db_id.isin(c["ids"]), "chunk"] = k
     ix.to_csv(os.path.join(a.db, "index.csv"), index=False)
     open(os.path.join(a.db, "vasp_chunk.sbatch"), "w").write(f"""#!/bin/bash
-#SBATCH -A {a.account} -C cpu -q {a.qos} -N 1 -t {a.budget_min + 10}:00 -J snap
+#SBATCH -A {a.account} -C cpu -q {a.qos} -N 1 --ntasks-per-node={a.ranks * a.slots} --cpus-per-task=2 -t {a.budget_min + 10}:00 -J snap   # perlmutter_vasp_check.py run packs --parallel runs of --ranks ranks each and insists on that many allocated ranks (SLURM_NTASKS)
 # usage: sbatch --export=ALL,CH=snapdb/chunks/chunk_000,TEMPLATE=<dir with INCAR KPOINTS POTCAR POSCAR> snapdb/vasp_chunk.sbatch   (repo root)
 set -e; cd ${{SLURM_SUBMIT_DIR:-.}}
 export PYTHONPATH=${{PYTHONPATH:-}}:$PWD/mlp_pipeline; PY=${{PY:-$SCRATCH/grace-env/bin/python}}      # plain python3 on Perlmutter has no ase
