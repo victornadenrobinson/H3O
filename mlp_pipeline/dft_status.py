@@ -92,7 +92,7 @@ def board(db, header=True):
         name = os.path.basename(cd); pts = os.path.join(cd, "points"); mf = os.path.join(pts, "frames_meta.csv"); st = {}; ct = []
         if os.path.exists(mf):
             for r in csv.DictReader(open(mf)):
-                d = os.path.join(pts, r["id"]); s, el, err = point_state(d, now); st[s] = st.get(s, 0) + 1; seen_ids.add(r.get("db_id")); setn = r.get("db_set", "?")
+                d = os.path.join(pts, r["id"]); s, el, err = point_state(d, now); st[s] = st.get(s, 0) + 1; seen_ids.add(r.get("db_id")); setn = {"False": "F", "True": "T"}.get(r.get("db_set", "?"), r.get("db_set", "?"))      # extxyz reads the set name F as the boolean False
                 per_set.setdefault(setn, {}); per_set[setn][s] = per_set[setn].get(s, 0) + 1
                 if el: ct.append(el); times.append((int(r.get("natoms", 0) or 0), el)); set_times.setdefault(setn, []).append((int(r.get("natoms", 0) or 0), el))
                 if s in ("ok", "unconv"): fin_ids.add(r.get("db_id"))

@@ -102,7 +102,7 @@ def cmd_collect(a):
     import pandas as pd
     from ase.io import read, write
     from ase.calculators.singlepoint import SinglePointCalculator
-    ix = pd.read_csv(os.path.join(a.db, "index.csv")); out = os.path.join(a.db, "labelled.extxyz")
+    ix = pd.read_csv(os.path.join(a.db, "index.csv")); out = os.path.join(a.db, "labelled.extxyz"); set_of = dict(zip(ix.db_id, ix.set.astype(str)))
     if os.path.exists(out): os.remove(out)
     ok = bad = 0
     for mf in sorted(glob.glob(os.path.join(a.db, "chunks", "chunk_*", "points", "frames_meta.csv"))):
@@ -115,7 +115,7 @@ def cmd_collect(a):
             elif os.path.isdir(os.path.join(pd_, "attempts")): continue   # attempts exist but no DONE.json: not finished
             try:
                 at = read(oc, index=-1, format="vasp-out")
-                src = read(os.path.join(os.path.dirname(d), "frames.extxyz"), index=int(r.frame)); at.info = dict(src.info)
+                src = read(os.path.join(os.path.dirname(d), "frames.extxyz"), index=int(r.frame)); at.info = dict(src.info); at.info["db_set"] = set_of.get(src.info.get("db_id"), str(src.info.get("db_set")))      # F is read back as the boolean False
                 at.calc = SinglePointCalculator(at, energy=at.get_potential_energy(), free_energy=at.get_potential_energy(force_consistent=True), forces=at.get_forces(), stress=at.get_stress())
                 write(out, at, append=True); ix.loc[ix.db_id == src.info["db_id"], "status"] = "done"; ok += 1
             except Exception as e:
