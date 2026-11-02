@@ -12,15 +12,24 @@ from ase.io import read, write
 from ase.calculators.singlepoint import SinglePointCalculator
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--out-dir", default="runs"); ap.add_argument("--tag", default="n")
-ap.add_argument("--old-train"); ap.add_argument("--old-valid"); ap.add_argument("--fractions", type=int, nargs="*", default=[25, 50, 75]); ap.add_argument("--fmax", type=float, default=60.0)
+ap.add_argument("--old-train"); ap.add_argument("--old-valid"); ap.add_argument("--fractions", type=int, nargs="*", default=[25, 50, 75]); ap.add_argument("--fmax", type=float, default=100.0); ap.add_argument("--valid-from", nargs="*", default=["F_toy", "F_H", "G"], help="sets that have no validation frames from the campaign split: this fraction of their groups goes to valid"); ap.add_argument("--valid-frac", type=float, default=0.25)
 ap.add_argument("--seed", default="tier1"); a = ap.parse_args()
 os.makedirs(a.out_dir, exist_ok=True); P = lambda n: os.path.join(a.out_dir, n + ".extxyz")
 
 
+drops = collections.defaultdict(list)
+
+
+def setname(f):
+    v = f.info.get("db_set", "?")
+    return "F_toy" if v is False else "T" if v is True else str(v)        # extxyz reads the set name F as the boolean False
+
+
 def clean(f):
     F = f.get_potential_energy(); fo = f.get_forces(); st = f.get_stress(voigt=False)
-    if not (np.isfinite(F) and np.isfinite(fo).all() and np.isfinite(st).all()) or np.abs(fo).max() > a.fmax: return None
-    g = f.copy(); g.info = dict(f.info)
+    bad = not (np.isfinite(F) and np.isfinite(fo).all() and np.isfinite(st).all()); fm = float(np.abs(fo).max()) if np.isfinite(fo).all() else float("inf")
+    if bad or fm > a.fmax: drops[setname(f)].append(fm); return None
+    g = f.copy(); g.info = dict(f.info); g.info["db_set"] = setname(f)
     if "E_sigma0_eV" in g.info: g.info["energy_sigma0"] = float(g.info.pop("E_sigma0_eV"))        # same name as the old tiers
     g.calc = SinglePointCalculator(g, energy=F, forces=fo, stress=st); return g
 
@@ -39,10 +48,21 @@ for p in a.files:
         key = (g.info.get("db_id"), round(float(g.get_potential_energy()), 6))
         if key in seen: continue
         seen.add(key); new["valid" if str(g.info.get("split", "train")) == "valid" else "train"].append(g)
-print(f"{sum(map(len, new.values()))} labelled frames kept ({drop} dropped by the sanity filter); train {len(new['train'])}, valid {len(new['valid'])}")
+for k, v in drops.items(): print(f"  dropped {len(v)} frames of set {k}: largest |force| {max(v):.0f} eV/A (limit {a.fmax:.0f})")
+# sets that were generated with the split fixed to train: move a fraction of their groups (by hash, whole groups) to valid
+mv = collections.defaultdict(lambda: collections.defaultdict(list))
+for f in new["train"]:
+    if str(f.info.get("db_set")) in a.valid_from: mv[str(f.info["db_set"])][group(f)].append(f)
+moved = collections.Counter()
+for st_, gs in mv.items():
+    order = sorted(gs, key=lambda g: hashlib.md5((a.seed + "v" + g).encode()).hexdigest()); k = max(1, int(round(a.valid_frac * len(order))))
+    for g in order[:k]:
+        for f in gs[g]: new["train"].remove(f); f.info["split"] = "valid"; new["valid"].append(f); moved[st_] += 1
+if moved: print("  moved to valid (whole groups):", dict(moved))
+print(f"{sum(map(len, new.values()))} labelled frames kept ({sum(len(v) for v in drops.values())} dropped by the sanity filter); train {len(new['train'])}, valid {len(new['valid'])}")
 # nested fractions: within each set, groups ordered by hash; the first ceil(p% * n_groups) (at least 1) go in
 by_set = collections.defaultdict(lambda: collections.defaultdict(list))
-for f in new["train"]: by_set[str(f.info.get("db_set", "?"))][group(f)].append(f)
+for f in new["train"]: by_set[setname(f)][group(f)].append(f)
 rank = {}
 for s, gs in by_set.items():
     order = sorted(gs, key=lambda g: hashlib.md5((a.seed + g).encode()).hexdigest())
@@ -61,7 +81,7 @@ if old_tr:
 for name, fr in outs.items():
     if os.path.exists(P(name)): os.remove(P(name))
     write(P(name), fr)
-sets = sorted(by_set); print(f"\n{'file':22s}{'frames':>8s}   " + "  ".join(f"{s:>6s}" for s in sets))
+sets = sorted(set(by_set) | {setname(f) for f in new["valid"]}); print(f"\n{'file':22s}{'frames':>8s}   " + "  ".join(f"{s:>6s}" for s in sets))
 for name, fr in outs.items():
-    c = collections.Counter(str(f.info.get("db_set", "old")) for f in fr); print(f"{name:22s}{len(fr):8d}   " + "  ".join(f"{c.get(s, 0):6d}" for s in sets) + (f"   (+{c.get('old', 0) + sum(v for k, v in c.items() if k not in sets)} old)" if old_tr and name.startswith(("train_m", "valid_m")) else ""))
+    c = collections.Counter(setname(f) if "db_set" in f.info else "old" for f in fr); print(f"{name:22s}{len(fr):8d}   " + "  ".join(f"{c.get(s, 0):6d}" for s in sets) + (f"   (+{c.get('old', 0) + sum(v for k, v in c.items() if k not in sets)} old)" if old_tr and name.startswith(("train_m", "valid_m")) else ""))
 print("\nnext: bash mlp_pipeline/grace_prep_pkl.sh " + " ".join(n.split('_', 1)[1] for n in outs if n.startswith("train_")) + "   (writes runs/grace/*.pkl.gz)")
