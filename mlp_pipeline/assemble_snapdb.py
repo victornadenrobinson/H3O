@@ -54,17 +54,32 @@ def tag_lowp(f, path):
                   vpa=float(f.get_volume() / len(f)), config_type=f"lowP_{nH}H{nO}O_{int(float(T.group(1))) if T else 0}K", method="md"); return f
 
 
+def load_file(job):
+    """read one source file (in a worker process); low-P trajectories: every k-th frame only, ASE skips the others without parsing them"""
+    p, name = job
+    try: fr = read(p, index="::6" if name == "E" else ":")
+    except Exception as e: return p, None, str(e)[:60]
+    if name == "E" and len(fr) > a.e_per_traj: fr = [fr[i] for i in np.linspace(0, len(fr) - 1, a.e_per_traj).round().astype(int)]
+    out = []
+    for f in fr:
+        if name == "E": f = tag_lowp(f, p)
+        f.calc = None; f.info["_src"] = os.path.basename(os.path.dirname(p)) if name == "E" else os.path.basename(p); out.append(f)
+    return p, out, ""
+
+
 work = a.out + "_src"; os.makedirs(work, exist_ok=True); specs = []; report = []
 for name, (globs, cap, prio) in SETS.items():
     files = sorted({p for g in globs for p in glob.glob(g)}); frames = []; bad = 0; dropped = {}
     print(f"reading {name}: {len(files)} files ...", flush=True)
-    for p in files:
-        try: fr = read(p, index=":")
-        except Exception as e: bad += 1; print(f"  skipped unreadable {p}: {str(e)[:60]}"); continue
-        if name == "E" and len(fr) > a.e_per_traj: fr = [fr[i] for i in np.linspace(0, len(fr) - 1, a.e_per_traj).round().astype(int)]      # evenly spaced; MD frames 20 fs apart are nearly identical
-        for f in fr:
-            if name == "E": f = tag_lowp(f, p)
-            f.calc = None; f.info["_src"] = os.path.basename(os.path.dirname(p)) if name == "E" else os.path.basename(p); frames.append(f)
+    t_read = time.time()
+    if a.jobs > 1 and len(files) > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(min(a.jobs, len(files))) as ex: res = list(ex.map(load_file, [(p, name) for p in files]))
+    else: res = [load_file((p, name)) for p in files]
+    for p, fr, err in res:
+        if fr is None: bad += 1; print(f"  skipped unreadable {p}: {err}"); continue
+        frames.extend(fr)
+    print(f"  {name}: read {len(frames)} frames from {len(files)} files in {time.time() - t_read:.0f} s", flush=True)
     t0 = time.time(); why_all = check_contacts(frames); keep = []
     for f, why in zip(frames, why_all):
         src = f.info.pop("_src")
