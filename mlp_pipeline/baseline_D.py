@@ -17,7 +17,11 @@ ap.add_argument("--min-group", type=int, default=6); ap.add_argument("--limit", 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
-frames = [f for p in a.files for f in read(p, index=":") if "E_sigma0_eV" in f.info]
+frames = []
+for p in a.files:
+    for f in read(p, index=":"):
+        if "E_sigma0_eV" not in f.info and "energy_sigma0" in f.info: f.info["E_sigma0_eV"] = f.info["energy_sigma0"]        # tier files (build_tier.py) use the name of the old tiers
+        if "E_sigma0_eV" in f.info: frames.append(f)
 if a.limit: frames = frames[:a.limit]
 frames.sort(key=len)          # same-size frames back to back: the compiled GRACE kernels are reused (a new size can trigger a recompile)
 bar = Bar(len(frames), "GRACE-D"); rows = []; n = 0
