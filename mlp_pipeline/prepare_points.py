@@ -25,7 +25,7 @@ def input_hash(d):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("frames"); ap.add_argument("--template", required=True); ap.add_argument("--out", required=True)
-    ap.add_argument("--max", type=int, default=0); ap.add_argument("--per-state", type=int, default=0); ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--min-T", type=float, default=1000.0, help="floor for the electronic temperature (K): static 0 K frames would get SIGMA = 0 with Fermi smearing"); ap.add_argument("--max", type=int, default=0); ap.add_argument("--per-state", type=int, default=0); ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args()
     if os.path.exists(a.out): sys.exit(f"{a.out} exists: use a fresh directory")
     tp = dft.template(a.template)
@@ -40,7 +40,7 @@ def main():
     idx = np.sort(idx); pts = []; meta = []
     os.makedirs(a.out)
     for j, i in enumerate(idx):
-        f = fr[i]; T = float(f.info.get("T_K", 5000.0)); name = f"p{j:05d}"; d = os.path.join(a.out, name)
+        f = fr[i]; T = float(f.info.get("T_K", 5000.0)); T = max(T, a.min_T) if np.isfinite(T) else 5000.0; name = f"p{j:05d}"; d = os.path.join(a.out, name)
         at = f.copy(); at.calc = None
         dft.write_dft(d, at, T, tp, f"{os.path.basename(a.frames)} frame {i}")
         pts.append(dict(id=name, path=name, input_sha256=input_hash(d), natoms=len(at)))
