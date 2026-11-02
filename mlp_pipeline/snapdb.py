@@ -80,7 +80,7 @@ def cmd_chunk(a):
         ix.loc[ix.db_id.isin(c["ids"]), "chunk"] = k
     ix.to_csv(os.path.join(a.db, "index.csv"), index=False)
     open(os.path.join(a.db, "vasp_chunk.sbatch"), "w").write(f"""#!/bin/bash
-#SBATCH -A {a.account} -C cpu -q {a.qos} -N 1 -t {a.budget_min + 10}:00 -J vasp_chunk
+#SBATCH -A {a.account} -C cpu -q {a.qos} -N 1 -t {a.budget_min + 10}:00 -J snap
 # usage: sbatch --export=ALL,CH=snapdb/chunks/chunk_000,TEMPLATE=<dir with INCAR KPOINTS POTCAR POSCAR> snapdb/vasp_chunk.sbatch   (repo root)
 set -e; cd ${{SLURM_SUBMIT_DIR:-.}}
 export PYTHONPATH=${{PYTHONPATH:-}}:$PWD/mlp_pipeline; PY=${{PY:-$SCRATCH/grace-env/bin/python}}      # plain python3 on Perlmutter has no ase
@@ -88,7 +88,7 @@ export PYTHONPATH=${{PYTHONPATH:-}}:$PWD/mlp_pipeline; PY=${{PY:-$SCRATCH/grace-
 export VASP_MODULE=${{VASP_MODULE:-vasp/5.4.4-cpu}}
 bash mlp_pipeline/perlmutter_vasp_check.sh run $CH/points --exe vasp_gam --ranks {a.ranks} --parallel {a.slots} --minutes {a.budget_min + 5}
 """)
-    open(os.path.join(a.db, "submit_all.sh"), "w").write("#!/bin/bash\n# TEMPLATE=<dir> bash snapdb/submit_all.sh [first last]   from the repo root\nset -e\nfor ch in " + " ".join(f"{k:03d}" for k in range(len(chunks))) + "; do\n  [ -n \"${1:-}\" ] && { [ $((10#$ch)) -lt $1 ] || [ $((10#$ch)) -gt ${2:-9999} ] && continue; }\n  sbatch --export=ALL,CH=" + os.path.join(a.db, "chunks", "chunk_$ch") + ",TEMPLATE=$TEMPLATE " + os.path.join(a.db, "vasp_chunk.sbatch") + "\ndone\n")
+    open(os.path.join(a.db, "submit_all.sh"), "w").write("#!/bin/bash\n# TEMPLATE=<dir> bash snapdb/submit_all.sh [first last]   from the repo root\nset -e\nfor ch in " + " ".join(f"{k:03d}" for k in range(len(chunks))) + "; do\n  [ -n \"${1:-}\" ] && { [ $((10#$ch)) -lt $1 ] || [ $((10#$ch)) -gt ${2:-9999} ] && continue; }\n  sbatch -J c$ch --export=ALL,CH=" + os.path.join(a.db, "chunks", "chunk_$ch") + ",TEMPLATE=$TEMPLATE " + os.path.join(a.db, "vasp_chunk.sbatch") + "\ndone\n")
     tot = todo.cost.sum(); print(f"{len(todo)} points -> {len(chunks)} one-node jobs of {a.budget_min} min ({a.slots} slots x {a.ranks} ranks); total {tot / 3600:.1f} point-hours, {tot / 3600 / a.slots:.1f} node-hours at perfect packing")
     print("points per chunk: min %d, median %d, max %d; largest cell %d atoms" % (min(len(c["ids"]) for c in chunks), np.median([len(c["ids"]) for c in chunks]), max(len(c["ids"]) for c in chunks), todo.natoms.max()))
 
@@ -198,7 +198,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sp = ap.add_subparsers(dest="cmd", required=True)
     b = sp.add_parser("build"); b.add_argument("--sets", nargs="+", required=True); b.add_argument("--out", required=True); b.add_argument("--seed", type=int, default=1); b.add_argument("--skip-db", nargs="*", default=[], help="earlier database dirs: frames already chunked there (sent or being sent to DFT) are left out of this one")
     c = sp.add_parser("chunk"); c.add_argument("db"); c.add_argument("--budget-min", type=int, default=50); c.add_argument("--slots", type=int, default=4); c.add_argument("--ranks", type=int, default=32); c.add_argument("--prio-max", type=int, default=99)
-    c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m3349"); c.add_argument("--qos", default="regular")
+    c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m2087"); c.add_argument("--qos", default="regular")
     s = sp.add_parser("status"); s.add_argument("db"); k = sp.add_parser("collect"); k.add_argument("db"); v = sp.add_parser("verify"); v.add_argument("db"); v.add_argument("--strict", action="store_true")
     pl = sp.add_parser("plot"); pl.add_argument("db"); pl.add_argument("--out")
     a = ap.parse_args(); {"build": cmd_build, "chunk": cmd_chunk, "status": cmd_status, "collect": cmd_collect, "verify": cmd_verify, "plot": cmd_plot}[a.cmd](a)
