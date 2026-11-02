@@ -28,16 +28,35 @@ def tail(path, n=400_000):
     except OSError: return None, 0
 
 
+def find_outcar(d):
+    """the worker keeps each run in <point>/attempts/<stamp>/ (DONE.json names the successful one); older layouts have <point>/OUTCAR"""
+    dj = os.path.join(d, "DONE.json")
+    if os.path.exists(dj):
+        try:
+            att = json.load(open(dj)).get("attempt")
+            if att and os.path.exists(os.path.join(d, att, "OUTCAR")): return os.path.join(d, att, "OUTCAR")
+        except Exception: pass
+    cand = glob.glob(os.path.join(d, "attempts", "*", "OUTCAR")) + glob.glob(os.path.join(d, "OUTCAR"))
+    return max(cand, key=os.path.getmtime) if cand else None
+
+
 def point_state(d, now):
-    oc = os.path.join(d, "OUTCAR"); t, sz = tail(oc)
-    if t is None or sz == 0: return "queued", None, ""
-    done = "Voluntary context switches" in t; m = re.findall(r"Elapsed time \(sec\):\s*([\d.]+)", t); el = float(m[-1]) if m else None
-    if done: return ("ok" if "aborting loop because EDIFF is reached" in t else "unconv"), el, ""
-    age = (now - os.path.getmtime(oc)) / 60
-    err = ""
-    for f in glob.glob(os.path.join(d, "out*")) + glob.glob(os.path.join(d, "*.err")):
+    oc = find_outcar(d); dj = os.path.join(d, "DONE.json"); lock = os.path.join(d, ".run.lock")
+    if os.path.exists(dj):
+        try: j = json.load(open(dj))
+        except Exception: j = {}
+        el = j.get("wall_seconds") or j.get("elapsed_seconds"); conv = True
+        if oc: t, _ = tail(oc); conv = bool(t and "aborting loop because EDIFF is reached" in t)
+        return ("ok" if conv else "unconv"), (float(el) if el else None), ""
+    fail = glob.glob(os.path.join(d, "FAIL*"))
+    if fail: return "dead", None, os.path.basename(fail[0])
+    ref = oc or (lock if os.path.exists(lock) else None)
+    if ref is None: return "queued", None, ""
+    age = (now - os.path.getmtime(ref)) / 60; err = ""
+    if oc is None and age >= a.stale: return "dead", None, "no OUTCAR"
+    for f in glob.glob(os.path.join(d, "out*")) + glob.glob(os.path.join(d, "attempts", "*", "REPORT")):
         tt, _ = tail(f, 6000)
-        if tt and re.search(r"ERROR|Error|Killed|oom|forrtl|segmentation|internal error", tt): err = os.path.basename(f)
+        if tt and re.search(r"ERROR|Killed|oom|forrtl|segmentation|internal error", tt): err = os.path.basename(f)
     return ("running" if age < a.stale and not err else "dead"), None, err
 
 

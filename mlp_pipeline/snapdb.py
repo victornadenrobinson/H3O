@@ -108,7 +108,11 @@ def cmd_collect(a):
     for mf in sorted(glob.glob(os.path.join(a.db, "chunks", "chunk_*", "points", "frames_meta.csv"))):
         d = os.path.dirname(mf); meta = pd.read_csv(mf)
         for r in meta.itertuples():
-            oc = os.path.join(d, r.id, "OUTCAR")
+            pd_ = os.path.join(d, r.id); oc = os.path.join(pd_, "OUTCAR"); dj = os.path.join(pd_, "DONE.json")
+            if os.path.exists(dj):                                    # worker layout: the successful run is <point>/attempts/<stamp>/OUTCAR
+                import json
+                att = json.load(open(dj)).get("attempt"); oc = os.path.join(pd_, att, "OUTCAR") if att else oc
+            elif os.path.isdir(os.path.join(pd_, "attempts")): continue   # attempts exist but no DONE.json: not finished
             try:
                 at = read(oc, index=-1, format="vasp-out")
                 src = read(os.path.join(os.path.dirname(d), "frames.extxyz"), index=int(r.frame)); at.info = dict(src.info)
