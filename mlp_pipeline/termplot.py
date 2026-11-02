@@ -8,7 +8,7 @@ As in mdview.py, the colour is one per character cell (that of the last dot writ
 import argparse, collections, csv, math, sys
 import numpy as np
 
-PAL = [196, 39, 82, 220, 201, 51, 208, 129, 118, 213, 45, 226, 160, 99, 154, 33]
+PAL = [196, 39, 82, 220, 201, 51, 208, 129, 118, 213, 33, 250, 94, 48, 226, 99]       # 16 well separated colours (red, blue, green, gold, magenta, cyan, orange, purple, lime, pink, deep blue, grey, brown, teal, yellow, violet)
 BITS = np.array([[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]])
 
 
@@ -106,7 +106,7 @@ def hist(cols, yk, by, w, h, bins, centre, clip, ys=None, title=""):
     if centre: y = centred({**cols, "_y": y}, "_y")
     u, cmap = categories(cols, by); lo, hi = np.percentile(y, clip[0]), np.percentile(y, clip[1]); edges = np.linspace(lo, hi, bins + 1); cv = Canvas(w, h); top = 0; H = {}
     for k in u:
-        v = y[cols[by] == k]; hh, _ = np.histogram(np.clip(v, lo, hi), edges); hh = hh / max(len(v), 1) / (edges[1] - edges[0]); H[k] = hh; top = max(top, hh.max())
+        v = y[cols[by] == k]; hh, _ = np.histogram(v[(v >= lo) & (v <= hi)], edges); hh = hh / max(len(v), 1) / (edges[1] - edges[0]); H[k] = hh; top = max(top, hh.max())
     for k in u:
         hh = H[k]; xs_ = (edges[:-1] + edges[1:]) / 2; px = (xs_ - lo) / (hi - lo) * (cv.w - 1); py = (1 - hh / top) * (cv.h - 1)
         for i in range(len(px) - 1): cv.line(px[i], py[i], px[i + 1], py[i + 1], cmap[k])
@@ -119,14 +119,14 @@ def ridge(cols, yk, by, w, rows_per=3, centre=True, clip=(1, 99), title="", ys=N
     if centre: y = centred({**cols, "_y": y}, "_y")
     u, cmap = categories(cols, by); lo, hi = np.percentile(y, clip[0]), np.percentile(y, clip[1]); lab = 9; out = ["\033[1m" + (title or f"{yk} per cell, by {by}" + (" (centred on the group median)" if centre else "")) + "\033[0m"]
     for k in u:
-        v = y[cols[by] == k]; cv = Canvas(w, rows_per); e = np.linspace(lo, hi, cv.w + 1); hh, _ = np.histogram(np.clip(v, lo, hi), e); hh = np.convolve(hh.astype(float), np.ones(3) / 3, mode="same"); hh = hh / max(hh.max(), 1e-9)
+        v = y[cols[by] == k]; nout = int(((v < lo) | (v > hi)).sum()); cv = Canvas(w, rows_per); e = np.linspace(lo, hi, cv.w + 1); hh, _ = np.histogram(v[(v >= lo) & (v <= hi)], e); hh = np.convolve(hh.astype(float), np.ones(3) / 3, mode="same"); hh = hh / max(hh.max(), 1e-9)
         for xdot in range(cv.w):
             n = int(round(hh[xdot] * (cv.h - 1)))
             if n > 0: cv.dots(np.full(n + 1, xdot), np.arange(cv.h - 1 - n, cv.h), cmap[k])
         z = int(round((0 - lo) / (hi - lo) * (cv.w - 1)))
         if 0 <= z < cv.w: cv.dots(np.array([z]), np.array([0]), 7)
         rows = cv.rows_text(); mid = rows_per // 2
-        for r, line in enumerate(rows): out.append((str(k)[:lab - 1].ljust(lab) if r == mid else " " * lab) + line + (f"  sd {np.std(v):5.1f}  n={len(v)}" if r == mid else ""))
+        for r, line in enumerate(rows): out.append((str(k)[:lab - 1].ljust(lab) if r == mid else " " * lab) + line + (f"  sd {np.std(v):5.1f}  n={len(v)}  outside {100 * nout / len(v):.0f}%" if r == mid else ""))
     out.append(" " * lab + "".join(f"{fmt(t):<{max(cv.cols // 6, 6)}}" for t in nice(lo, hi, 6)[:6]) + "  " + yk); return "\n".join(out)
 
 
