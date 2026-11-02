@@ -56,7 +56,7 @@ if __name__ == "__main__":
     finally: sys.stdout.write("\033[?25h\n")
 
 
-def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=1.0, bonds=True, box=True):
+def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAULT, ascii_only=False, note="", zoom=2.0, bonds=True, box=True, clip=0.0):
     """Orbiting 3D view with perspective: atoms sorted far-to-near, shaded by depth (near = bright, far = dim), oxygen drawn bigger, the periodic box as a wireframe.
     ascii_only=True draws with plain characters (O/o/. for oxygen, +/:/, for protons by depth) for terminals without 24-bit colour."""
     cell = np.asarray(at.cell.array); L = np.array([cell[0, 0], cell[1, 1], cell[2, 2]]); pos = at.get_scaled_positions(wrap=True) * L - L / 2
@@ -76,7 +76,7 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
         for j in range(i + 1, 8):
             if np.sum(np.abs((corners[i] - corners[j]) / np.maximum(L, 1e-9)) > 0.99) == 1:
                 for t in np.linspace(0, 1, 60):
-                    p = corners[i] * (1 - t) + corners[j] * t; x, y, s = proj(p); put(x, y, p[2] - 50, (70, 80, 110), "·")
+                    p = corners[i] * (1 - t) + corners[j] * t; x, y, s = proj(p); put(x, y, p[2] - 50, (45, 55, 85), "·")
     order = np.argsort(P[:, 2]); zmin, zmax = P[:, 2].min(), P[:, 2].max()
     if bonds:                                                  # O-H bonds (minimum image) as short grey lines: molecules become readable
         from ase.neighborlist import neighbor_list
@@ -85,15 +85,17 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
             if at.numbers[i] == 8 and at.numbers[j] == 1:
                 a0 = P[i]; a1 = a0 + v @ R.T
                 for t in np.linspace(0, 1, 7):
-                    q = a0 * (1 - t) + a1 * t; x, y, s = proj(q); nb = (q[2] - zmin) / max(zmax - zmin, 1e-9); g = int(60 + 150 * min(max(nb, 0), 1)); put(x, y, q[2] - 0.2, (g, g, g), "-")
+                    q = a0 * (1 - t) + a1 * t; x, y, s = proj(q); nb = (q[2] - zmin) / max(zmax - zmin, 1e-9); g = int(25 + 190 * min(max(nb, 0), 1) ** 1.5); put(x, y, q[2] - 0.2, (g, g, g), "-")
     for k in order:
-        p = P[k]; x, y, s = proj(p); near = (p[2] - zmin) / max(zmax - zmin, 1e-9); br = 0.30 + 0.70 * near; isO = at.numbers[k] == 8
+        p = P[k]; x, y, s = proj(p); near = (p[2] - zmin) / max(zmax - zmin, 1e-9)
+        if near < clip: continue                                    # --clip 0.3 hides the farthest 30%: far less clutter
+        br = 0.16 + 0.84 * near ** 1.4; isO = at.numbers[k] == 8
         base = (255, 70, 60) if isO else (90, 230, 255); col = tuple(int(c * br) for c in base)
         ch = ("O" if near > 0.66 else "o" if near > 0.33 else ".") if isO else ("+" if near > 0.66 else ":" if near > 0.33 else ",")
-        rr = 1 if isO else 0
+        rr = 1 if (isO and near > 0.5) else 0                       # only near oxygens are big (3x3); far ones and all protons are single pixels
         for dx in range(-rr, rr + 1):
             for dy in range(-rr, rr + 1):
-                if dx * dx + dy * dy <= rr * rr + 1: put(x + dx * (1 if ascii_only else 1), y + dy * (1 if not ascii_only else 0), p[2], col, ch)
+                put(x + dx, y + dy * (1 if not ascii_only else 0), p[2] + (0.05 if rr == 0 else 0.0), col, ch)
     lines = []
     if ascii_only:
         for r in range(py): lines.append("│" + "".join((img[r][x][1] if img[r][x] else " ") for x in range(px)) + "│")
