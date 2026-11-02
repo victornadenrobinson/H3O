@@ -8,6 +8,7 @@ Atoms inside a z-slab of --slab A around a plane that sweeps slowly through the 
 import argparse, sys, time
 import numpy as np
 
+LAST = {}                                  # LAST['head'], LAST['cells'] (rows of cell strings) of the most recent render: used by DiffPrinter
 W_DEFAULT, H_DEFAULT = 96, 30            # character columns, character rows (each row shows 2 pixels with half blocks)
 
 
@@ -24,17 +25,18 @@ def render(at, step=None, width=W_DEFAULT, height=H_DEFAULT, slab=2.5, sweep=Tru
         for yy in range(iy, min(iy + b, py)):
             for xx in range(ix, min(ix + b, px)):
                 if z < dep[yy, xx] or bright: img[yy][xx] = col; dep[yy, xx] = z
-    lines = []
+    lines = []; cellrows = []
     for r in range(0, py, 2):
-        row = ""
+        rc = []
         for x in range(px):
             top, bot = img[r][x], img[r + 1][x]
-            if top is None and bot is None: row += "\033[2m·\033[0m" if (x % 8 == 0 and r % 8 == 0) else " "
+            if top is None and bot is None: rc.append("\033[2m·\033[0m" if (x % 8 == 0 and r % 8 == 0) else " ")
             else:
-                fg = top or (0, 0, 0); bg = bot or (0, 0, 0); row += f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m\033[48;2;{bg[0]};{bg[1]};{bg[2]}m▀\033[0m"
-        lines.append("│" + row + "│")
+                fg = top or (0, 0, 0); bg = bot or (0, 0, 0); rc.append(f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m\033[48;2;{bg[0]};{bg[1]};{bg[2]}m▀\033[0m")
+        row = "".join(rc); lines.append("│" + row + "│"); cellrows.append(rc)
     nO = int((at.numbers == 8).sum()); nH = int((at.numbers == 1).sum()); info = "  ".join(f"{k} {v:.4g}" for k, v in at.info.items() if k in ("T_inst", "T_K", "P_grace_GPa", "P_GPa") and isinstance(v, (int, float)))
     head = f" {len(at)} atoms (O {nO}, H {nH})   box {L[0]:.1f}x{L[1]:.1f}x{L[2]:.1f} A   slab z={z0:.1f} +-{slab} A   " + (f"step {step}   " if step is not None else "") + info + ("  " + note if note else "")
+    LAST["head"] = head.ljust(width + 2); LAST["cells"] = cellrows; LAST["width"] = width
     return "\033[H" + "\033[1m" + head.ljust(width + 2) + "\033[0m\n┌" + "─" * width + "┐\n" + "\n".join(lines) + "\n└" + "─" * width + "┘"
 
 
@@ -102,13 +104,14 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
         for dx in range(-rr, rr + 1):
             for dy in range(-rr, rr + 1):
                 put(x + dx, y + dy * (1 if not ascii_only else 0), p[2] + (0.05 if rr == 0 else 0.0), col, ch)
-    lines = []
+    lines = []; cellrows = []
     if ascii_only:
-        for r in range(py): lines.append("│" + "".join((img[r][x][1] if img[r][x] else " ") for x in range(px)) + "│")
+        for r in range(py):
+            rc = [(img[r][x][1] if img[r][x] else " ") for x in range(px)]; lines.append("│" + "".join(rc) + "│"); cellrows.append(rc)
     elif braille:                                              # 2x4 dots per character cell; the cell takes the colour of its nearest dot
         bits = {(0, 0): 1, (0, 1): 2, (0, 2): 4, (1, 0): 8, (1, 1): 16, (1, 2): 32, (0, 3): 64, (1, 3): 128}
         for r in range(0, py, 4):
-            row = ""
+            rc = []
             for x in range(0, px, 2):
                 mask = 0; best = None; bz = -1e18
                 for (dx, dy), b in bits.items():
@@ -116,17 +119,41 @@ def render3d(at, yaw=0.0, tilt=18.0, step=None, width=W_DEFAULT, height=H_DEFAUL
                     if v is not None:
                         mask |= b
                         if zbuf[r + dy, x + dx] > bz: bz = zbuf[r + dy, x + dx]; best = v[0]
-                row += " " if not mask else f"\033[38;2;{best[0]};{best[1]};{best[2]}m{chr(0x2800 + mask)}\033[0m"
-            lines.append("│" + row + "│")
+                rc.append(" " if not mask else f"\033[38;2;{best[0]};{best[1]};{best[2]}m{chr(0x2800 + mask)}\033[0m")
+            row = "".join(rc); lines.append("│" + row + "│"); cellrows.append(rc)
     else:
         for r in range(0, py, 2):
-            row = ""
+            rc = []
             for x in range(px):
                 top, bot = img[r][x], img[r + 1][x]
-                if top is None and bot is None: row += " "
+                if top is None and bot is None: rc.append(" ")
                 else:
-                    fg = top[0] if top else (0, 0, 0); bg = bot[0] if bot else (0, 0, 0); row += f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m\033[48;2;{bg[0]};{bg[1]};{bg[2]}m▀\033[0m"
-            lines.append("│" + row + "│")
+                    fg = top[0] if top else (0, 0, 0); bg = bot[0] if bot else (0, 0, 0); rc.append(f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m\033[48;2;{bg[0]};{bg[1]};{bg[2]}m▀\033[0m")
+            row = "".join(rc); lines.append("│" + row + "│"); cellrows.append(rc)
     nO = int((at.numbers == 8).sum()); nH = int((at.numbers == 1).sum()); info = "  ".join(f"{k} {v:.4g}" for k, v in at.info.items() if k in ("T_inst", "T_K", "P_grace_GPa", "P_GPa") and isinstance(v, (int, float)))
     head = f" {len(at)} atoms (O {nO}, H {nH})   yaw {yaw % 360:5.1f}  " + (f"step {step}   " if step is not None else "") + info + ("  " + note if note else "")
+    LAST["head"] = head.ljust(width + 2); LAST["cells"] = cellrows; LAST["width"] = width
     return "\033[H" + "\033[1m" + head.ljust(width + 2) + "\033[0m\n┌" + "─" * width + "┐\n" + "\n".join(lines) + "\n└" + "─" * width + "┘"
+
+
+class DiffPrinter:
+    """Draw a frame by rewriting only the cells that changed since the previous one (cursor addressing). The terminal then has far less to paint: with ~160 atoms in a 7000-cell window only a few
+    hundred cells change per frame. Needs mdview.LAST to be filled by render()/render3d() (their return value is ignored)."""
+    def __init__(self): self.prev = None; self.bytes = 0
+
+    def draw(self, out=sys.stdout):
+        head, cells, width = LAST["head"], LAST["cells"], LAST["width"]; buf = []
+        if self.prev is None or len(self.prev) != len(cells):
+            self.prev = None; buf.append("\033[2J\033[H\033[1m" + head + "\033[0m\n┌" + "─" * width + "┐")
+            for rc in cells: buf.append("\n│" + "".join(rc) + "│")
+            buf.append("\n└" + "─" * width + "┘")
+        else:
+            buf.append("\033[H\033[1m" + head + "\033[0m")
+            for r, rc in enumerate(cells):
+                prc = self.prev[r]; c = 0
+                while c < len(rc):
+                    if rc[c] == prc[c]: c += 1; continue
+                    c0 = c
+                    while c < len(rc) and (rc[c] != prc[c] or (c + 1 < len(rc) and rc[c + 1] != prc[c + 1])): c += 1       # join runs separated by a single unchanged cell
+                    buf.append(f"\033[{r + 3};{c0 + 2}H" + "".join(rc[c0:c]))
+        self.prev = [list(rc) for rc in cells]; txt = "".join(buf); self.bytes += len(txt); out.write(txt); out.flush(); return len(txt)
