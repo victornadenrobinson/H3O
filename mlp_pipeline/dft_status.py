@@ -17,7 +17,7 @@ ORDER = ["ok", "unconv", "dead", "running", "queued", "chunked", "pending"]
 
 
 def sh(cmd):
-    try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60).stdout
+    try: return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60).stdout
     except subprocess.TimeoutExpired: return None
     except Exception: return ""
 
@@ -110,7 +110,7 @@ def board(db, header=True):
     print(W("\nSlurm jobs of the campaign"))
     q = ""; qerr = ""
     try:
-        rr = subprocess.run(["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i|%j|%T|%M|%l|%D|%R|%Z"], capture_output=True, text=True, timeout=60); q = rr.stdout; qerr = rr.stderr.strip()
+        rr = subprocess.run(["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i|%j|%T|%M|%l|%D|%R|%Z"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60); q = rr.stdout; qerr = rr.stderr.strip()
     except subprocess.TimeoutExpired: print("   " + R("squeue timed out (Slurm busy): the job list below is unknown, not empty"))
     except FileNotFoundError: qerr = "squeue not found"
     rows = [l.split("|") for l in q.splitlines() if l.count("|") >= 7]

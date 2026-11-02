@@ -67,7 +67,7 @@ print("\nframes on disk:  B+ chains", sum(nframes(f) for f in glob.glob(os.path.
 print("G  pure-H 729 MD:", nframes(os.path.join(a.leg, "H729_md.extxyz")) + nframes(os.path.join(a.leg, "H729_md_s2.extxyz")), "frames    F toy cells:", sum(nframes(f) for f in glob.glob(os.path.join(a.leg, "toy/*.extxyz"))), "frames")
 
 import subprocess
-try: nproc = int(subprocess.run("pgrep -fc 'build_insertion_[s]et|17_eos_[m]d|build_h3o_[s]upercells|run_lines_[g]pus|finish_[g]eneration'", shell=True, capture_output=True, text=True).stdout.strip() or 0)
+try: nproc = int(subprocess.run("pgrep -fc 'build_insertion_[s]et|17_eos_[m]d|build_h3o_[s]upercells|run_lines_[g]pus|finish_[g]eneration'", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).stdout.strip() or 0)
 except Exception: nproc = -1
 print(f"\nthis node: {nproc} generation processes running (other jobs/nodes are not visible from here).")
 print("VERDICT:", "all generation finished: run the assemble step" if running == 0 and unfinished == 0 and nproc <= 0 else f"not finished: {running} command lines marked RUN, {unfinished} not yet done, {nproc} processes here")
