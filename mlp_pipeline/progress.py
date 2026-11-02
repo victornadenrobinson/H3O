@@ -4,7 +4,7 @@ Job state from the logs: done = log has "wrote N frames", RUN = log touched in t
 % for insertion jobs = host/n steps seen in the log / expected (2 hosts x number of n values; approximate), frames = Lattice= lines in the output file."""
 import argparse, glob, os, re, time
 
-ap = argparse.ArgumentParser(); ap.add_argument("--leg", default=os.path.expanduser("~/leg")); ap.add_argument("--cmdfile", default="rest_gpu.sh"); ap.add_argument("--stale", type=float, default=20); ap.add_argument("--hosts", type=int, default=2)
+ap = argparse.ArgumentParser(); ap.add_argument("--leg", default=os.path.expanduser("~/leg")); ap.add_argument("--cmdfile", nargs="*", default=None, help="command files to report (default: every one of rest_gpu.sh / e2_gpu.sh / h_gpu.sh that exists)"); ap.add_argument("--stale", type=float, default=20); ap.add_argument("--hosts", type=int, default=2)
 a = ap.parse_args(); now = time.time()
 
 
@@ -46,19 +46,28 @@ def insertion(name, d, expect=None):
 
 insertion("A  insertion grid (ins_grid)", os.path.join(a.leg, "ins_grid"), expect=40)
 insertion("   batch1 (older 5-state run)", os.path.join(a.leg, "ins_batch1"))
-if os.path.exists(a.cmdfile):
-    lines = [l for l in open(a.cmdfile).read().splitlines() if l.strip() and not l.lstrip().startswith("#")]
-    kinds = {"B+ chains": "--chain", "E low-P MD": "17_eos_md", "H Huang supercells": "build_h3o_supercells"}
-    print(f"\nrest sets ({a.cmdfile}, {len(lines)} commands; logs in {a.cmdfile}.logs/):")
+cmdfiles = a.cmdfile or [f for f in ("rest_gpu.sh", "e2_gpu.sh", "h_gpu.sh") if os.path.exists(f)]
+kinds = {"B+ chains": "--chain", "E low-P MD": "17_eos_md", "H Huang supercells": "build_h3o_supercells"}; running = 0; unfinished = 0
+for cf in cmdfiles:
+    lines = [l for l in open(cf).read().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    print(f"\n{cf} ({len(lines)} commands; logs in {cf}.logs/):")
     for name, key in kinds.items():
         idx = [i for i, l in enumerate(lines) if key in l]; cnt = {}
+        if not idx: continue
         for i in idx:
-            lg = f"{a.cmdfile}.logs/{i}.log"; s = state(lg, done_re=r"^DONE$")
+            lg = f"{cf}.logs/{i}.log"; s = state(lg, done_re=r"^DONE$")
             if s == "done" and "Traceback" in txt(lg): s = "FAILED"            # older run_lines_gpus.sh wrote DONE even after a crash
             if re.search(r"^FAILED rc=", txt(lg), re.M): s = "FAILED"
             cnt[s] = cnt.get(s, 0) + 1
-        nd = cnt.get("done", 0); print(f"   {name:20s} {bar(nd / max(len(idx), 1))} {100 * nd / max(len(idx), 1):3.0f}%  {nd}/{len(idx)} done  " + "  ".join(f"{k} {v}" for k, v in sorted(cnt.items()) if k != "done"))
-    for nm, pat in (("B+ chain frames", "chain/*.extxyz"), ("H supercell frames", "h3o_sc/*.extxyz")):
-        print(f"   {nm}: {sum(nframes(f) for f in glob.glob(os.path.join(a.leg, pat)))}")
-else: print(f"\n(no {a.cmdfile} here: run from the repo root, or pass --cmdfile)")
-print("\nG  pure-H 729 MD:", nframes(os.path.join(a.leg, "H729_md.extxyz")), "frames    F toy cells:", sum(nframes(f) for f in glob.glob(os.path.join(a.leg, "toy/*.extxyz"))), "frames")
+        nd = cnt.get("done", 0); running += cnt.get("RUN", 0); unfinished += len(idx) - nd
+        print(f"   {name:20s} {bar(nd / max(len(idx), 1))} {100 * nd / max(len(idx), 1):3.0f}%  {nd}/{len(idx)} done  " + "  ".join(f"{k} {v}" for k, v in sorted(cnt.items()) if k != "done"))
+if not cmdfiles: print("\n(no command files here: run from the repo root, or pass --cmdfile)")
+print("\nframes on disk:  B+ chains", sum(nframes(f) for f in glob.glob(os.path.join(a.leg, "chain/*.extxyz"))), "  H supercells", sum(nframes(f) for f in glob.glob(os.path.join(a.leg, "h3o_sc/*.extxyz"))),
+      "  E pass-1 trajectories", len(glob.glob("runs/eos_lowp/*/traj.extxyz")), "  E pass-2 trajectories", len(glob.glob("runs/eos_lowp2/*/traj.extxyz")), "  C2 widom", nframes(os.path.join(a.leg, "widom_c2.extxyz")))
+print("G  pure-H 729 MD:", nframes(os.path.join(a.leg, "H729_md.extxyz")) + nframes(os.path.join(a.leg, "H729_md_s2.extxyz")), "frames    F toy cells:", sum(nframes(f) for f in glob.glob(os.path.join(a.leg, "toy/*.extxyz"))), "frames")
+
+import subprocess
+try: nproc = int(subprocess.run("pgrep -fc 'build_insertion_[s]et|17_eos_[m]d|build_h3o_[s]upercells|run_lines_[g]pus|finish_[g]eneration'", shell=True, capture_output=True, text=True).stdout.strip() or 0)
+except Exception: nproc = -1
+print(f"\nthis node: {nproc} generation processes running (other jobs/nodes are not visible from here).")
+print("VERDICT:", "all generation finished: run the assemble step" if running == 0 and unfinished == 0 and nproc <= 0 else f"not finished: {running} command lines marked RUN, {unfinished} not yet done, {nproc} processes here")
