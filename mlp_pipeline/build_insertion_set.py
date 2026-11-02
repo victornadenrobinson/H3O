@@ -15,7 +15,7 @@ usage (repo root, GPU node for the MD; PYTHONPATH must contain mlp_pipeline/):
 Output frames carry info: n_add, nH, nO, host_source, host_frame, run_id, split, method, T_K, P_target, P_grace_GPa, E_grace, T_inst.
 Labels (VASP free energy, forces, stress) are added by a separate DFT step; this script writes geometries only, and NO VASP inputs or POTCAR data.
 """
-import argparse, os, sys
+import argparse, os, sys, time
 import numpy as np
 from ase import Atoms, units
 from ase.geometry import get_distances
@@ -155,7 +155,10 @@ def main():
                 if a.dv_per_H:
                     f = ((host.get_volume() + a.dv_per_H * n) / host.get_volume()) ** (1 / 3)
                     at = at.copy(); at.set_cell(host.cell.array * f, scale_atoms=True)
-                outs = relax_md(at, calc, a, rng) if use_md else [at]
+                t0 = time.time(); outs = relax_md(at, calc, a, rng) if use_md else [at]
+                if use_md:
+                    steps = 60 + int(round(a.equil_ps * 1000 / a.dt)) + int(round(a.sample_ps * 1000 / a.dt))
+                    print(f"  host {hi} n={n:+d}: {len(at)} atoms, {steps} MD steps in {time.time() - t0:.0f} s ({(time.time() - t0) / steps:.2f} s/step), {len(outs)} frames kept", flush=True)
                 for j, fr in enumerate(outs):
                     info = dict(base, n_add=n, nH=int((fr.numbers == 1).sum()), nO=int((fr.numbers == 8).sum()), method=("chain" if a.chain else "md" if use_md else "raw"),
                                 md_frame=j, config_type=f"{comp}{n:+d}H_{int(T)}K")
