@@ -8,6 +8,7 @@ Uses frame_eval.py (one process per window of the run, many in parallel) and the
 
   python frame_batch.py SURVEY.csv ROOT --model grace-ft:... --outdir ~/leg/fb [--threads 8 --windows 8 --frames 5]
   python frame_batch.py SURVEY.csv ROOT --outdir ~/leg/fb --table-only      # re-tabulate what is already computed
+  --count  inventories the lambda = 1 DFT frames (steps and ps) per campaign and per (P, T, composition); needs no model.
   --dry-run lists the jobs. Existing window CSVs are reused. Paths with bad/fail/broken/crash in the name are skipped
   unless --all is given. P comes from the last '<n>gpa' in the campaign path; T from the survey's INCAR column.
 SURVEY.csv is the output of `survey ROOT --csv` (fe_stages.py / the legacy analysis tool).
@@ -65,6 +66,43 @@ def run_jobs(rows, a):
             done += 1
             if rc: print(f"  FAILED ({rc}): {p} window {i}  (see its .log)", flush=True)
             elif done % 8 == 0 or done == len(jobs): print(f"  {done}/{len(jobs)} windows done", flush=True)
+
+
+def lam1_dir(d):
+    q = os.path.join(d, "lambda_1.000")
+    return q if os.path.isdir(q) else d
+
+
+def count_one(r):
+    import glob
+    ld = lam1_dir(r["dir"]); files = sorted(glob.glob(os.path.join(ld, "out*", "OUTCAR*")) + glob.glob(os.path.join(ld, "OUTCAR*")))
+    by = {}
+    for f in files: by.setdefault(re.sub(r"\.gz$", "", f), f)                       # one copy of each OUTCAR (plain or gz)
+    n = 0
+    for f in by.values():
+        out = subprocess.run(f"zcat -f '{f}' | grep -ac 'free  energy   TOTEN'", shell=True, capture_output=True, text=True).stdout.strip()
+        n += int(out or 0)
+    potim = 0.0
+    try:
+        for line in open(os.path.join(ld, "INCAR")):
+            m = re.match(r"\s*POTIM\s*=\s*([0-9.eE+-]+)", line)
+            if m: potim = float(m.group(1))
+    except OSError: pass
+    return dict(r, files=len(by), frames=n, ps=n * potim / 1000.0)
+
+
+def count_report(rows, a):
+    with cf.ThreadPoolExecutor(a.workers) as ex: C = list(ex.map(count_one, rows))
+    C.sort(key=lambda c: (c["P"], c["T"], c["lat"], c["x"], c["path"]))
+    print(f"\nlambda = 1 (pure DFT) frames per campaign: every ionic step counted, ps = steps x POTIM")
+    print(f"{'P':>4s} {'T':>5s} {'lat':>3s} {'H/O':>5s} {'N':>4s} {'files':>5s} {'frames':>8s} {'ps':>7s}  path")
+    tot = {}
+    for c in C:
+        x = f"{c['x']:5.2f}" if np.isfinite(c["x"]) else "  H  "
+        print(f"{c['P']:4.0f} {c['T']:5.0f} {c['lat']:>3s} {x} {c['N']:4d} {c['files']:5d} {c['frames']:8d} {c['ps']:7.1f}  {c['path']}")
+        k = (c["P"], c["T"], c["lat"], round(c["x"], 3) if np.isfinite(c["x"]) else -1); t = tot.setdefault(k, [0, 0.0, 0]); t[0] += c["frames"]; t[1] += c["ps"]; t[2] += 1
+    print(f"\nSummed per state (P, T, lattice, H/O); campaigns of the same state can overlap or repeat each other, so these are upper bounds on independent data")
+    for k in sorted(tot): print(f"  P={k[0]:.0f} T={k[1]:.0f} {k[2]:>3s} H/O={'H' if k[3] < 0 else k[3]}: {tot[k][2]} campaigns, {tot[k][0]} frames, {tot[k][1]:.1f} ps")
 
 
 def merge(r, a):
@@ -136,12 +174,14 @@ def main():
     p.add_argument("--threads", type=int, default=8); p.add_argument("--workers", type=int, default=0, help="parallel processes (default 128 // threads)")
     p.add_argument("--windows", type=int, default=8); p.add_argument("--frames", type=int, default=5, help="frames per window"); p.add_argument("--lo", type=float, default=0.2, help="discard this fraction of every run")
     p.add_argument("--all", action="store_true", help="also run paths named bad/fail/broken/crash"); p.add_argument("--only", help="regex on the campaign path")
-    p.add_argument("--dry-run", action="store_true"); p.add_argument("--table-only", action="store_true")
+    p.add_argument("--dry-run", action="store_true"); p.add_argument("--table-only", action="store_true"); p.add_argument("--count", action="store_true", help="only count the lambda = 1 DFT frames available per campaign (no model needed)")
     p.add_argument("--eval-script", default=os.path.join(HERE, "frame_eval.py")); p.add_argument("--summary")
     a = p.parse_args(); a.outdir = os.path.expanduser(a.outdir); os.makedirs(a.outdir, exist_ok=True)
     a.workers = a.workers or max(1, 128 // a.threads)
     rows = read_survey(a.survey, a.root, a.all)
     if a.only: rows = [r for r in rows if re.search(a.only, r["path"])]
+    if a.count:
+        count_report(rows, a); return
     if not a.table_only:
         if not a.model and not a.dry_run: sys.exit("--model is required unless --table-only / --dry-run")
         run_jobs(rows, a)
