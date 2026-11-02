@@ -198,7 +198,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sp = ap.add_subparsers(dest="cmd", required=True)
     b = sp.add_parser("build"); b.add_argument("--sets", nargs="+", required=True); b.add_argument("--out", required=True); b.add_argument("--seed", type=int, default=1); b.add_argument("--skip-db", nargs="*", default=[], help="earlier database dirs: frames already chunked there (sent or being sent to DFT) are left out of this one")
     c = sp.add_parser("chunk"); c.add_argument("db"); c.add_argument("--budget-min", type=int, default=50); c.add_argument("--slots", type=int, default=4); c.add_argument("--ranks", type=int, default=32); c.add_argument("--prio-max", type=int, default=99)
-    c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m2087"); c.add_argument("--qos", default="regular")
+    c.add_argument("--ref-natoms", type=float, default=330.0); c.add_argument("--ref-sec", type=float, default=105.0); c.add_argument("--exp", type=float, default=2.0); c.add_argument("--account", default="m3349"); c.add_argument("--qos", default="regular")
     s = sp.add_parser("status"); s.add_argument("db"); k = sp.add_parser("collect"); k.add_argument("db"); v = sp.add_parser("verify"); v.add_argument("db"); v.add_argument("--strict", action="store_true")
     pl = sp.add_parser("plot"); pl.add_argument("db"); pl.add_argument("--out")
     a = ap.parse_args(); {"build": cmd_build, "chunk": cmd_chunk, "status": cmd_status, "collect": cmd_collect, "verify": cmd_verify, "plot": cmd_plot}[a.cmd](a)
