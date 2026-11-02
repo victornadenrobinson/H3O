@@ -46,7 +46,7 @@ def insert_H(at, n, rng, a):
         frac = rng.random((a.cand, 3)); P = frac @ at.cell.array
         _, d = get_distances(P, at.positions, cell=at.cell, pbc=True)
         isO = at.numbers == 8; isH = at.numbers == 1
-        dO = d[:, isO].min(axis=1); dH = d[:, isH].min(axis=1) if isH.any() else np.full(len(P), 9.0)
+        dO = d[:, isO].min(axis=1) if isO.any() else np.full(len(P), 9.0); dH = d[:, isH].min(axis=1) if isH.any() else np.full(len(P), 9.0)
         ok = (dO >= a.min_d_O) & (dH >= a.min_d_H)
         if not ok.any(): continue
         dmin = np.minimum(dO, dH)[ok]; w = dmin ** a.power; w /= w.sum()
