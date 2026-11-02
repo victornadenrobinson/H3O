@@ -46,6 +46,22 @@ def nice(lo, hi, n=5):
     return out
 
 
+LABEL = {"f_rmse": "force RMSE, GRACE vs DFT (eV/A)", "f_rms": "DFT force RMS (eV/A)", "T_K": "sampling temperature (K)", "D_F": "D = E_DFT - E_model per cell (eV)", "D_F_pa": "D per atom (meV/atom)",
+         "D_E0": "D with E(sigma->0) per cell (eV)", "D_E": "D with E(no entropy) per cell (eV)", "f_rel": "relative force error", "natoms": "atoms per cell", "ts": "-T*S_el per cell (eV)"}
+
+
+def lab(k): return LABEL.get(k, k)
+
+
+def xaxis(cols, lo, hi, left, label):
+    ticks = nice(lo, hi, n=max(3, cols // 14)); row = [" "] * (cols + 14)
+    for t in ticks:
+        c = int(round((t - lo) / (hi - lo) * (cols - 1))); s_ = fmt(t)
+        for i, ch in enumerate(s_):
+            if c + i < len(row): row[c + i] = ch
+    return [" " * left + "".join(row).rstrip(), " " * left + label.center(cols).rstrip()]
+
+
 def fmt(v): return f"{v:.3g}" if abs(v) < 1e4 else f"{v:.2e}"
 
 
@@ -56,12 +72,7 @@ def frame(cv, xlim, ylim, xlabel, ylabel, title, legend=None, tickfmt=fmt, ylog=
         if 0 <= r < cv.rows: yt[r] = fmt(t)
     out = ["\033[1m" + title + "\033[0m"] + ([legend] if legend else [])
     for r, line in enumerate(rows): out.append(yt.get(r, "").rjust(W) + "┤" + line)
-    out.append(" " * W + "└" + "─" * cv.cols); ticks = nice(*xlim, n=max(3, cv.cols // 14)); lab = [" "] * (cv.cols + 12)
-    for t in ticks:
-        c = int(round((t - xlim[0]) / (xlim[1] - xlim[0]) * (cv.cols - 1))); s = fmt(t)
-        for i, ch in enumerate(s):
-            if c + i < len(lab): lab[c + i] = ch
-    out.append(" " * (W + 1) + "".join(lab).rstrip() + "   " + xlabel); out.insert(2 if legend else 1, " " * W + " " + ylabel)
+    out.append(" " * W + "└" + "─" * cv.cols); out += xaxis(cv.cols, xlim[0], xlim[1], W + 1, xlabel); out.insert(2 if legend else 1, " " * W + " ↑ " + ylabel)
     return "\n".join(out)
 
 
@@ -98,7 +109,7 @@ def scatter(cols, xk, yk, by, w, h, clip, xs=None, ys=None, title="", ref=None):
     for slope, c in (ref or []):
         xx = np.array([xl[0], xl[1]]); yy = slope * xx
         cv.line((xx[0] - xl[0]) / (xl[1] - xl[0]) * (cv.w - 1), (1 - (yy[0] - yl[0]) / (yl[1] - yl[0])) * (cv.h - 1), (xx[1] - xl[0]) / (xl[1] - xl[0]) * (cv.w - 1), (1 - (yy[1] - yl[0]) / (yl[1] - yl[0])) * (cv.h - 1), c)
-    return frame(cv, xl, yl, xk, yk, title or f"{yk} vs {xk}", legend_line(u, cmap))
+    return frame(cv, xl, yl, lab(xk), lab(yk), title or f"{lab(yk)} against {lab(xk)}", legend_line(u, cmap))
 
 
 def hist(cols, yk, by, w, h, bins, centre, clip, ys=None, title=""):
@@ -110,14 +121,14 @@ def hist(cols, yk, by, w, h, bins, centre, clip, ys=None, title=""):
     for k in u:
         hh = H[k]; xs_ = (edges[:-1] + edges[1:]) / 2; px = (xs_ - lo) / (hi - lo) * (cv.w - 1); py = (1 - hh / top) * (cv.h - 1)
         for i in range(len(px) - 1): cv.line(px[i], py[i], px[i + 1], py[i + 1], cmap[k])
-    return frame(cv, (lo, hi), (0, top), yk + (" (centred on the group median)" if centre else ""), "density", title or f"distribution of {yk} by {by}", legend_line(u, cmap))
+    return frame(cv, (lo, hi), (0, top), lab(yk) + (", centred on the median of identical states" if centre else ""), "probability density", title or f"distribution of {lab(yk)} by {by}", legend_line(u, cmap))
 
 
 def ridge(cols, yk, by, w, rows_per=3, centre=True, clip=(1, 99), title="", ys=None):
     """one horizontal band per category, each a filled density outline on a shared x axis: far easier to read than 13 overlapping curves"""
     y = cols[yk] if ys is None else ys
     if centre: y = centred({**cols, "_y": y}, "_y")
-    u, cmap = categories(cols, by); lo, hi = np.percentile(y, clip[0]), np.percentile(y, clip[1]); lab = 9; out = ["\033[1m" + (title or f"{yk} per cell, by {by}" + (" (centred on the group median)" if centre else "")) + "\033[0m"]
+    u, cmap = categories(cols, by); lo, hi = np.percentile(y, clip[0]), np.percentile(y, clip[1]); lab_w = 9; out = ["\033[1m" + (title or f"{lab(yk)}, one band per {by}") + "\033[0m", " " * lab_w + " ↑ set      (each band: density of the spread; white tick = zero; right: standard deviation, n, share outside the axis)"]
     for k in u:
         v = y[cols[by] == k]; nout = int(((v < lo) | (v > hi)).sum()); cv = Canvas(w, rows_per); e = np.linspace(lo, hi, cv.w + 1); hh, _ = np.histogram(v[(v >= lo) & (v <= hi)], e); hh = np.convolve(hh.astype(float), np.ones(3) / 3, mode="same"); hh = hh / max(hh.max(), 1e-9)
         for xdot in range(cv.w):
@@ -126,8 +137,9 @@ def ridge(cols, yk, by, w, rows_per=3, centre=True, clip=(1, 99), title="", ys=N
         z = int(round((0 - lo) / (hi - lo) * (cv.w - 1)))
         if 0 <= z < cv.w: cv.dots(np.array([z]), np.array([0]), 7)
         rows = cv.rows_text(); mid = rows_per // 2
-        for r, line in enumerate(rows): out.append((str(k)[:lab - 1].ljust(lab) if r == mid else " " * lab) + line + (f"  sd {np.std(v):5.1f}  n={len(v)}  outside {100 * nout / len(v):.0f}%" if r == mid else ""))
-    out.append(" " * lab + "".join(f"{fmt(t):<{max(cv.cols // 6, 6)}}" for t in nice(lo, hi, 6)[:6]) + "  " + yk); return "\n".join(out)
+        for r, line in enumerate(rows): out.append((str(k)[:lab_w - 1].ljust(lab_w) if r == mid else " " * lab_w) + line + (f"  sd {np.std(v):5.1f}  n={len(v)}  outside {100 * nout / len(v):.0f}%" if r == mid else ""))
+    out.append(" " * lab_w + "└" + "─" * cv.cols); out += xaxis(cv.cols, lo, hi, lab_w + 1, lab(yk) + (", centred on the median of identical states" if centre else ""))
+    return "\n".join(out)
 
 
 def bars(cols, key, by, w, title):
@@ -140,7 +152,7 @@ def bars(cols, key, by, w, title):
         for i in range(a, c): line[i] = "░"
         for i in range(0, a): line[i] = " "
         line[min(b, w)] = "█"; out.append(f"{str(k):8s}" + fg(PAL[cmap[k] % len(PAL)], "".join(line)) + f"  median {med * 100:5.1f}%  (IQR {q1 * 100:.0f}-{q3 * 100:.0f}%, n={n})")
-    out.append("         " + "bar = median, shaded = interquartile range; the dashed target of the test suite is 8 %")
+    out.append(" " * 8 + "└" + "─" * (w + 1)); out += xaxis(w + 1, 0, mx * 100, 9, "relative force error (% of the DFT force RMS)   bar = median, shaded = interquartile range; target of the test suite: 8 %")
     return "\n".join(out)
 
 
@@ -156,4 +168,4 @@ if __name__ == "__main__":
         m = cols["T_K"] >= a.tmin; sub = {k: v[m] for k, v in cols.items()}
         print(scatter(sub, "T_K", "D_F", "set", a.width, a.height, a.clip, ys=centred(sub, "D_F"), title=f"D_F per cell (eV), centred on the group median, against temperature (T >= {a.tmin:.0f} K)")); print()
         print(ridge(cols, "D_F", "set", a.width - 25, 3, True, (1, 99), title="spread of D_F (eV per cell) within identical states, one band per set; thin white tick = zero")); print()
-        print(bars(cols, "f_rel", "set", a.width - 35, "relative force error by set"))
+        print(bars(cols, "f_rel", "set", a.width - 35, "relative force error, by set (GRACE vs DFT forces)"))
