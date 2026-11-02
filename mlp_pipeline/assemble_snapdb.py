@@ -10,7 +10,7 @@ from ase.io import read, write
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser(); ap.add_argument("--leg", default=os.path.expanduser("~/leg")); ap.add_argument("--root", default="."); ap.add_argument("--out", default="snapdb"); ap.add_argument("--dry", action="store_true")
-ap.add_argument("--seed", type=int, default=1); a = ap.parse_args()
+ap.add_argument("--seed", type=int, default=1); ap.add_argument("--e-per-traj", type=int, default=8, help="low-P MD trajectories: frames kept per trajectory file (they are 5000+ highly correlated frames, 180 are used)"); a = ap.parse_args()
 L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 # name: (file globs, cap (0 = all), prio)
 # C 440 = C 200 + C3 240 (the end-state D statistics come from the same pwidom caches); C2 has no cap because host and site geometries of a frame must stay together;
@@ -44,9 +44,11 @@ def tag_lowp(f, path):
 work = a.out + "_src"; os.makedirs(work, exist_ok=True); specs = []; report = []
 for name, (globs, cap, prio) in SETS.items():
     files = sorted({p for g in globs for p in glob.glob(g)}); frames = []; bad = 0; dropped = {}
+    print(f"reading {name}: {len(files)} files ...", flush=True)
     for p in files:
         try: fr = read(p, index=":")
         except Exception as e: bad += 1; print(f"  skipped unreadable {p}: {str(e)[:60]}"); continue
+        if name == "E" and len(fr) > a.e_per_traj: fr = [fr[i] for i in np.linspace(0, len(fr) - 1, a.e_per_traj).round().astype(int)]      # evenly spaced; MD frames 20 fs apart are nearly identical
         for f in fr:
             if name == "E": f = tag_lowp(f, p)
             f.calc = None; why = bad_contact(f)
