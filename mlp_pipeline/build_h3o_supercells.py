@@ -37,16 +37,20 @@ def best_supercell(cell, m, rng_=2):
     return best[1], best[0]
 
 
-def make_sc(at, target):
+def make_sc(at, target, lo=320, hi=420):
+    """supercell multiplicity m with lo <= m * natoms <= hi (else the nearest to target) whose best cell is the most cubic: largest min perpendicular width / V^(1/3) (1 = cube)"""
     from ase.build import make_supercell
-    m = max(1, round(target / len(at))); M, w = best_supercell(at.cell.array, m)
-    sc = make_supercell(at, M); sc.wrap(); return sc, M, w
+    ms = [m for m in range(1, 40) if lo <= m * len(at) <= hi] or [max(1, round(target / len(at)))]; best = None
+    for m in ms:
+        M, w = best_supercell(at.cell.array, m, 3); sph = w / (m * at.get_volume()) ** (1 / 3)
+        if best is None or sph > best[0]: best = (sph, M, w)
+    sc = make_supercell(at, best[1]); sc.wrap(); return sc, best[1], best[2]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--static-dir", default="runs/h3o_static"); ap.add_argument("--P", type=float, nargs="*"); ap.add_argument("--phases", nargs="+", default=["H3O", "H2.75O", "H2.5O", "H2.25O"])
-    ap.add_argument("--target", type=int, default=384); ap.add_argument("--valid-P", type=float, nargs="*", default=[]); ap.add_argument("--model"); ap.add_argument("--no-md", action="store_true"); ap.add_argument("--device", default="cuda")
+    ap.add_argument("--target", type=int, default=384); ap.add_argument("--min-atoms", type=int, default=320); ap.add_argument("--max-atoms", type=int, default=420); ap.add_argument("--valid-P", type=float, nargs="*", default=[]); ap.add_argument("--model"); ap.add_argument("--no-md", action="store_true"); ap.add_argument("--device", default="cuda")
     ap.add_argument("--T-list", type=float, nargs="+", default=[1000, 2000, 3000, 4000]); ap.add_argument("--equil-ps", type=float, default=0.2); ap.add_argument("--save-every-ps", type=float, default=0.1); ap.add_argument("--dt", type=float, default=1.0)
     ap.add_argument("--md-frames", type=int, default=3); ap.add_argument("--ins-n", type=int, nargs="*", default=[], help="also insert n extra H (e.g. 1 2 3 4 5 6) into the static supercell and run a short GRACE-MD at --ins-T (needs --model)"); ap.add_argument("--ins-T", type=float, nargs="+", default=[3000.0]); ap.add_argument("--seed", type=int, default=1); ap.add_argument("--out", required=True)
     a = ap.parse_args(); rng = np.random.default_rng(a.seed)
@@ -62,13 +66,13 @@ def main():
             if not a.P or P in a.P: files.append((ph, P, f))
     print(f"{len(files)} relaxed structures", flush=True); n = 0
     for ph, P, f in files:
-        sc, M, w = make_sc(read(f), a.target); split = "valid" if P in a.valid_P else "train"; bid = f"h3osc:{ph}:{P:g}"
+        sc, M, w = make_sc(read(f), a.target, a.min_atoms, a.max_atoms); split = "valid" if P in a.valid_P else "train"; bid = f"h3osc:{ph}:{P:g}"
         base = dict(phase=ph, P_static=P, split=split, base_id=bid, T_K=0.0)
         def emit(at, kind, par="", T=0.0, extra=None):
             nonlocal n
             at = at.copy(); at.calc = None; at.info.update(base, kind=kind, param=par, T_K=T, nO=int((at.numbers == 8).sum()), nH=int((at.numbers == 1).sum()), config_type=f"h3osc_{ph}_{kind}", **(extra or {}))
             write(a.out, at, append=True); n += 1
-        print(f"{ph} {P:g} GPa: {len(sc)} atoms, supercell det {round(np.linalg.det(M))}, min width {w:.2f} A ({split})", flush=True)
+        print(f"{ph} {P:g} GPa: {len(sc)} atoms, supercell det {round(np.linalg.det(M))}, min width {w:.2f} A = {w / sc.get_volume() ** (1 / 3):.2f} of a cube ({split})", flush=True)
         emit(sc, "static")
         for s in (0.05, 0.10, 0.20):
             b = sc.copy(); b.positions += rng.normal(0, s, b.positions.shape); emit(b, "rattle", f"sigma={s}")
