@@ -12,20 +12,29 @@ STATES=${STATES_OVERRIDE:-$STATES}
 NLIST=${NLIST:-1,2,4,8,16,27}; NLIST_CENTRE=${NLIST_CENTRE:-1,2,3,4,6,8,12,16,20,24,27}
 HOSTS_TRAIN=${HOSTS_TRAIN:-$HOSTDIR/train_l.extxyz}; HOSTS_VALID=${HOSTS_VALID:-$HOSTDIR/valid_l.extxyz}   # e.g. host frames picked from the Young pool with young_select.py --as-hosts
 PY=${PY:-${SCRATCH:-$HOME}/grace-env/bin/python}; SCRIPT=${SCRIPT:-$HOME/build_insertion_set.py}
-mkdir -p "$OUT"; cmds=()
+mkdir -p "$OUT/.locks"; cmds=(); files=()
 for st in $STATES; do IFS=: read -r T P0 P1 DV <<< "$st"; Pm=$(( (P0 + P1) / 2 ))
   [ "$DV" = auto ] && DV=$(python3 -c "print(round(1.26*(500/$Pm)**0.75,3))")
   NL=$NLIST; [ "$T" = 5000 ] && [ "$Pm" = 500 ] && NL=$NLIST_CENTRE
   for split in train valid; do
     HF=$HOSTS_TRAIN; [ $split = valid ] && HF=$HOSTS_VALID
     f="$OUT/ins_h2o_${T}K_${Pm}GPa_${split}.extxyz"
-    cmds+=("$PY -u $SCRIPT --hosts $HF --comp h2o --T-bin $T --P $P0 $P1 --natoms 324 --n-list $NL --copies 1 --max-hosts ${MAXHOSTS:-12} --model $MODEL --equil-ps 0.2 --dt 1.0 --sample-ps 0.3 --save-every-ps 0.1 --dv-per-H $DV --seed $RANDOM --out $f > ${f%.extxyz}.log 2>&1")
+    files+=("$f"); cmds+=("$PY -u $SCRIPT --hosts $HF --comp h2o --T-bin $T --P $P0 $P1 --natoms 324 --n-list $NL --copies 1 --max-hosts ${MAXHOSTS:-12} --model $MODEL --equil-ps 0.2 --dt 1.0 --sample-ps 0.3 --save-every-ps 0.1 --dv-per-H $DV --seed $RANDOM --out $f > ${f%.extxyz}.log 2>&1")
   done
 done
 W=$(( PER_GPU * NGPU )); echo "${#cmds[@]} jobs on $W workers ($PER_GPU per GPU x $NGPU GPUs)"
 [ "${DRY:-0}" = 1 ] && { printf '%s\n' "${cmds[@]}"; exit 0; }
 export TF_FORCE_GPU_ALLOW_GROWTH=true
+# Resumable and shareable between nodes/launches: a job is skipped when its log already says "wrote N frames", when its log was touched in the last STALE minutes (some other
+# process is still running it), or when another worker holds its lock (mkdir is atomic on the shared filesystem). Workers pull jobs dynamically, so several nodes can run the same OUT.
+# A job that died half-way (stale log, no "wrote" line) is redone from scratch next time; to force a rerun delete OUT/.locks/<name> and its log.
+STALE=${STALE:-20}
+claim() { local f=${files[$1]} log=${files[$1]%.extxyz}.log
+  grep -qs "^wrote .* frames to" "$log" && return 1
+  [ -e "$log" ] && [ -z "$(find "$log" -mmin +$STALE 2>/dev/null)" ] && return 1
+  mkdir "$OUT/.locks/$(basename "$f")" 2>/dev/null; }
 for ((w = 0; w < W; w++)); do
-  ( export CUDA_VISIBLE_DEVICES=$((w % NGPU)); for ((i = w; i < ${#cmds[@]}; i += W)); do eval "${cmds[$i]}"; done ) &
+  ( export CUDA_VISIBLE_DEVICES=$((w % NGPU)); for ((i = 0; i < ${#cmds[@]}; i++)); do claim $i && eval "${cmds[$i]}"; done ) &
+  sleep 1
 done
 wait; echo "done; frames per file:"; for f in "$OUT"/*.extxyz; do [ -e "$f" ] && echo "$(grep -c Lattice= "$f") $f"; done
