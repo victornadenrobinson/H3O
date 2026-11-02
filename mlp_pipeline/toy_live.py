@@ -12,10 +12,11 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE); sys
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("--phase", default="bcc"); ap.add_argument("--nrep", type=int, default=3)
 ap.add_argument("--vpa", type=float, default=2.12); ap.add_argument("--T", type=float, default=5000.0); ap.add_argument("--fps", type=float, default=15.0); ap.add_argument("--every", type=int, default=2, help="MD steps per drawn frame")
 ap.add_argument("--slab", type=float, default=2.2); ap.add_argument("--width", type=int, default=96); ap.add_argument("--height", type=int, default=30); ap.add_argument("--steps", type=int, default=0, help="stop after this many steps (0 = until Ctrl-C)")
-ap.add_argument("--hper", type=float, default=2.0, help="H per O"); ap.add_argument("--seed", type=int, default=1); a = ap.parse_args()
+ap.add_argument("--view3d", action="store_true", help="orbiting 3D view with perspective, bonds and the box wireframe"); ap.add_argument("--spin", type=float, default=2.5, help="degrees of rotation per drawn frame (3D)")
+ap.add_argument("--ascii", action="store_true", help="plain characters instead of 24-bit colour (3D)"); ap.add_argument("--nobox", action="store_true"); ap.add_argument("--nobonds", action="store_true"); ap.add_argument("--hper", type=float, default=2.0, help="H per O"); ap.add_argument("--seed", type=int, default=1); a = ap.parse_args()
 import build_toy_cells as b
 from toy_ice import ToyIce
-from mdview import render
+from mdview import render, render3d
 from ase import units
 from ase.md.langevin import Langevin
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
@@ -32,7 +33,9 @@ try:
     while not a.steps or dyn.nsteps < a.steps:
         dyn.run(a.every); Tk = 2 / 3 * at.get_kinetic_energy() / (len(at) * units.kB); at.info["T_inst"] = Tk
         now = time.time(); sps = a.every / max(now - t_prev, 1e-9); t_prev = now
-        print(render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s"), flush=True)
+        note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s"
+        if a.view3d: n += 1; print(render3d(at, yaw=n * a.spin, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox), flush=True)
+        else: print(render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=note), flush=True)
         time.sleep(max(0.0, 1.0 / a.fps - (time.time() - now)))
 except KeyboardInterrupt: pass
 finally: sys.stdout.write("\033[?25h\n")
