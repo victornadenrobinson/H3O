@@ -10,7 +10,7 @@ from ase.io import read, write
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser(); ap.add_argument("--leg", default=os.path.expanduser("~/leg")); ap.add_argument("--root", default="."); ap.add_argument("--out", default="snapdb"); ap.add_argument("--dry", action="store_true")
-ap.add_argument("--seed", type=int, default=1); ap.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1), help="processes for the collapsed-contact check"); ap.add_argument("--e-per-traj", type=int, default=8, help="low-P MD trajectories: frames kept per trajectory file (they are 5000+ highly correlated frames, 180 are used)"); a = ap.parse_args()
+ap.add_argument("--seed", type=int, default=1); ap.add_argument("--skip-db", nargs="*", default=[], help="earlier database dirs whose chunked frames are left out (passed to snapdb build)"); ap.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1), help="processes for the collapsed-contact check"); ap.add_argument("--e-per-traj", type=int, default=8, help="low-P MD trajectories: frames kept per trajectory file (they are 5000+ highly correlated frames, 180 are used)"); a = ap.parse_args()
 L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 # name: (file globs, cap (0 = all), prio)
 # C 440 = C 200 + C3 240 (the end-state D statistics come from the same pwidom caches); C2 has no cap because host and site geometries of a frame must stay together;
@@ -93,6 +93,6 @@ print(f"{'set':8s} {'files':>5s} {'frames':>7s} {'unreadable':>10s} {'cap':>5s} 
 for r in report: print(f"{r[0]:8s} {r[1]:5d} {r[2]:7d} {r[3]:10d} {r[4]:5d} {r[5]:4d}" + ("   MISSING" if r[2] == 0 else ""))
 if a.dry or not specs: sys.exit(0)
 snap = [sys.executable, os.path.join(HERE, "snapdb.py")]
-for cmd in (["build", "--out", a.out, "--sets", *specs, "--seed", str(a.seed)], ["verify", a.out], ["plot", a.out]):
+for cmd in (["build", "--out", a.out, "--sets", *specs, "--seed", str(a.seed)] + (["--skip-db", *a.skip_db] if a.skip_db else []), ["verify", a.out], ["plot", a.out]):
     print("\n$ snapdb.py", cmd[0]); r = subprocess.run(snap + cmd)
     if r.returncode and cmd[0] != "verify": sys.exit(r.returncode)

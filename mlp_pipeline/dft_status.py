@@ -8,7 +8,7 @@ dead = OUTCAR cut off and not touched for --stale minutes (killed / out of time 
 import argparse, csv, glob, json, os, re, shutil, socket, subprocess, sys, time
 from datetime import datetime
 
-ap = argparse.ArgumentParser(); ap.add_argument("--db", default="snapdb"); ap.add_argument("--watch", type=float, default=0); ap.add_argument("--no-color", action="store_true")
+ap = argparse.ArgumentParser(); ap.add_argument("--db", nargs="+", default=["snapdb"], help="one or more database dirs (e.g. snapdb snapdb_v2)"); ap.add_argument("--watch", type=float, default=0); ap.add_argument("--no-color", action="store_true")
 ap.add_argument("--stale", type=float, default=10.0, help="minutes without OUTCAR growth before a point counts as dead"); a = ap.parse_args()
 COL = sys.stdout.isatty() and not a.no_color
 def c(code, s): return f"\033[{code}m{s}\033[0m" if COL else s
@@ -73,10 +73,11 @@ def bar(counts, total, w=34):
 def fmt_t(s): return "–" if s is None else (f"{s / 3600:.1f} h" if s >= 3600 else f"{s / 60:.0f} min" if s >= 100 else f"{s:.0f} s")
 
 
-def board():
-    now = time.time(); db = a.db; W_ = max(shutil.get_terminal_size((110, 30)).columns, 100) if sys.stdout.isatty() else 110
+def board(db, header=True):
+    now = time.time(); W_ = max(shutil.get_terminal_size((110, 30)).columns, 100) if sys.stdout.isatty() else 110
     head = f"Perlmutter DFT single points (VASP, Gamma)   {datetime.now().strftime('%a %d %b %Y %H:%M:%S')}   user {os.environ.get('USER', '?')}   from {socket.gethostname()}"
-    print("╔" + "═" * (W_ - 2) + "╗"); print("║ " + W(head.ljust(W_ - 4)) + " ║"); print("╚" + "═" * (W_ - 2) + "╝")
+    if header: print("╔" + "═" * (W_ - 2) + "╗"); print("║ " + W(head.ljust(W_ - 4)) + " ║"); print("╚" + "═" * (W_ - 2) + "╝")
+    print(("\n" if header else "\n\n") + W(f"━━ database {os.path.abspath(db)} ━━"))
     ixp = os.path.join(db, "index.csv")
     if not os.path.exists(ixp): print(R(f"no {ixp}: run from the repo root or pass --db")); return
     ix = list(csv.DictReader(open(ixp))); sets = {}
@@ -170,8 +171,12 @@ def board():
     print(f"   labelled out   {os.path.abspath(lab)}" + ("" if os.path.exists(lab) else D("   (not written: python snapdb.py collect snapdb)")))
 
 
+def show():
+    for i, d in enumerate(a.db): board(d, i == 0)
+
+
 if a.watch:
     try:
-        while True: sys.stdout.write("\033[2J\033[H" if sys.stdout.isatty() else ""); board(); sys.stdout.flush(); time.sleep(a.watch)
+        while True: sys.stdout.write("\033[2J\033[H" if sys.stdout.isatty() else ""); show(); sys.stdout.flush(); time.sleep(a.watch)
     except KeyboardInterrupt: pass
-else: board()
+else: show()
