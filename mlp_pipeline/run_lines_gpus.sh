@@ -8,7 +8,7 @@ mapfile -t L < <(grep -v '^\s*#' "$F" | grep -v '^\s*$'); echo "${#L[@]} command
 for ((w = 0; w < W; w++)); do
   ( export CUDA_VISIBLE_DEVICES=$((w % NG)); for ((i = w; i < ${#L[@]}; i += W)); do
       lg="$F.logs/$i.log"; grep -q '^DONE$' "$lg" 2>/dev/null && continue
-      { eval "${L[$i]}"; echo DONE; } > "$lg" 2>&1
+      { eval "${L[$i]}"; rc=$?; if [ $rc = 0 ]; then echo DONE; else echo "FAILED rc=$rc"; fi; } > "$lg" 2>&1   # DONE only on exit code 0, so a crashed line is rerun on restart
     done ) &
 done
 wait; echo "finished: $(grep -l '^DONE$' "$F".logs/*.log | wc -l) of ${#L[@]} logs marked DONE"

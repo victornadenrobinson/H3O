@@ -53,7 +53,10 @@ if os.path.exists(a.cmdfile):
     for name, key in kinds.items():
         idx = [i for i, l in enumerate(lines) if key in l]; cnt = {}
         for i in idx:
-            s = state(f"{a.cmdfile}.logs/{i}.log", done_re=r"^DONE$"); cnt[s] = cnt.get(s, 0) + 1
+            lg = f"{a.cmdfile}.logs/{i}.log"; s = state(lg, done_re=r"^DONE$")
+            if s == "done" and "Traceback" in txt(lg): s = "FAILED"            # older run_lines_gpus.sh wrote DONE even after a crash
+            if re.search(r"^FAILED rc=", txt(lg), re.M): s = "FAILED"
+            cnt[s] = cnt.get(s, 0) + 1
         nd = cnt.get("done", 0); print(f"   {name:20s} {bar(nd / max(len(idx), 1))} {100 * nd / max(len(idx), 1):3.0f}%  {nd}/{len(idx)} done  " + "  ".join(f"{k} {v}" for k, v in sorted(cnt.items()) if k != "done"))
     for nm, pat in (("B+ chain frames", "chain/*.extxyz"), ("H supercell frames", "h3o_sc/*.extxyz")):
         print(f"   {nm}: {sum(nframes(f) for f in glob.glob(os.path.join(a.leg, pat)))}")
