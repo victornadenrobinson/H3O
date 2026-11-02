@@ -62,8 +62,8 @@ def oh_pairs(at, L, cutoff=1.3):
         i_, j_, vec = neighbor_list("ijD", at, cutoff); return [(i, j, v) for i, j, v in zip(i_, j_, vec) if at.numbers[i] == 8 and at.numbers[j] == 1]
 
 
-def rasterise(at, yaw=0.0, tilt=18.0, width=140, height=44, zoom=1.5, view_dir=None, ortho=False, bonds=True, box=True, clip=0.0, hi=1.0, ssaa=1):
-    px, py = width * 2 * ssaa, height * 4 * ssaa
+def rasterise(at, yaw=0.0, tilt=18.0, width=140, height=44, zoom=1.3, view_dir=None, ortho=False, bonds=True, box=True, clip=0.0, hi=1.0, ssaa=1, mode="braille"):
+    sub = {"braille": (2, 4), "quad": (2, 2), "half": (1, 2)}[mode]; px, py = width * sub[0] * ssaa, height * sub[1] * ssaa
     cell = np.asarray(at.cell.array); L = np.diag(cell).astype(float); pos = at.get_scaled_positions(wrap=True) * L - L / 2
     ya, ta = np.radians(yaw), np.radians(tilt); Ry = np.array([[np.cos(ya), 0, np.sin(ya)], [0, 1, 0], [-np.sin(ya), 0, np.cos(ya)]]); Rx = np.array([[1, 0, 0], [0, np.cos(ta), -np.sin(ta)], [0, np.sin(ta), np.cos(ta)]]); R = Rx @ Ry
     if view_dir is not None:
@@ -82,11 +82,11 @@ def rasterise(at, yaw=0.0, tilt=18.0, width=140, height=44, zoom=1.5, view_dir=N
         pairs = oh_pairs(at, L)
         for i, j, v in pairs:
             if near[i] >= clip and near[i] <= hi:
-                a0 = P[i]; a1 = a0 + v @ R.T; s0 = sc(a0); s1 = sc(a1); fa = 0.35 + 0.65 * min(max(near[i], 0), 1)
+                a0 = P[i]; a1 = a0 + v @ R.T; s0 = sc(a0); s1 = sc(a1); fa = 0.50 + 0.50 * min(max(near[i], 0), 1)
                 rs.line(s0, s1, -a0[2], -a1[2], (np.array([230.0, 150.0, 140.0]), np.array([170.0, 225.0, 245.0])), hw=max(0.5, 0.05 * f * (1 if ortho else D / (D - a0[2])) / ssaa) * ssaa, fade=fa)
     for k in np.argsort(P[:, 2]):
         if near[k] < clip or near[k] > hi: continue
-        p = P[k]; s = 1.0 if ortho else D / (D - p[2]); cx, cy = sc(p); Z = at.numbers[k]; fade = 0.30 + 0.70 * near[k] ** 1.1
+        p = P[k]; s = 1.0 if ortho else D / (D - p[2]); cx, cy = sc(p); Z = at.numbers[k]; fade = 0.45 + 0.55 * near[k] ** 1.1
         rs.sphere(float(cx), float(cy), -p[2], RAD[Z] * f * s, RAD[Z], COL[Z], fade)
     return rs
 
@@ -97,8 +97,10 @@ def pack(rs, width, height):
     col = (rgb * hit[..., None]).sum(axis=(1, 3)) / np.maximum(cnt, 1)[..., None]; return mask, np.clip(col * 1.12, 0, 255).astype(np.uint8)
 
 
-def render_lit(at, yaw=0.0, step=None, width=140, height=44, note="", **kw):
-    rs = rasterise(at, yaw=yaw, width=width, height=height, **kw); mask, col = pack(rs, width, height); cells = []; lines = []
+def render_lit(at, yaw=0.0, step=None, width=140, height=44, note="", mode="braille", **kw):
+    rs = rasterise(at, yaw=yaw, width=width, height=height, mode=mode, **kw)
+    if mode != "braille": return _blocks(at, rs, yaw, step, width, height, note, mode)
+    mask, col = pack(rs, width, height); cells = []; lines = []
     q = (col >> 3) << 3                                       # 5 bits per channel: neighbouring cells share a colour code, so runs merge
     for r in range(height):
         rc = []; line = []; prev = None
@@ -111,5 +113,36 @@ def render_lit(at, yaw=0.0, step=None, width=140, height=44, note="", **kw):
         lines.append("│" + "".join(line) + "\033[0m│"); cells.append(rc)
     nO = int((at.numbers == 8).sum()); nH = int((at.numbers == 1).sum()); info = "  ".join(f"{k} {v:.4g}" for k, v in at.info.items() if k in ("T_inst", "T_K", "P_grace_GPa", "P_GPa") and isinstance(v, (int, float)))
     head = f" {len(at)} atoms (O {nO}, H {nH})  lit braille  yaw {yaw % 360:5.1f}  " + (f"step {step}  " if step is not None else "") + info + ("  " + note if note else "")
+    mdview.LAST["head"] = head.ljust(width + 2); mdview.LAST["cells"] = cells; mdview.LAST["width"] = width
+    return "\033[H\033[1m" + head.ljust(width + 2) + "\033[0m\n┌" + "─" * width + "┐\n" + "\n".join(lines) + "\n└" + "─" * width + "┘"
+
+
+QUAD = [" ", "▘", "▝", "▀", "▖", "▌", "▞", "▛", "▗", "▚", "▐", "▜", "▄", "▙", "▟", "█"]
+
+
+def _fg(c): return f"\033[38;2;{int(c[0])};{int(c[1])};{int(c[2])}m"
+
+
+def _blocks(at, rs, yaw, step, width, height, note, mode):
+    """block-character output with solid fills (no dot gaps). 'half': two colours per cell (top pixel as foreground, bottom pixel as background) = true per-pixel colour; 'quad': 2x2 solid quadrants, one colour per cell."""
+    gam = lambda c: 255.0 * (np.clip(c, 0, 255) / 255.0) ** 0.85; cells = []; lines = []
+    if mode == "half":
+        top, bot = rs.rgb[0::2], rs.rgb[1::2]; ht, hb = rs.hit[0::2], rs.hit[1::2]
+        for r in range(height):
+            rc = []
+            for c in range(width):
+                a, b = ht[r, c], hb[r, c]
+                if a and b: rc.append(_fg(gam(top[r, c])) + f"\033[48;2;{int(gam(bot[r, c])[0])};{int(gam(bot[r, c])[1])};{int(gam(bot[r, c])[2])}m▀\033[0m")
+                elif a: rc.append(_fg(gam(top[r, c])) + "▀\033[0m")
+                elif b: rc.append(_fg(gam(bot[r, c])) + "▄\033[0m")
+                else: rc.append(" ")
+            cells.append(rc); lines.append("│" + "".join(rc) + "│")
+    else:
+        h4 = rs.hit.reshape(height, 2, width, 2); m = (h4[:, 0, :, 0] * 1 + h4[:, 0, :, 1] * 2 + h4[:, 1, :, 0] * 4 + h4[:, 1, :, 1] * 8).astype(int)
+        c4 = rs.rgb.reshape(height, 2, width, 2, 3); cnt = h4.sum(axis=(1, 3)); col = (c4 * h4[..., None]).sum(axis=(1, 3)) / np.maximum(cnt, 1)[..., None]
+        for r in range(height):
+            rc = [(" " if not m[r, c] else _fg(gam(col[r, c])) + QUAD[m[r, c]] + "\033[0m") for c in range(width)]; cells.append(rc); lines.append("│" + "".join(rc) + "│")
+    nO = int((at.numbers == 8).sum()); nH = int((at.numbers == 1).sum()); info = "  ".join(f"{k} {v:.4g}" for k, v in at.info.items() if k in ("T_inst", "T_K", "P_grace_GPa", "P_GPa") and isinstance(v, (int, float)))
+    head = f" {len(at)} atoms (O {nO}, H {nH})  lit {mode}  yaw {yaw % 360:5.1f}  " + (f"step {step}  " if step is not None else "") + info + ("  " + note if note else "")
     mdview.LAST["head"] = head.ljust(width + 2); mdview.LAST["cells"] = cells; mdview.LAST["width"] = width
     return "\033[H\033[1m" + head.ljust(width + 2) + "\033[0m\n┌" + "─" * width + "┐\n" + "\n".join(lines) + "\n└" + "─" * width + "┘"
