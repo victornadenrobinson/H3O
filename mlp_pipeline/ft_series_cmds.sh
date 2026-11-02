@@ -10,10 +10,11 @@ nfr() { $PY -c "import pandas as pd; print(len(pd.read_pickle('runs/grace/train_
 upd() { echo $(( $1 * $(nfr $2) / ${3:-2} )); }       # upd EPOCHS TAG [BATCH]
 UPD=${UPDATES:-$(upd ${EPOCHS:-10} mn)}
 case $round in
-  r1)  echo "bash mlp_pipeline/ft_one.sh nBase   n  n  $UPD 1 5 10 frozen"
-       echo "bash mlp_pipeline/ft_one.sh nEF     n  n  $UPD 10 10 1 frozen"
-       echo "bash mlp_pipeline/ft_one.sh mnEF    mn mn $UPD 10 10 1 frozen"
-       echo "bash mlp_pipeline/ft_one.sh mnEFnaive mn mn $UPD 10 10 1 naive 0.0003";;
+  r1)  E=${EPOCHS:-5}   # round 1: weights (old 1/5/10 vs E/F-heavy 10/10/1), replay or not, frozen; plus one unfrozen run on the tier without the dense big cells. batch 1 everywhere (memory).
+       echo "bash mlp_pipeline/ft_one.sh nBase   n  n  $(upd $E n 1) 1 5 10 frozen 0.001 1"
+       echo "bash mlp_pipeline/ft_one.sh nEF     n  n  $(upd $E n 1) 10 10 1 frozen 0.001 1"
+       echo "bash mlp_pipeline/ft_one.sh mnEF    mn mn $(upd $E mn 1) 10 10 1 frozen 0.001 1"
+       echo "bash mlp_pipeline/ft_one.sh mnlEFnaive mnl mnl $(upd $E mnl 1) 10 10 1 naive 0.0003 1";;
   r2)  W=${2:-10 10 1}; M=${3:-frozen}; B=${4:-n}; V=$B; [ "$B" = mn ] && V=mn || V=n
        for p in 25 50 75; do echo "bash mlp_pipeline/ft_one.sh ${B}EF_f$p ${B}$p $V $UPD $W $M"; done
        echo "bash mlp_pipeline/ft_one.sh ${B}EF_f100 ${B} $V $UPD $W $M";;
