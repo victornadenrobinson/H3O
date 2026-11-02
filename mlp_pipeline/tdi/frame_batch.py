@@ -130,19 +130,24 @@ def stats(r, a):
 
 
 def composition_errors(S):
+    """One row per (H-rich system, pure-H system); every matching ice host gives one value, reported as median and range."""
     out = []
     for h in S:
         if h["nO"] == 0 or h["x"] <= 2.0001: continue
-        for ice in S:
-            if ice["nO"] != h["nO"] or abs(ice["x"] - 2.0) > 1e-9 or ice["P"] != h["P"] or ice["T"] != h["T"] or ice["lat"] != h["lat"]: continue
-            for pure in S:
-                if pure["nO"] != 0 or pure["P"] != h["P"] or pure["T"] != h["T"]: continue
+        for pure in S:
+            if pure["nO"] != 0 or pure["P"] != h["P"] or pure["T"] != h["T"]: continue
+            v = []
+            for ice in S:
+                if ice["nO"] != h["nO"] or abs(ice["x"] - 2.0) > 1e-9 or ice["P"] != h["P"] or ice["T"] != h["T"] or ice["lat"] != h["lat"]: continue
                 nadd = h["nH"] - ice["nH"]; w = nadd / pure["N"]
                 c = (h["mean"] - ice["mean"] - w * pure["mean"]) / nadd
                 ce = np.sqrt(h["sem"] ** 2 + ice["sem"] ** 2 + (w * pure["sem"]) ** 2) / nadd
                 cF = (h["cum"] - ice["cum"] - w * pure["cum"]) / nadd
-                out.append(dict(P=h["P"], T=h["T"], lat=h["lat"], x=h["x"], nadd=nadd, hpath=h["path"], ipath=ice["path"], ppath=pure["path"], c=c * 1e3, ce=ce * 1e3, cF=cF * 1e3,
-                                bsd=h["bsd"], per_atom_shift=c * 1e3 * (nadd / h["nO"]) / (h["N"] / h["nO"])))
+                v.append((c * 1e3, ce * 1e3, cF * 1e3, nadd))
+            if not v: continue
+            v = np.array(v)
+            out.append(dict(P=h["P"], T=h["T"], lat=h["lat"], x=h["x"], nadd=int(v[0, 3]), hpath=h["path"], ppath=pure["path"], nice=len(v), c=float(np.median(v[:, 0])), clo=float(v[:, 0].min()), chi=float(v[:, 0].max()),
+                            ce=float(np.median(v[:, 1])), cF=float(np.median(v[:, 2])), cFlo=float(v[:, 2].min()), cFhi=float(v[:, 2].max()), bsd=h["bsd"], per_atom_shift=float(np.median(v[:, 0])) * int(v[0, 3]) / h["N"]))
     return out
 
 
@@ -156,10 +161,11 @@ def report(rows, a):
         x = f"{s['x']:5.2f}" if np.isfinite(s["x"]) else "  H  "
         print(f"{s['P']:4.0f} {s['T']:5.0f} {s['lat']:>3s} {x} {s['N']:4d} {s['n']:3d} {s['mean']:8.3f} {s['mean'] / s['N'] * 1e3:7.1f} {s['sd']:6.2f} {s['bsd']:6.1f} {s['fr'] * 100:5.1f}% {s['trend']:+8.1f} {s['trend_sig']:+4.1f}  {s['path']}")
     C = composition_errors(S)
-    print(f"\nComposition error per added H, meV: c = mean-only, c_F = with var/(2kT).  sd/kT > ~3 means c_F (Gaussian) is not reliable.")
-    print(f"{'P':>4s} {'T':>5s} {'lat':>3s} {'H/O':>5s} {'n_add':>5s} {'c':>8s} {'+-':>5s} {'c_F':>8s} {'sd/kT':>6s} {'hull shift':>10s}  H-rich system")
-    for c in sorted(C, key=lambda c: (c["P"], c["T"], c["lat"], c["x"])):
-        print(f"{c['P']:4.0f} {c['T']:5.0f} {c['lat']:>3s} {c['x']:5.2f} {c['nadd']:5d} {c['c']:+8.0f} {c['ce']:5.0f} {c['cF']:+8.0f} {c['bsd']:6.1f} {c['per_atom_shift']:+8.1f}/at  {c['hpath']}")
+    print(f"\nComposition error per added H (meV), median over the ice hosts of the same (P, T, lattice) with the range in brackets. c = mean-only, c_F = with var/(2kT).")
+    print(f"sd/kT > ~3 means c_F (Gaussian) is not reliable. n_ice = number of ice campaigns used as host.")
+    print(f"{'P':>4s} {'T':>5s} {'lat':>3s} {'H/O':>5s} {'n_add':>5s} {'n_ice':>5s} {'c':>6s} {'[range]':>13s} {'+-':>4s} {'c_F':>6s} {'[range]':>13s} {'sd/kT':>6s} {'hull shift':>11s}  H-rich system")
+    for c in sorted(C, key=lambda c: (c["P"], c["T"], c["lat"], c["x"], c["hpath"])):
+        print(f"{c['P']:4.0f} {c['T']:5.0f} {c['lat']:>3s} {c['x']:5.2f} {c['nadd']:5d} {c['nice']:5d} {c['c']:+6.0f} [{c['clo']:+5.0f},{c['chi']:+5.0f}] {c['ce']:4.0f} {c['cF']:+6.0f} [{c['cFlo']:+5.0f},{c['cFhi']:+5.0f}] {c['bsd']:6.1f} {c['per_atom_shift']:+7.1f}/atom  {c['hpath']}")
     print("hull shift = c * n_add / N: the per-atom shift of the mixing free energy implied by the mean-only c (meV/atom).")
     if a.summary:
         with open(a.summary, "w", newline="") as f:
