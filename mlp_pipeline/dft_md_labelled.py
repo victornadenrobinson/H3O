@@ -5,7 +5,7 @@ checkpoints (pw_host_md.npz, pw_full_md.npz) keep the positions of the sampled f
   python mlp_pipeline/dft_md_labelled.py --plan runs/dft_pwidom_400GPa_5000K_4x64/dft_plan.json --out dft_md_400.extxyz            (all workers of a prepared plan)
   python mlp_pipeline/dft_md_labelled.py --worker runs/dft_pwidom_500GPa_5000K_1/H2O_rep0 --config <vasp.json> --out dft_md_500.extxyz
   --dry counts frames and labels only. Needs the repo's tdi package (PYTHONPATH=mlp_pipeline) for the config fingerprint; --fp STRING overrides it (tests).
-Output = labelled frames (energy = free energy TOTEN like the snapdb labels; energy_sigma0 is NOT available and is set to the free energy, flagged sigma0_missing=1), info: kind=dft_md, db_set=M, run_id, stage host|full, T_K, P_target, nO, nH, split
+Output = labelled frames (energy = free energy TOTEN like the snapdb labels; energy_sigma0 is NOT available and is set to the free energy, flagged sigma0_missing=1), info: kind=dft_md, db_set=M<P in GPa> (M400, M500, M600), run_id, stage host|full, T_K, P_target, nO, nH, split
 (frame-level hash, --valid-frac). Frames are autocorrelated within a state: train on a subset, keep the rest for the DFT-ensemble test (baseline_D.py then gives D on the true ensemble)."""
 import argparse, glob, hashlib, json, os, re, sys
 import numpy as np
@@ -55,7 +55,7 @@ for d, cfg in jobs:
             r = np.load(f, allow_pickle=False); at = Atoms(numbers=numbers, positions=x, cell=cell, pbc=pbc); E = float(r["free_energy"])
             at.calc = SinglePointCalculator(at, energy=E, free_energy=E, forces=r["forces"], stress=r["stress"])
             rid = f"dftmd:{name}:{stage}{i}"; sp = "valid" if int(hashlib.md5(rid.encode()).hexdigest(), 16) % 1000 < 1000 * a.valid_frac else "train"
-            at.info.update(kind="dft_md", db_set="M", run_id=rid, source=d, stage=stage, T_K=T, P_target=P, nO=nO, nH=nH, split=sp, energy_sigma0=E, sigma0_missing=1, config_type=f"dftmd_{nH}H{nO}O_{int(T)}K")
+            at.info.update(kind="dft_md", db_set=f"M{int(P)}" if P == P else "M", run_id=rid, source=d, stage=stage, T_K=T, P_target=P, nO=nO, nH=nH, split=sp, energy_sigma0=E, sigma0_missing=1, config_type=f"dftmd_{nH}H{nO}O_{int(T)}K")
             write(a.out, at, append=True)
     print(f"{name:26s} P {P:5.0f} GPa: {f_here}/{n_here} saved frames have a cached label"); tot += n_here; found += f_here
 print(f"{found}/{tot} frames labelled" + ("" if a.dry else f" -> {a.out}"))
