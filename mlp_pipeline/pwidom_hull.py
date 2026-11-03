@@ -37,12 +37,13 @@ def hull(points, err_scale=1.0, mc=4000, seed=1):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("run"); ap.add_argument("--err-scale", type=float, default=1.0); ap.add_argument("--strict", action="store_true"); ap.add_argument("--mc", type=int, default=4000); a = ap.parse_args()
+def load_run(run, scan=None):
+    """(manifest, rows) of a Perlmutter pwidom run: rows = dicts(name, n, dg, err, flags) for every non-reference host, dg exactly as the status view computes it (pwidom_scan.dg)."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdi")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    try: import pwidom_scan as scan
-    except Exception as ex: sys.exit(f"cannot import pwidom_scan ({ex}); run from the checkout that has mlp_pipeline/tdi/pwidom_scan.py (the Perlmutter scan code)")
-    out = Path(a.run); m = json.loads((out / "manifest.json").read_text()); res = {}
+    if scan is None:
+        try: import pwidom_scan as scan
+        except Exception as ex: sys.exit(f"cannot import pwidom_scan ({ex}); run from the checkout that has mlp_pipeline/tdi/pwidom_scan.py (the Perlmutter scan code)")
+    out = Path(run); m = json.loads((out / "manifest.json").read_text()); res = {}
     for j in m["jobs"]:
         try: res[j["name"]] = json.loads(Path(j["result"]).read_text())
         except Exception: pass
@@ -57,8 +58,14 @@ def main():
         if abs(w["mu_ex_delete_meV"] - w["mu_ex_widom_meV"]) > max(200, 3 * err): flags.append("UNCONVERGED")
         if w["kish_frac_ins"] < 0.05: flags.append("LOW KISH")
         rows.append(dict(name=name, n=n, dg=v, err=err, flags=flags))
+    rows.sort(key=lambda r: r["n"]); return m, rows
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("run"); ap.add_argument("--err-scale", type=float, default=1.0); ap.add_argument("--strict", action="store_true"); ap.add_argument("--mc", type=int, default=4000); a = ap.parse_args()
+    m, rows = load_run(a.run)
     rows.sort(key=lambda r: r["n"]); keep = [r for r in rows if "MELTED" not in r["flags"] and not (a.strict and r["flags"])]
-    print(f"{out}: {m['P']:g} GPa / {m['T']:g} K   (statistical errors only; shown x{a.err_scale:g})")
+    out = Path(a.run); print(f"{out}: {m['P']:g} GPa / {m['T']:g} K   (statistical errors only; shown x{a.err_scale:g})")
     print(f"{'host':8s}{'n':>7s}{'x_H':>7s}{'dg meV/H':>16s}  flags")
     for r in rows: print(f"{r['name']:8s}{r['n']:7.3f}{(2 + r['n']) / (3 + r['n']):7.3f}{r['dg']:9.0f} +-{r['err'] * a.err_scale:4.0f}  {' '.join(r['flags']) or '-'}" + ("   (excluded)" if r not in keep else ""))
     if len(keep) < 1: sys.exit("no usable host")
