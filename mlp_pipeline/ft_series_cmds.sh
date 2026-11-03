@@ -52,5 +52,8 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e5_F200  mn mn $(upd 5 mn 1) 10 200 1 frozen 0.003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr1e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0001 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr3e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0003 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap | hi ..." >&2; exit 1;;
+  rep) W=${2:-10 10 1}   # MORE REPLAY: the old tier l (1027 frames, adds 2000 K and 108-O hosts at 7000 K) instead of m (747). Needs: build_tier.py ... --tag nB --fmax 60 --valid-from --old-train runs/train_l.extxyz --old-valid runs/valid_l.extxyz ; grace_prep_pkl.sh mnB
+       echo "bash mlp_pipeline/ft_one.sh mnB_f_lr1e-2_e20  mnB mnB $(upd 20 mnB 1) $W frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh mnB_f_lr1e-2_e5   mnB mnB $(upd 5 mnB 1) $W frozen 0.01 1";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap | hi | rep ..." >&2; exit 1;;
 esac
