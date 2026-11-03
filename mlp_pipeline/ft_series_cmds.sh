@@ -35,5 +35,7 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e20  mn mn $(upd 20 mn 1) $W frozen 0.003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-2_e20  mn mn $(upd 20 mn 1) $W frozen 0.01 1"
        echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e5    n n $(upd 5 n 1) $W frozen 0.003 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC ..." >&2; exit 1;;
+  lc)  W=${2:-10 10 1}   # LEARNING CURVE (test A5): best frozen recipe (lr 3e-3, replay tier), the SAME number of updates (5 epochs of the full tier) for every fraction; 100 % = the existing mn_f_lr3e-3_e5 run. Score all on runs/valid_n.extxyz.
+       for p in 25 50 75; do echo "bash mlp_pipeline/ft_one.sh lc_mn$p mn$p mn $(upd 5 mn 1) $W frozen 0.003 1"; done;;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc ..." >&2; exit 1;;
 esac

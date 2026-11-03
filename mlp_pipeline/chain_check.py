@@ -25,7 +25,9 @@ for p in a.files:
                 e = (d2 - d1) / (h2 - h1) * 1000.0; err.append(e); by_n[n1].append(e); pairs.append((de, e))      # meV per added H
     print(f"\n{os.path.basename(p)}: {len(rows)} chain frames in {len(ch)} chains -> {len(err)} consecutive pairs")
     if len(err) < 2: continue
-    m, sd = stats(err); print(f"   error of the insertion energy per added H [meV]: mean {m:+.0f}  sd {sd:.0f}   (criterion: |mean| <= 100, sd <= 200)  {'PASS' if abs(m) <= 100 and sd <= 200 else 'FAIL'}")
+    m, sd = stats(err); kT = 8.617333e-5 * (float(rows[0].get("T_K") or 5000) or 5000)
+    print(f"   error of the insertion energy per added H [meV]: mean {m:+.0f}  sd {sd:.0f}   (criterion: |mean| <= 100, sd <= 200)  {'PASS' if abs(m) <= 100 and sd <= 200 else 'FAIL'}")
+    print(f"   Gaussian-corrected composition error c = mean - sd^2/(2kT) = {m - sd * sd / (2 * kT * 1000):+.0f} meV/H at kT = {kT:.3f} eV (T = {kT / 8.617333e-5:.0f} K)  (A2/B4 criterion |c| <= 50)")
     xs = sorted(by_n)
     if len(xs) >= 3:
         mx = sum(xs) / len(xs); my = sum(sum(by_n[x]) / len(by_n[x]) for x in xs) / len(xs); sl = sum((x - mx) * (sum(by_n[x]) / len(by_n[x]) - my) for x in xs) / sum((x - mx) ** 2 for x in xs)
