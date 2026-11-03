@@ -16,7 +16,7 @@ L = lambda *p: os.path.join(a.leg, *p); R = lambda *p: os.path.join(a.root, *p)
 # C 440 = C 200 + C3 240 (the end-state D statistics come from the same pwidom caches); C2 has no cap because host and site geometries of a frame must stay together;
 # D_melt 144 = D + D2 (4000/6000 K fill)
 SETS = {
-    "B": ([L("chain", "*.extxyz")], 0, 1), "C": ([R("sel_pwidom.extxyz")], 440, 1), "C2": ([L("widom_c2.extxyz")], 0, 1),
+    "B": ([L("chain", "*.extxyz")], 0, 1), "C": ([R("sel_pwidom.extxyz")], 440, 1), "C2": ([L("widom_c2.extxyz")], 0, 1), "P": ([L("widom_pairs.extxyz")], 0, 1),
     "A": ([L("ins_grid", "ins_*.extxyz")], 520, 2), "A_b1": ([L("ins_batch1", "ins_*.extxyz")], 150, 2), "A_part": ([L("partial", "ins_*.extxyz")], 100, 3),
     "E": ([R("runs", "eos_lowp", "*", "traj.extxyz"), R("runs", "eos_lowp2", "*", "traj.extxyz")], 180, 3), "H": ([L("h3o_sc", "*.extxyz")], 220, 3),
     "D_melt": ([R("sel_meltcomp.extxyz")], 144, 4), "D_eos": ([R("sel_eos.extxyz")], 100, 4), "G": ([L("H729_md.extxyz"), L("H729_md_s2.extxyz")], 30, 4),
