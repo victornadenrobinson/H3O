@@ -150,3 +150,53 @@ def test_in_place_md_resume_no_duplicate_frames(tmp_path,monkeypatch):
     args.resume_from=args._checkpoint_prefix; args.resume_in_place=True
     actual=cp.md_frames(model,atoms,args,3,'host')
     for x,y in zip(actual,expected): np.testing.assert_array_equal(x,y)
+
+
+def test_thermostat_friction_default_is_100fs_and_configurable():
+    from ase import units
+    from tdi.pwidom import thermostat_friction
+    assert thermostat_friction(Namespace()) == pytest.approx(1.0/(100*units.fs))
+    assert thermostat_friction(Namespace(friction_fs=50.0)) == pytest.approx(1.0/(50*units.fs))
+    assert thermostat_friction(Namespace(legacy_friction=True)) == 0.01
+    assert 1.0/(100*units.fs) > 5*0.01         # ~10x stronger than the old value (the reliability-plan finding)
+
+
+def test_old_friction_checkpoint_resumes_with_its_own_friction(tmp_path, monkeypatch, capsys):
+    model, atoms, args = setup(tmp_path); args.legacy_friction = True
+    expected = cp.md_frames(model, atoms, args, 3, 'host')                  # uninterrupted run with the OLD friction
+    args._checkpoint_prefix = str(tmp_path/'interrupted'); original = cp.atomic_npz
+    def interrupt(path, **payload):
+        original(path, **payload)
+        if payload['step'] == 7: raise SystemExit(143)
+    monkeypatch.setattr(cp, 'atomic_npz', interrupt)
+    with pytest.raises(SystemExit): cp.md_frames(model, atoms, args, 3, 'host')
+    monkeypatch.setattr(cp, 'atomic_npz', original)
+    resumed = Namespace(**{k: v for k, v in vars(args).items() if k != 'legacy_friction'})       # the user does NOT pass --legacy-friction when resuming
+    resumed.resume_from = args._checkpoint_prefix; resumed._checkpoint_prefix = str(tmp_path/'resumed')
+    actual = cp.md_frames(model, atoms, resumed, 3, 'host')
+    for x, y in zip(actual, expected): np.testing.assert_array_equal(x, y)       # identical to the uninterrupted old-friction run
+    assert 'old friction' in capsys.readouterr().out
+
+
+def test_explicit_friction_that_contradicts_a_checkpoint_is_refused(tmp_path):
+    model, atoms, args = setup(tmp_path); args.legacy_friction = True
+    cp.md_frames(model, atoms, args, 3, 'host')
+    new = Namespace(**{k: v for k, v in vars(args).items() if k != 'legacy_friction'}); new.friction_fs = 100.0
+    new.resume_from = args._checkpoint_prefix; new._checkpoint_prefix = str(tmp_path/'resumed')
+    with pytest.raises(ValueError, match='friction'): cp.md_frames(model, atoms, new, 3, 'host')
+
+
+def test_bussi_thermostat_checkpoint_continuation_is_exact(tmp_path, monkeypatch):
+    pytest.importorskip('ase.md.bussi')
+    model, atoms, args = setup(tmp_path); args.thermostat = 'bussi'
+    expected = cp.md_frames(model, atoms, args, 3, 'host')
+    args._checkpoint_prefix = str(tmp_path/'interrupted'); original = cp.atomic_npz
+    def interrupt(path, **payload):
+        original(path, **payload)
+        if payload['step'] == 7: raise SystemExit(143)
+    monkeypatch.setattr(cp, 'atomic_npz', interrupt)
+    with pytest.raises(SystemExit): cp.md_frames(model, atoms, args, 3, 'host')
+    monkeypatch.setattr(cp, 'atomic_npz', original)
+    args.resume_from = args._checkpoint_prefix; args._checkpoint_prefix = str(tmp_path/'resumed')
+    actual = cp.md_frames(model, atoms, args, 3, 'host')
+    for x, y in zip(actual, expected): np.testing.assert_array_equal(x, y)

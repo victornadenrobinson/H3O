@@ -39,7 +39,7 @@ def md_frames(model, at0, a, seed, label):
     from ase import units
     from ase.md.langevin import Langevin
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-    from tdi.pwidom import EV_A3_GPA, model_fingerprint
+    from tdi.pwidom import EV_A3_GPA, model_fingerprint, thermostat_friction, make_dynamics
 
     if at0.constraints:
         raise ValueError('PWidom checkpoints currently support unconstrained Langevin only')
@@ -55,10 +55,19 @@ def md_frames(model, at0, a, seed, label):
     every = max(1, int(round(a.every_fs/a.dt)))
     nframes = int(a.ps*1000/a.every_fs)
     total = eq + nframes*every
+    friction = thermostat_friction(a); bussi = getattr(a, 'thermostat', 'langevin') == 'bussi'
+    if source and source.exists():                      # a checkpoint written with another friction (the old 0.01) keeps its own: resuming must not change the dynamics
+        with np.load(source, allow_pickle=False) as z0: old = json.loads(str(z0['metadata'])).get('friction')
+        if not bussi and old is not None and abs(float(old)-friction) > 1e-12:
+            if getattr(a, 'legacy_friction', False) or getattr(a, 'friction_fs', None) is not None:
+                raise ValueError(f'{source}: written with friction {old:.6g}, requested {friction:.6g}; resume without --friction-fs/--legacy-friction to keep its own')
+            print(f'WARNING {label}: resuming a checkpoint written with the old friction {old:.6g} (damping ~{1/(float(old)*units.fs):.0f} fs); keeping it for exact continuation', flush=True)
+            friction = float(old)
     metadata = dict(version=1, ase=ase.__version__, numpy=np.__version__,
                     model_fp=model_fingerprint(a.model), T=a.T, dt=a.dt,
                     equil_steps=eq, every=every, frames=nframes, seed=seed,
-                    label=label, friction=.01, fixcm=True)
+                    label=label, friction=friction, fixcm=True)
+    if bussi: metadata.update(thermostat='bussi', taut_fs=float(getattr(a, 'friction_fs', None) or 100.0))      # key only present for bussi: Langevin checkpoints (incl. pre-fix ones) keep their metadata
     at = at0.copy(); at.calc = model.calc
     rng = np.random.default_rng(seed)
     positions, pressures, step = [], [], 0
@@ -87,7 +96,7 @@ def md_frames(model, at0, a, seed, label):
         # A missing ensemble checkpoint means this ensemble never started. The
         # launcher requires at least one checkpoint/cache across a resumed job.
         MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng)
-    dyn = Langevin(at, a.dt*units.fs, temperature_K=a.T, friction=.01, rng=rng)
+    dyn = make_dynamics(at, a, rng, friction=friction)
     dyn.nsteps = step
     requested = [None]
     previous = {}

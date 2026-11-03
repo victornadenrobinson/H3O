@@ -155,6 +155,27 @@ class Model:
         return np.array(out)
 
 
+def thermostat_friction(a):
+    """Langevin friction in ASE units for the host MD. Default: damping time 100 fs, as the TDI engine (run_real.py) uses. The earlier code used 0.01 per ASE time unit, i.e. a ~1 ps damping time: hosts started
+    from a lattice then sampled well below the nominal temperature for ~1 ps and re-equilibrated slowly (docs/GRACE_RELIABILITY_PLAN.md section 6). --friction-fs sets the damping time (fs); --legacy-friction restores 0.01,
+    needed only to resume a checkpoint written before this change (pwidom_checkpoint detects such a checkpoint and keeps its friction automatically, with a warning)."""
+    from ase import units
+    if getattr(a, "legacy_friction", False): return 0.01
+    return 1.0 / (float(getattr(a, "friction_fs", None) or 100.0) * units.fs)
+
+
+def make_dynamics(at, a, rng, friction=None):
+    """host MD integrator: Langevin (default; friction from thermostat_friction) or Bussi stochastic velocity rescaling (--thermostat bussi, relaxation time = --friction-fs, default 100 fs; canonical sampling that
+    disturbs the dynamics less; needs ASE >= 3.24). Both keep all their state in positions, momenta and the shared rng, so checkpoint/resume stays exact."""
+    from ase import units
+    if getattr(a, "thermostat", "langevin") == "bussi":
+        try: from ase.md.bussi import Bussi
+        except ImportError as ex: raise RuntimeError("--thermostat bussi needs ASE >= 3.24 (ase.md.bussi)") from ex
+        return Bussi(at, a.dt * units.fs, temperature_K=a.T, taut=float(getattr(a, "friction_fs", None) or 100.0) * units.fs, rng=rng)
+    from ase.md.langevin import Langevin
+    return Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=friction if friction is not None else thermostat_friction(a), rng=rng)
+
+
 def md_frames(model, at0, a, seed, label):
     """free NVT Langevin MD with the real model (no springs): positions every --every-fs after --equil-ps, and the MLP pressure (incl. kinetic) at each frame"""
     if getattr(a, "_checkpoint_prefix", None):
@@ -165,7 +186,7 @@ def md_frames(model, at0, a, seed, label):
     from ase import units
     at = at0.copy(); at.calc = model.calc; rng = np.random.default_rng(seed); t0 = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng)
-    dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=0.01, rng=rng)
+    dyn = make_dynamics(at, a, rng)
     equil_steps = int(a.equil_ps * 1000 / a.dt)
     every = max(1, int(round(a.every_fs / a.dt))); nfr = int(a.ps * 1000 / a.every_fs)
     progress = getattr(a, "_progress", None)
@@ -472,6 +493,7 @@ def main():
     r.add_argument("--proxy", default="none"); r.add_argument("--K", type=int, default=2000, help="uniform candidates per trial (proxy only)")
     r.add_argument("--sel", type=int, default=4, help="real-model insertions per host frame"); r.add_argument("--ndel", type=int, default=4, help="real-model deletions per host + 1 H frame")
     r.add_argument("--stride", type=int, default=1, help="use every stride-th cached frame"); r.add_argument("--batch", type=int, default=16, help="structures per batched model call (GRACE)")
+    r.add_argument("--thermostat", choices=("langevin", "bussi"), default="langevin", help="host MD thermostat (default Langevin; bussi = stochastic velocity rescaling, gentler on the dynamics, ASE >= 3.24)"); r.add_argument("--friction-fs", type=float, default=None, help="Langevin damping time in fs (default 100; the old code used ~1000 fs)"); r.add_argument("--legacy-friction", action="store_true", help="old friction 0.01 (resume pre-fix checkpoints only; detected automatically)")
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
     r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints (default 300)")

@@ -35,7 +35,7 @@ def md(at, T, ps, equil_ps, seed, every=40, dt=0.5, frames=False):
     from tdi.toy_ice import ToyIce
     at = at.copy(); at.calc = ToyIce(); rng = np.random.default_rng(seed)
     MaxwellBoltzmannDistribution(at, temperature_K=T, rng=rng)
-    dyn = Langevin(at, dt * units.fs, temperature_K=T, friction=0.01, rng=rng)
+    dyn = Langevin(at, dt * units.fs, temperature_K=T, friction=1/(100*units.fs), rng=rng)
     dyn.run(int(equil_ps * 1000 / dt))
     P, U, fr = [], [], []
     for k in range(int(ps * 1000 / dt / every)):

@@ -437,7 +437,7 @@ def plan(a):
                "--ps", str(a.ps), "--equil-ps", str(a.equil_ps),
                "--K", str(a.K), "--sel", str(a.sel), "--ndel", str(a.ndel),
                "--batch", str(a.batch), "--proxy", proxy, "--out", str(out),
-               "--tag", tag, "--label", "candidate"]
+               "--tag", tag, "--label", "candidate", "--seed", str(getattr(a, "seed", 3))] + (["--friction-fs", str(a.friction_fs)] if getattr(a, "friction_fs", None) else []) + (["--thermostat", a.thermostat] if getattr(a, "thermostat", "langevin") != "langevin" else [])
         if a.candidate_dir:
             cmd += ["--candidate-dir", a.candidate_dir, "--candidate-limit", str(a.candidate_limit)]
         if a.extend_run:
@@ -807,6 +807,9 @@ def main():
     r.add_argument("--batch", type=int, default=8)
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
+    r.add_argument("--seed", type=int, default=3, help="MD / host seed passed to every host (default 3): give each replica another one, identical settings otherwise repeat the same trajectory")
+    r.add_argument("--thermostat", choices=("langevin", "bussi"), default="langevin", help="host MD thermostat: langevin (default) or bussi (stochastic velocity rescaling; --friction-fs is then its relaxation time)")
+    r.add_argument("--friction-fs", type=float, default=None, help="Langevin damping time (fs) for the host MD; default 100 (the old code used ~1000)")
     r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints")
     r.add_argument("--resume-run", help="previous run directory: inherit inputs and continue saved MD into fresh --out")
     r.add_argument("--extend-run", help="completed run directory: preserve inputs and append a re-equilibrated sampling segment in new output")

@@ -85,7 +85,7 @@ def mode_pwmd(b):
     at.calc = Model(b.model,b.device,1).calc
     rng = np.random.default_rng(3)
     MaxwellBoltzmannDistribution(at, temperature_K=b.T or 3000, rng=rng)
-    md = Langevin(at,b.dt*units.fs,temperature_K=b.T or 3000,friction=.01,rng=rng)
+    md = Langevin(at,b.dt*units.fs,temperature_K=b.T or 3000,friction=1/(100*units.fs),rng=rng)
     at.get_forces(); md.run(b.warm); wait_for_benchmark(b)
     start = time.monotonic(); md.run(b.steps); end = time.monotonic()
     result(mode="pwmd",system=b.system,natoms=len(at),steps=b.steps,seconds=end-start,
