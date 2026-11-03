@@ -12,13 +12,14 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE); sys
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("--phase", default="bcc"); ap.add_argument("--nrep", type=int, default=3)
 ap.add_argument("--vpa", type=float, default=2.12); ap.add_argument("--T", type=float, default=5000.0); ap.add_argument("--fps", type=float, default=15.0); ap.add_argument("--every", type=int, default=2, help="MD steps per drawn frame")
 ap.add_argument("--slab", type=float, default=2.2); ap.add_argument("--width", type=int, default=96); ap.add_argument("--height", type=int, default=30); ap.add_argument("--steps", type=int, default=0, help="stop after this many steps (0 = until Ctrl-C)")
-ap.add_argument("--view3d", action="store_true", help="orbiting 3D view with perspective, bonds and the box wireframe"); ap.add_argument("--spin", type=float, default=2.5, help="degrees of rotation per drawn frame (3D)")
+ap.add_argument("--view3d", action="store_true", help="orbiting 3D view with perspective, bonds and the box wireframe"); ap.add_argument("--spin", type=float, default=0.0, help="automatic rotation in degrees per drawn frame (3D); default 0 = fixed view, rotate with the mouse (drag) or the arrow keys; press s to toggle a slow spin"); ap.add_argument("--tilt", type=float, default=18.0); ap.add_argument("--no-mouse", action="store_true", help="no mouse reporting (keyboard only)")
 ap.add_argument("--ascii", action="store_true", help="plain characters instead of 24-bit colour (3D)"); ap.add_argument("--nobox", action="store_true"); ap.add_argument("--lit-mode", default="half", choices=["half", "quad", "braille"], help="with --lit: half = two colours per cell (best colour), quad = solid 2x2 quadrants, braille = 2x4 dots (finest, dimmest)"); ap.add_argument("--lit", action="store_true", help="lit-sphere braille renderer (mdview_lit.py): shaded spheres, cylinder bonds, z-buffer"); ap.add_argument("--delta", action="store_true", help="redraw only the cells that changed (less for the terminal to paint; try it if the plain mode stutters)"); ap.add_argument("--atom-scale", type=int, default=0, help="2D: pixels per atom unit (0 = auto from the width)"); ap.add_argument("--braille", action="store_true", help="braille characters: 2x4 dots per cell = 4x the pixels (one colour per cell); needs a font with braille glyphs"); ap.add_argument("--view", default="", help="fixed crystallographic view: 001, 101, 111 ... (look along that direction)"); ap.add_argument("--ortho", action="store_true", help="no perspective (best for lattice views)"); ap.add_argument("--hi", type=float, default=1.0, help="keep only atoms nearer than this depth fraction (0.4 = a thin front slab)")
 ap.add_argument("--zoom", type=float, default=2.0); ap.add_argument("--clip", type=float, default=0.0, help="hide the farthest fraction of atoms in 3D (0.3 = back 30 percent)"); ap.add_argument("--nobonds", action="store_true"); ap.add_argument("--hper", type=float, default=2.0, help="H per O"); ap.add_argument("--seed", type=int, default=1); a = ap.parse_args()
 import build_toy_cells as b
 from toy_ice import ToyIce
 from mdview import render, render3d, DiffPrinter
 from mdview_lit import render_lit
+from termctl import Controls
 from ase import units
 from ase.md.langevin import Langevin
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
@@ -30,17 +31,35 @@ if at is None:
 at.calc = ToyIce(); rng = np.random.default_rng(a.seed); MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng); Stationary(at)
 dyn = Langevin(at, 1.0 * units.fs, temperature_K=a.T, friction=1 / (100 * units.fs), rng=rng)
 dp = DiffPrinter(); nO = int((at.numbers == 8).sum()); sys.stdout.write("\033[2J\033[?25l")
+yaw = 0.0; tilt = a.tilt; zoom = 1.0; spin = a.spin; paused = False; quit_ = False; vd = [float(c) for c in a.view] if a.view else None
+HELP = "drag: rotate  wheel/+/-: zoom  arrows: rotate  s: spin  space: pause MD  r: reset  q: quit"
 try:
-    t_prev = time.time(); n = 0
-    while not a.steps or dyn.nsteps < a.steps:
-        dyn.run(a.every); Tk = 2 / 3 * at.get_kinetic_energy() / (len(at) * units.kB); at.info["T_inst"] = Tk
-        now = time.time(); sps = a.every / max(now - t_prev, 1e-9); t_prev = now
-        note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s"
-        if a.lit: n += 1; txt = render_lit(at, yaw=n * a.spin, step=dyn.nsteps, width=a.width, height=a.height, note=note, bonds=not a.nobonds, box=not a.nobox, clip=a.clip, hi=a.hi, view_dir=([float(c) for c in a.view] if a.view else None), ortho=bool(a.view), zoom=min(a.zoom, 1.6) * 0.87, mode=a.lit_mode)
-        elif a.view3d or a.view: n += 1; txt = render3d(at, yaw=n * a.spin, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox, zoom=a.zoom, clip=a.clip, hi=a.hi, view_dir=([float(c) for c in a.view] if a.view else None), ortho=a.ortho or bool(a.view), braille=a.braille)
-        else: txt = render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=note, atom_scale=a.atom_scale or None)
-        if a.delta: dp.draw()
-        else: print(txt, flush=True)
-        time.sleep(max(0.0, 1.0 / a.fps - (time.time() - now)))
+    with Controls(mouse=not a.no_mouse) as ctl:
+        t_prev = time.time()
+        while not quit_ and (not a.steps or dyn.nsteps < a.steps):
+            for ev in ctl.poll():
+                if ev[0] == "rot": yaw += ev[1] * 2.5; tilt = max(-89.0, min(89.0, tilt - ev[2] * 3.0))
+                elif ev[0] == "zoom": zoom = max(0.4, min(3.0, zoom * (1.12 if ev[1] > 0 else 1 / 1.12)))
+                elif ev[0] == "arrow": yaw += {"left": -6, "right": 6}.get(ev[1], 0); tilt = max(-89.0, min(89.0, tilt + {"up": 6, "down": -6}.get(ev[1], 0)))
+                elif ev[0] == "key":
+                    k = ev[1]
+                    if k in ("q", "\x03"): quit_ = True
+                    elif k == " ": paused = not paused
+                    elif k == "s": spin = 0.0 if spin else 1.5
+                    elif k in ("+", "="): zoom = min(3.0, zoom * 1.12)
+                    elif k in ("-", "_"): zoom = max(0.4, zoom / 1.12)
+                    elif k == "r": yaw, tilt, zoom, spin = 0.0, a.tilt, 1.0, a.spin
+            if not paused: dyn.run(a.every)
+            yaw += spin
+            Tk = 2 / 3 * at.get_kinetic_energy() / (len(at) * units.kB); at.info["T_inst"] = Tk
+            now = time.time(); sps = a.every / max(now - t_prev, 1e-9) if not paused else 0.0; t_prev = now
+            note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s  tilt {tilt:.0f}  zoom {zoom:.2f}" + ("  [paused]" if paused else "")
+            if a.lit: txt = render_lit(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, note=note, bonds=not a.nobonds, box=not a.nobox, clip=a.clip, hi=a.hi, view_dir=vd, ortho=bool(a.view), zoom=min(a.zoom, 1.6) * 0.87 * zoom, mode=a.lit_mode)
+            elif a.view3d or a.view: txt = render3d(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox, zoom=a.zoom * zoom, clip=a.clip, hi=a.hi, view_dir=vd, ortho=a.ortho or bool(a.view), braille=a.braille)
+            else: txt = render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=note, atom_scale=a.atom_scale or None)
+            if a.delta: dp.draw()
+            else: print(txt, flush=True)
+            if (a.lit or a.view3d or a.view) and sys.stdout.isatty(): sys.stdout.write("\033[0m " + HELP + "\033[K"); sys.stdout.flush()
+            time.sleep(max(0.0, 1.0 / a.fps - (time.time() - now)))
 except KeyboardInterrupt: pass
 finally: sys.stdout.write("\033[?25h\n")
