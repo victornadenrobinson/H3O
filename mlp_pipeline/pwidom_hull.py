@@ -37,6 +37,36 @@ def hull(points, err_scale=1.0, mc=4000, seed=1):
     return out
 
 
+def pool_rows(runs_rows):
+    """Pool replica runs of the same state: per host, mean dg over replicas; error = max(between-run sd / sqrt(k), mean stat err / sqrt(k)); a host melted in ANY replica is flagged MELTED."""
+    by = {}
+    for rows in runs_rows:
+        for r in rows: by.setdefault(r["name"], []).append(r)
+    out = []
+    for name, lst in by.items():
+        k = len(lst); dg = np.array([r["dg"] for r in lst]); st = np.array([r["err"] for r in lst]); sd = dg.std(ddof=1) if k > 1 else 0.0
+        err = max(sd / np.sqrt(k), np.sqrt(np.mean(st ** 2) / k)) if k > 1 else st[0]
+        fl = sorted({f for r in lst for f in r["flags"]}); out.append(dict(name=name, n=lst[0]["n"], dg=float(dg.mean()), err=float(err), flags=fl, k=k, spread=float(sd)))
+    out.sort(key=lambda r: r["n"]); return out
+
+
+def linear_extrapolation(points, err_scale=1.0, mc=4000, seed=2):
+    """EXTRAPOLATION, not a measurement: weighted straight line dg(n) = a + b n through the usable compositions; if b > 0 the hull minimum is at n* = -a/b with depth a^2/(2b) per O. MC over the dg errors."""
+    n = np.array([p[0] for p in points], float); g = np.array([p[1] for p in points], float); e = np.maximum(np.array([p[2] for p in points], float) * err_scale, 1e-6)
+    def fit(gv):
+        w = 1 / e ** 2; A = np.c_[np.ones_like(n), n]; M = A.T @ (A * w[:, None]); b = np.linalg.solve(M, A.T @ (w * gv)); return b[0], b[1]
+    if len(n) < 2: return None
+    a, b = fit(g); rng = np.random.default_rng(seed); res = []
+    for _ in range(mc):
+        aa, bb = fit(rng.normal(g, e)); res.append((aa, bb))
+    res = np.array(res); ok = res[:, 1] > 0; nst = -res[ok, 0] / res[ok, 1]; ok2 = nst > 0
+    out = dict(a=a, b=b, p_positive_slope=float(ok.mean()))
+    if b > 0 and a < 0: out.update(n_star=-a / b, depth_O=a * a / (2 * b), depth_atom=a * a / (2 * b) / (3 - a / b))
+    if ok2.any():
+        ns = nst[ok2]; dep = (res[ok, 0][ok2] ** 2 / (2 * res[ok, 1][ok2])) / (3 + ns); out["n_star_ci"] = tuple(np.percentile(ns, [16, 50, 84])); out["depth_atom_ci"] = tuple(np.percentile(dep, [16, 50, 84])); out["p_valid"] = float(ok2.mean())
+    return out
+
+
 def load_run(run, scan=None):
     """(manifest, rows) of a Perlmutter pwidom run: rows = dicts(name, n, dg, err, flags) for every non-reference host, dg exactly as the status view computes it (pwidom_scan.dg)."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdi")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -62,10 +92,14 @@ def load_run(run, scan=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("run"); ap.add_argument("--err-scale", type=float, default=1.0); ap.add_argument("--strict", action="store_true"); ap.add_argument("--mc", type=int, default=4000); a = ap.parse_args()
-    m, rows = load_run(a.run)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); ap.add_argument("run", nargs="+", help="one run dir, or several replica runs of the same state (pooled with --pool)"); ap.add_argument("--pool", action="store_true", help="pool replica runs: per-host mean dg, error from the between-run scatter"); ap.add_argument("--err-scale", type=float, default=1.0); ap.add_argument("--strict", action="store_true"); ap.add_argument("--mc", type=int, default=4000); a = ap.parse_args()
+    loaded = [load_run(r) for r in a.run]
+    if len(loaded) > 1 and not a.pool:
+        for r in a.run: print(f"=== {r}"); sys.argv = [sys.argv[0], r, "--err-scale", str(a.err_scale), "--mc", str(a.mc)] + (["--strict"] if a.strict else []); main()
+        return
+    m = loaded[0][0]; rows = pool_rows([x[1] for x in loaded]) if len(loaded) > 1 else loaded[0][1]
     rows.sort(key=lambda r: r["n"]); keep = [r for r in rows if "MELTED" not in r["flags"] and not (a.strict and r["flags"])]
-    out = Path(a.run); print(f"{out}: {m['P']:g} GPa / {m['T']:g} K   (statistical errors only; shown x{a.err_scale:g})")
+    out = Path(a.run[0]); print(f"{out}{' (+%d replicas pooled)' % (len(a.run) - 1) if len(a.run) > 1 else ''}: {m['P']:g} GPa / {m['T']:g} K   (statistical errors only; shown x{a.err_scale:g})")
     print(f"{'host':8s}{'n':>7s}{'x_H':>7s}{'dg meV/H':>16s}  flags")
     for r in rows: print(f"{r['name']:8s}{r['n']:7.3f}{(2 + r['n']) / (3 + r['n']):7.3f}{r['dg']:9.0f} +-{r['err'] * a.err_scale:4.0f}  {' '.join(r['flags']) or '-'}" + ("   (excluded)" if r not in keep else ""))
     if len(keep) < 1: sys.exit("no usable host")
@@ -76,6 +110,10 @@ def main():
     elif b.get("positive"): print(f"\nNO stable mixing in the scanned range: dg(0) >= 0 (H prefers the reservoir). hull depth 0.")
     else: print(f"\nhull NOT bracketed: dg < 0 up to n = {max(r['n'] for r in keep):.3f} (H still prefers the host); depth is a LOWER bound: {b['depth_O']:.1f} meV/O = {b['depth_atom']:.2f} meV/atom at n = {b['n_star']:.3f}. Scan larger n.")
     if "depth_atom_ci" in hh: c = hh["depth_atom_ci"]; print(f"depth per atom 16/50/84 % over the error draws: {c[0]:.2f} / {c[1]:.2f} / {c[2]:.2f} meV;  P(bracketed) = {hh['p_bracketed']:.2f}")
+    if len(keep) >= 2:
+        ex = linear_extrapolation([(r["n"], r["dg"], r["err"]) for r in keep], a.err_scale, a.mc)
+        if ex and "n_star" in ex: print(f"EXTRAPOLATION (straight line dg(n) = {ex['a']:.0f} + {ex['b']:.0f} n): minimum at n* = {ex['n_star']:.3f}, depth {ex['depth_O']:.1f} meV/O = {ex['depth_atom']:.2f} meV/atom" + (f";  16/50/84 %: n* {ex['n_star_ci'][0]:.3f}/{ex['n_star_ci'][1]:.3f}/{ex['n_star_ci'][2]:.3f}, depth/atom {ex['depth_atom_ci'][0]:.2f}/{ex['depth_atom_ci'][1]:.2f}/{ex['depth_atom_ci'][2]:.2f};  P(slope > 0) = {ex['p_positive_slope']:.2f}" if "n_star_ci" in ex else ""))
+        elif ex: print(f"EXTRAPOLATION: straight-line dg(n) has slope {ex['b']:.0f} meV/H per unit n (P(slope > 0) = {ex['p_positive_slope']:.2f}): no minimum implied")
     print("Free-energy errors are statistical only; completion does not establish convergence. Flagged points are marked, melted ones excluded (--strict drops all flagged).")
 
 
