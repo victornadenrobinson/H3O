@@ -28,7 +28,7 @@ class Raster:
         gx, gy = np.meshgrid(np.arange(x0, x1 + 1), np.arange(y0, y1 + 1)); dx = (gx - cx) / rpx; dy = (gy - cy) / rpx; r2 = dx * dx + dy * dy; mask = r2 <= 1.0
         dz = np.sqrt(np.maximum(0.0, 1.0 - r2)); nl = np.sqrt(dx * dx + dy * dy + dz * dz) + 1e-9; nx, ny, nz = dx / nl, -dy / nl, dz / nl
         diff = np.maximum(0.0, nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2]); spec = np.maximum(0.0, nx * HALF[0] + ny * HALF[1] + nz * HALF[2]) ** 28 * 0.45
-        inten = (np.minimum(1.0, 0.30 + 0.70 * diff) if lit else 0.85) * fade; spec = spec if lit else spec * 0.0; pz = depth - rA * dz                                      # surface depth: nearer than the centre
+        inten = (np.minimum(1.0, 0.30 + 0.70 * diff) if lit else np.full_like(diff, 0.85)) * fade; spec = spec if lit else spec * 0.0; pz = depth - rA * dz                                      # surface depth: nearer than the centre
         zs = self.z[y0:y1 + 1, x0:x1 + 1]; ok = mask & (pz < zs); zs[ok] = pz[ok]
         shaded = np.minimum(255.0, color[None, None, :] * inten[:, :, None] + 255.0 * spec[:, :, None] * fade)
         sub = self.rgb[y0:y1 + 1, x0:x1 + 1]; sub[ok] = shaded[ok]; self.hit[y0:y1 + 1, x0:x1 + 1] |= ok
