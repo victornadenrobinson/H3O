@@ -37,18 +37,20 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e5    n n $(upd 5 n 1) $W frozen 0.003 1";;
   lc)  W=${2:-10 10 1}   # LEARNING CURVE (test A5): best frozen recipe (lr 3e-3, replay tier), the SAME number of updates (5 epochs of the full tier) for every fraction; 100 % = the existing mn_f_lr3e-3_e5 run. Score all on runs/valid_n.extxyz.
        for p in 25 50 75; do echo "bash mlp_pipeline/ft_one.sh lc_mn$p mn$p mn $(upd 5 mn 1) $W frozen 0.003 1"; done;;
-  long) W=${2:-10 10 1}   # OVERNIGHT, LOW learning rates (lr 1e-3 gained 17 % going from 5 to 20 epochs, lr 3e-3 only 6 %): where does a long low-lr frozen run end up? 50 epochs of the replay tier ~14 h at 2.3 updates/s, batch 1.
-       # 3e-3 is the high-lr reference for the saturation claim; the last line is a LONG UNFROZEN run (low lr, large cells included, 80 GB GPU) to see whether more capacity + length beats the frozen plateau. Separate runs, not extensions (the cosine schedule follows the total).
-       # submit with TIME=24:00:00 bash mlp_pipeline/ft_submit.sh ft_long.sh
+  long) W=${2:-10 10 1}   # OVERNIGHT. Finished 20-epoch runs: lr 1e-3 16.5, 3e-3 14.5, 1e-2 13.9 meV/atom (5 epochs: 19.9, 16.2, 15.5): longer helps ~10-17 %, higher lr is better, no overfitting. So: 50 epochs at 1e-3 (the low-lr question), 3e-3 and 1e-2; plus a long UNFROZEN run with large cells (80 GB, low lr).
+       # ~14 h each at 2.3 updates/s (about 6 h if the node is as fast as the e20 runs: 4.7-5.5 updates/s).  submit with TIME=24:00:00 bash mlp_pipeline/ft_submit.sh ft_long.sh
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-3_e50      mn mn $(upd 50 mn 1) $W frozen 0.001 1"
-       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-4_e50      mn mn $(upd 50 mn 1) $W frozen 0.0003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e50      mn mn $(upd 50 mn 1) $W frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-2_e50      mn mn $(upd 50 mn 1) $W frozen 0.01 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr1e-4_e20  mn mn $(upd 20 mn 1) $W naive 0.0001 1";;
+  hi)  W=${2:-10 10 1}   # is lr 1e-2 the top? quick 5- and 20-epoch runs at 3e-2
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-2_e5   mn mn $(upd 5 mn 1) $W frozen 0.03 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-2_e20  mn mn $(upd 20 mn 1) $W frozen 0.03 1";;
   cap) W=${2:-10 10 1}   # CAPACITY round (after ft_curves showed frozen train error = test error: capacity-limited, not data-limited). 5 epochs of the replay tier each.
        # (a,b) force-heavier loss, frozen; (c,d) UNFROZEN on the replay tier INCLUDING the 700+ atom cells (80 GB GPU, batch 1; the earlier unfrozen runs excluded them, which made their test error meaningless on pure H)
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e5_F50   mn mn $(upd 5 mn 1) 10 50 1 frozen 0.003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e5_F200  mn mn $(upd 5 mn 1) 10 200 1 frozen 0.003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr1e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0001 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr3e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0003 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap ..." >&2; exit 1;;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap | hi ..." >&2; exit 1;;
 esac
