@@ -5,6 +5,8 @@
 cd "$(dirname "$0")/.."; VALID=${VALID:-runs/valid_n.extxyz}; PY=${PY:-$SCRATCH/grace-env/bin/python}; mkdir -p runs; n=0
 for d in runs/grace/ft_*; do
   name=${d#runs/grace/ft_}; [ -e "$d/seed/1/final_model/saved_model.pb" ] || continue
+  [ -n "${ONLY:-}" ] && case " $ONLY " in *" $name "*) ;; *) continue;; esac      # ONLY="a b c": score just these
+  case " ${SKIP:-} " in *" $name "*) echo "skip $name"; continue;; esac           # SKIP="x y": e.g. runs that are still training
   [ -e "runs/D_$name.csv" ] && [ "${FORCE:-0}" != 1 ] && { echo "have D_$name"; continue; }
   echo "scoring $name"; $PY mlp_pipeline/baseline_D.py "$VALID" --model "grace-ft:$d/seed/1/final_model" --out "runs/D_$name.csv" 2>&1 | grep -v "tensorflow\|gpu_device\|tensorpotential\|cpu_feature\|rebuild\|absl\|ptxas\|XLA\|StreamExecutor\|cuDNN\|^$\|GRACE-D" > "runs/D_$name.txt"; n=$((n+1))
 done; echo "scored $n new models"
