@@ -29,6 +29,11 @@ def parse(d):
         vals = {k: (float(x), float(y)) for k, x, y in PAIR.findall(tail)}
         pts.append(dict(it=int(it.group(1)) if it else 0, n=int(it.group(2)) if it else 0, t=(t - t0).total_seconds() / 3600.0 if (t and t0) else float("nan"), v=vals, init=("INITIAL" in head)))
     if not pts: return None
+    starts = [i for i, p in enumerate(pts) if p["init"]]
+    if len(starts) > 1:                                    # the log holds several training passes (a restart appended to the same log.txt): use the LAST pass, time zero at its INITIAL
+        print(f"WARNING {name}: {len(starts)} training passes in log.txt; plotting the last one only")
+        pts = pts[starts[-1]:]; t_ref = pts[0]["t"]
+        for p in pts: p["t"] = p["t"] - t_ref
     return dict(name=name, rec=rec, pts=pts, done=os.path.exists(d + "/seed/1/final_model/saved_model.pb"))
 
 
