@@ -34,7 +34,7 @@ if True:
         try: Sd = np.asarray(f.get_stress()) * EV_A3_GPA; Sm = np.asarray(g.get_stress()) * EV_A3_GPA; s_rmse = float(np.sqrt(((Sd - Sm) ** 2).mean())); s_rms = float(np.sqrt((Sd ** 2).mean()))   # Voigt 6, GPa
         except Exception: s_rmse = s_rms = float("nan")
         s = str(f.info.get("db_set", "?")); T = float(f.info.get("T_K", np.nan)); nO = int((f.numbers == 8).sum()); nH = int((f.numbers == 1).sum())
-        rows.append(dict(db_id=f.info.get("db_id", ""), set=s, split=f.info.get("split", ""), T_K=T, nO=nO, nH=nH, natoms=len(f), E_model=Em, F=F, E0=E0, E=Ens, ts=Ens - F,
+        rows.append(dict(db_id=f.info.get("db_id", ""), run_id=str(f.info.get("run_id", "")), host=str(f.info.get("host_source", "")) + "#" + str(f.info.get("host_frame", "")), n_add=f.info.get("n_add", ""), method=str(f.info.get("method", "")), set=s, split=f.info.get("split", ""), T_K=T, nO=nO, nH=nH, natoms=len(f), E_model=Em, F=F, E0=E0, E=Ens, ts=Ens - F,
                          D_F=F - Em, D_E0=E0 - Em, D_E=Ens - Em, f_rmse=float(np.sqrt(((Fd - Fm) ** 2).mean())), f_rms=float(np.sqrt((Fd ** 2).mean())), s_rmse_GPa=s_rmse, s_rms_GPa=s_rms))
         bar.update(n, f"set {s}  {len(f)} atoms")
 bar.done("all frames scored")
