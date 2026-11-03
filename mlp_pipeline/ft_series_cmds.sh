@@ -37,5 +37,11 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e5    n n $(upd 5 n 1) $W frozen 0.003 1";;
   lc)  W=${2:-10 10 1}   # LEARNING CURVE (test A5): best frozen recipe (lr 3e-3, replay tier), the SAME number of updates (5 epochs of the full tier) for every fraction; 100 % = the existing mn_f_lr3e-3_e5 run. Score all on runs/valid_n.extxyz.
        for p in 25 50 75; do echo "bash mlp_pipeline/ft_one.sh lc_mn$p mn$p mn $(upd 5 mn 1) $W frozen 0.003 1"; done;;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc ..." >&2; exit 1;;
+  long) W=${2:-10 10 1}   # OVERNIGHT: how far does a long frozen run go, and does it ever overfit? 50 epochs of the replay tier (~14 h at 2.3 updates/s, batch 1); the cosine schedule is set by the total, so these are separate runs, not extensions.
+       # submit with TIME=24:00:00 bash mlp_pipeline/ft_submit.sh ft_long.sh
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e50     mn mn $(upd 50 mn 1) $W frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-3_e50     mn mn $(upd 50 mn 1) $W frozen 0.001 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e50_F50 mn mn $(upd 50 mn 1) 10 50 1 frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e50      n n $(upd 50 n 1) $W frozen 0.003 1";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long ..." >&2; exit 1;;
 esac
