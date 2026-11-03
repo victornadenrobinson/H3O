@@ -1,5 +1,10 @@
 # Environments (one per MLP; they conflict, so keep them separate)
 
+For the **existing Perlmutter GRACE environment**, use the `GRACE_ENV`/`PY` setup
+and PWidom analysis commands in [RUNNING.md](../RUNNING.md#environment).
+Reinstalling packages is not required to run those diagnostics. The installation
+recipes below are for creating separate model environments when needed.
+
 Versions below are starting points from memory, not verified: check each package's current install docs.
 
 ```bash

@@ -1,0 +1,290 @@
+# Project memory
+
+Tool-agnostic orientation, 2026-10-31, checkout 7a8de56. Supplements rather than
+replaces HANDOFF.md, PROJECT.md, or any Claude instructions. No AGENTS.md or
+CLAUDE.md was found in this workspace. Read HANDOFF.md, CURRENT_ISSUES.md section
+0, SOLUBILITY_VALIDATION.md, CODEBASE.md and MU_METHODS.md before scientific work.
+Historical queue states and branch recipes in those documents are not live state;
+inspect the current checkout and jobs before pulling, restarting, or submitting.
+
+Current campaign correction: the user is running proxy fitting on PERLMUTTER,
+in `/pscratch/sd/v/victornr/H3O`, interactive Slurm allocation 60617748 on
+nid200360 (user-reported). Young recipes below are historical/other workflows,
+not this campaign. User has GPU allocation hours and reports a free GPU overrun
+queue; do not infer its submission flags without checking Perlmutter's setup.
+Uploaded terminal output confirms label 109/109, 13,625 single points in 29.2 min,
+then both fits saved to runs/pwidom_fit/proxy_{ice,H}.json and .png; PROD=0
+stopped after fitting, with no production comparison. Ice: 90 sources, 13 wholly
+held out; selected held-out gap 1.94 -> 1.57 kT, pooled Kish .084 -> .191.
+Pure H: 19 sources, 3 wholly held out; .50 -> .47 kT, Kish .848 -> .861.
+Overlap diagnostics worsen (ice held-out .711 -> .983, H .346 -> .692), and
+some rich-H ice states regress. Treat this as a candidate proxy, not production
+validation: probes were selected by the starting proxy. First inspect fitted
+short-range curves and then test new-proxy sampling on independent held-out
+frames, only after user approval. Do not relabel completed sources by default.
+This is remote terminal evidence; run artifacts remain absent from this cloud
+checkout. Live allocation state after the reported completion is unknown.
+The subsequent attempted 500 GPa / 3000 K launch stopped at missing ice stage0;
+no MD started. The state may be new. Use the new perlmutter_pwidom.sh
+`--inspect-eos <inventory.csv>` report to check exact-bin DFT coverage, then
+provide reviewed volume/B inputs with `--state-json` rather than assuming TDI
+metadata exists. Four-GPU launcher/status commands are in mlp_pipeline/README.md.
+Fresh Perlmutter allocations may have no python on PATH. Both wrappers now use
+perlmutter_python.sh: explicit PY, GRACE_ENV directory, active interpreters,
+known scratch/local/conda paths, then `conda run -n grace-env`. H3O_ENV_INIT can
+source the user's existing site module/activation recipe. No installation or
+guessed module versions. The actual Perlmutter environment path is still unknown
+in this cloud checkout; `(grace-env)` alone is not its location.
+Update: user terminal evidence now confirms `/pscratch/sd/v/victornr/grace-env/bin/python`
+is discovered successfully. Exact-3000K DFT EOS counts are 382 H2O, 178 H2.25O,
+109 pure H. The printed volumes/B values are saved with provenance in
+envs/pwidom_500GPa_3000K.json. Use `--state-json` with that file, then --dry-run
+before the short GPU scan. Environment discovery is verified remotely for the
+analysis dependencies; a full four-GPU scan remains unverified here.
+New output directories retain the existing `runs/` layout and include a small
+RUN_ORIGIN.txt identifying Perlmutter/hostname/allocation. perlmutter-runs/ was
+empty in the user's listing and is not the active output root. The known parent
+for extension is runs/pwidom_pm_20261031_105811 (500 GPa / 3000 K), not an
+unspecified 400-GPa directory. User later pasted commands from Young's
+mmm0037@login21:/lustre/scratch/mmm0037/H3O shell: distinguish that from the
+victornr Perlmutter GPU shell before giving run commands. A 3-ps + .5-ps
+extension is roughly 40-45 min MD at the observed rate, not a ten-minute scan;
+the proposed 60-min cap was supplied as a dry-run only, not a launched job.
+User's Perlmutter dry-run for the 3-ps + .5-ps 500-GPa extension subsequently
+passed, including all four fingerprinted source caches; extension1 subsequently
+completed (reported results below). The quick throughput benchmark is
+perlmutter_bench.sh: default pwidom MD packing/probe-batch screening, or explicit
+--workflow tdi for lambdas, followed by four-GPU validation. Run only on idle
+allocated GPUs. Results/logs stay under runs/bench_*/ with RUN_ORIGIN.txt.
+Two real H2O A100 benchmark reports are summarized below.
+User confirmed Perlmutter dry-run resolves ft_m2/seed/1/final_model and launched
+the four-GPU scan in runs/pwidom_pm_20261031_105811, which subsequently completed.
+The launcher can stream full
+prefixed logs, GPU utilization/memory and progress sidecars with stage-specific
+ETA. It does not retrofit an already running process. Status --follow or tail -F
+views existing logs without stopping the calculation. Project continuity lives
+in Git plus external results storage, not an assumed shared live cloud machine.
+Update: 500-GPa/3000-K run completed, allocation 60620660. All three ice-host
+estimates flagged UNCONVERGED; H2O Kish .021, H2.083O .146, H2.25O .097; pure-H
+Kish .530 and insertion/deletion agree. Reported robust dg -1146.5 +-89.6,
+-738.5 +-105.0, +185.7 +-109.4 meV/H. Small table committed as
+docs/data/pwidom_pm_500GPa_3000K_reported.csv. Completed extension1's user-reported
+values are in docs/data/pwidom_pm_500GPa_3000K_extension1_reported.csv; its
+comparison figure is docs/figures/pwidom_pm_500GPa_3000K_extension1_comparison.png.
+Extension1 contains the original frames, so these curves are not independent.
+Extension2 extended the original parent and was killed during MD by allocation
+60620660's time limit; no completed extension2 estimate was reported.
+For a four-composition scan, `perlmutter_pwidom.sh --extra-h 5 11 16 22
+--state-json envs/pwidom_500GPa_3000K.json --reference-run
+runs/pwidom_500GPa_3000K_extension1` uses 108 O, one worker/GPU and the saved
+pure-H reference, with matching P/T/model checks. The counts give n =
+0.046296, 0.101852, 0.148148, 0.203704; volumes use existing per-O interpolation.
+It accepts only four distinct positive integer counts within the H2.25O anchor.
+The reference result is snapshotted in the manifest; its uncertainty is shared.
+Use proxy_compare.py's cached-frame replay for old/new Kish comparisons, not
+separate MD ensembles. Probe-stage memory reached 50.5/80 GiB for H2.25O, so
+low MD-stage memory alone is insufficient for admitting concurrent workers.
+Custom scans support `--extend-run`. Add `--in-place` (omit `--out`) to archive
+completed outputs under the same directory's `_history/<timestamp>_<id>/`, hold
+an exclusive directory lock and replace managed outputs with the combined run.
+Old-proxy replays are archived/invalidate with old frames. Backup completes
+before managed files are removed; historical JSON/command paths are relocated.
+Interrupted extensions remain incomplete; recover from the completed parent
+archive into a fresh directory. Keep referenced history directories. Periodic
+MD checkpoints remain unimplemented; in-place mode is not exact MD restart.
+pwidom_formation.py makes a
+provisional integral (not a validated equilibrium hull), with conservative
+maximal-positive-correlation statistical sigma bounds; sampling/model bias omitted.
+Old-proxy 500-GPa/3000-K production Kish remains unknown. proxy_compare.py plots
+the actual pair curves when the fitted JSON files are present remotely, and
+optionally writes (does not run) a cached-frame baseline replay script.
+User requested a fresh 400-GPa/3000-K ten-minute scan. --inspect-eos CSV
+--P 400 --save-eos JSON now saves complete exact-bin EOS inputs without GPU work;
+then --state-json JSON --P 400 starts the usual fresh scan. --candidate-dir DIR
+optionally queues bounded paired extxyz trials for DFT review (no VASP submission
+or automatic training). Low Kish/proxy mismatch is not GRACE uncertainty.
+--extend-run DIR adds a restarted, re-equilibrated MD segment from old endpoint
+positions in a fresh directory and recomputes estimates on old+new frames.
+This is not exact continuation: prior caches contain no velocity/integrator state.
+More GRACE-only methods cannot independently establish model accuracy: prioritized
+check is matched DFT host/host+H in ice and pure H, then model-to-DFT free-energy
+correction with overlap diagnostics. VASP 5.4.4 CPU modules exist per user's list;
+training OUTCAR/PAW/smearing/settings must be audited before preparing a job.
+
+## Layout and workflows
+
+Real Perlmutter benchmark results (2026-10-31) are summarized in
+docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md: four MD workers/GPU gave
+77–80 total MD steps/s across four GPUs (~9.8 GiB/GPU). Probe batches 8 and 16
+plateaued near 9 structures/s/GPU, using ~24.5 vs 40.5 GiB. Batch 8 is the
+earlier provisional choice for the tested H2O cell; this is not a
+validated memory budget for every composition or a production task scheduler.
+Latest benchmark continuation completes bench_20261031_133031: eight MD
+workers/GPU gave 79.98 steps/s/node, similar to four-worker runs; probe batch 4
+gave 34.99 structures/s/node with 8.5 GiB/GPU. Prefer four MD workers and probe
+batch 4 as efficient H2O starting points; batches 4/8/16 have similar throughput,
+but memory grows sharply. This supersedes the provisional batch-8 suggestion.
+All three reports/plot are under docs/status/PERLMUTTER_BENCHMARK_2026-10-31.md
+and docs/figures/perlmutter_pwidom_benchmarks_20261031.png. Plotting command:
+mlp_pipeline/tdi/plot_pwidom_benchmark.py (benchmark dirs, transcripts or CSV).
+User favors multiple independent MD trajectories per composition feeding one
+probe worker/GPU. Fixed probe batching bounds per-call VRAM as total snapshots
+grow, but current all-structures-in-RAM preparation scales CPU memory with total
+trials. Replica pooling/streaming is not implemented. Pool only compatible
+ensembles within each composition and deduplicate shared extension parents;
+different compositions may share a queue, not one chemical-potential estimate.
+
+Completed nscan1 (allocation 60626365) adds extra-H counts 5/11/16/22:
+dg=-628.7/-355.2/+129.3/+414.7 meV/H, errors 37.5/73.3/59.2/59.1,
+Kish .097/.067/.071/.042. Hplus5 has no scan flags (not proof of convergence);
+others unconverged, Hplus22 low Kish. Combined CSV/figure use extension1 endpoints
+and its shared pure-H reference; the nonmonotonic .083/.102 points show unresolved
+sampling sensitivity. New pasted telemetry reports 40 GiB/GPU, 2.5 GiB during MD
+and 26.5 GiB during probes; do not assume every allocation has 80-GiB devices.
+`pwidom_telemetry.py` plots sampled memory/utilization/stage progress with stage
+shading from new telemetry.jsonl or saved compact transcripts. New launches
+record every five seconds, no extra model calls. `pwidom_convergence.py` uses
+saved grouped works and pressure frames for cumulative-production-time μ/Δμ,
+evaluated trial counts and Kish weight counts; no Widom accept/reject moves.
+Running curves cannot be recovered from final reported numbers alone.
+
+- Top-level `RUNNING.md` is the terminal quick reference, with Perlmutter/Young
+  environment paths, scan/extension commands and links to other calculation
+  entry points. Keep it updated when command interfaces change. Extensions use
+  fresh output directories by default, or `--in-place` with a completed-parent
+  archive and an exclusive lock. Checkpointed TDI restarts differ.
+
+- Utilization distinction: current pwidom scans have one host process/GPU,
+  sequential host and host+H MD, then batched single points; **no lambda replicas**.
+  The separate TDI throughput benchmark screens multiple independent lambda
+  processes or batched replicas per GPU. Free VRAM is not equivalent to idle GPU
+  compute. User's immediate priority is measured GPU/lambda utilization and total
+  lambda-steps/s, not a viewer for the ongoing run. Future launches use a compact
+  terminal table by default; --verbose retains full logs. Prior free energies are
+  labeled prior, and ETA excludes the first positive sample's compilation cost.
+  perlmutter_bench.sh now defaults to --workflow pwidom (direct MD process
+  throughput and independent energy-batch throughput, validated separately).
+  --workflow tdi explicitly selects lambda profiling. A one-worker/GPU VRAM
+  calibration precedes packing; projected memory has a 1.5 safety factor and
+  >=20% device-memory reserve. Unsafe layouts skip rather than intentionally OOM.
+  Actual GPU results are still needed before choosing processes/GPU for a full
+  composition scan. --inspect-eos ... --include-h25 checks the extra H2.5O anchor
+  needed beyond 27 extra H in a 108-O cell. Future pwidom runs save _work.npz
+  arrays for replica pooling; parent/extension overlap must not be double-counted.
+
+- Cluster result snapshots: `docs/status/README.md` indexes source machines and
+  refresh rules. `docs/status/young_tdi_summary_received_2026-10-31.txt` preserves
+  the user's full Young summarize.py paste (actual execution date/node/revision
+  unknown). Refresh periodically after new results or analysis changes; it is
+  not current queue state. Perlmutter results are tracked separately.
+
+- `h3o_mlp/`, `scripts/`: earlier inventory/extraction/benchmark package.
+- `mlp_pipeline/00-03*`, `10_check_snapshots.py`, `11_bundle.py`, `build_all.sh`:
+  DFT inventory -> snapshots -> grouped train/validation tiers s/m/l -> bundle.
+- `mlp_pipeline/04_benchmark.py:get_calc_spec`: shared calculator factory;
+  `grace-ft:runs/grace/ft_m2` resolves a SavedModel below that run directory.
+  Multiple SavedModels are resolved by sorted-first match: inspect the actual export.
+  `grace_make_input.py`, `grace_ft_run.sh`: GRACE training, distinct from proxy fitting.
+- `mlp_pipeline/tdi/toy_fit.py`: DFT force/energy/stress least squares for OO/OH/HH
+  spline pairs; tracked baseline `docs/data/toyfit_t4.json`.
+- `mlp_pipeline/tdi/proxy_fit.py label`: existing host frames -> model single-H
+  insertion differences `U(host+H)-U(host)` at selected/uniform probe sites.
+  `fit`: weighted spline least squares for OH/HH only, with a nuisance intercept;
+  no MD or neural-model training. Default base core/cutoff and OO remain fixed.
+  Separate ice/pure-H fits, state holdouts and frame holdouts; inspect held-out
+  gap std in kT, Kish fraction and overlap diagnostics before production.
+- `mlp_pipeline/tdi/pwidom.py`: proxy-guided Rosenbluth insertion/deletion + BAR;
+  `Model` uses `04_benchmark` and `batched.GraceBatch` for TPCalculator batches.
+  Its first batch self-check compares against individual calculator evaluations.
+  `run --like <stage0.json>` inherits state/model; missing frame cache starts MD.
+  `dg <ice.json> <pure-H.json>` compares pressure-corrected chemical potentials.
+- `mlp_pipeline/tdi/run_real.py`, `young_tdi_par.sh`: restartable ghost-H TDI,
+  stage0 pressures/reference, lambda sampling, collect/summarize/report downstream.
+- `mlp_pipeline/tdi/dft_check.py`, `young_dft_check.sge`: independent VASP checks,
+  including prep-widom. GRACE probe labels are model predictions, not DFT labels.
+- `docs/data/`: small scientific tables; `docs/figures/`: plots; `tests/`: CPU tests.
+
+## Data, logs and fit state
+
+Large files belong in ignored `runs/` or external storage, not public Git history.
+DFT snapshots `runs/train_m.extxyz`, `valid_m.extxyz`; model `runs/grace/ft_m2`;
+cached Widom hosts `runs/pwidom*/pw_*_frames.npz`; TDI `runs/tdi*/`.
+`H3O_RUNS` affects common pipeline helpers; proxy_fit accepts literal paths.
+`young_proxy_fit.sbatch` defaults FIT=runs/pwidom_fit, BASE=docs/data/toyfit_t4.json:
+`*_probes.npz`, `label.log`, `fit_ice.log`, `fit_H.log`, `proxy_ice.json/.png`,
+`proxy_H.json/.png`; outer log `runs/slurm_proxyfit_<jobid>.out` or `runs/proxyfit.log`.
+PROD=1 also evaluates old/new proxies; PROD=0 stops after both fits.
+
+The supplied [32/109], [33/109] lines exactly match proxy_fit.py label output:
+five frames, 120 probes, 125 single points/source, cumulative 4000/4125 calls.
+The 2.21/2.18 kT numbers are STARTING-proxy residual standard deviations, not
+fitted errors or convergence. Filename identifies parent source directory
+`pwidom_k1d` and its frame-file stem; it does not identify the model or command.
+Five frames is consistent with PER_SOURCE=5, or a source with only five frames.
+There are no optimizer checkpoints: each completed source is saved as a probes
+file; unfinished sources rerun. Existing files are skipped by existence alone.
+Labels record source/base-proxy path/temperature/temper, but not complete model,
+fingerprint, seed or invocation provenance. Retain original manifest/order/logs;
+the label RNG seed depends on source index. Never resume blindly or use --force.
+Label loading reconstructs cubic cells from V and does not check saved model
+fingerprints: audit geometry and Hamiltonian before trusting cached sources.
+The shell job lacks pipefail/fail-fast checks, so a failed label stage can be
+followed by a fit on partial files; final job exit alone does not prove completeness.
+Default holdouts match one directory prefix only: check equivalent state copies
+in other source directories for leakage before approving holdout configuration.
+
+Observed here: no runs directory, model, probe archives or fit logs; no local
+Python fitting process or Slurm/SGE clients. Remote job activity/completion and
+actual FIT/MODEL/holdouts cannot be determined from this checkout. Do not submit
+a duplicate. On Young login, inspect `bash mlp_pipeline/jobs_status.sh`,
+`squeue -u "$USER"`, `sacct`, `runs/JOBS_LOG.tsv`, original log and batch script.
+
+## Environments and constraints
+
+Cloud CPU: `cd /workspace/H3O; source /workspace/.venvs/h3o/bin/activate`;
+set MPLCONFIGDIR=/workspace/.cache/matplotlib, XDG_CACHE_HOME=/workspace/.cache,
+OMP_NUM_THREADS=1 and OPENBLAS_NUM_THREADS=1. Python 3.11.17; baseline 14 tests
+passed during onboarding. Commands: `python -m pytest tests -q` and
+`python mlp_pipeline/tdi/solubility_check.py --selftest`.
+Four single-point toy energies through pwidom.Model were checked this session;
+three insertion differences match proxy_energy with the same toyfit_t4 potential
+to 1e-10. This tests evaluator plumbing only, not physical accuracy or a GRACE fit.
+TensorFlow, tensorpotential, matscipy, nvidia-smi and model exports are absent here.
+User reports prior TF 2.20/TPCalculator four-structure GPU inference succeeded;
+that result is not verification of this instance or the fitting configuration.
+
+Young GPU: `/lustre/scratch/mmm0037/H3O`, Slurm, `~/grace-venv/bin/python`;
+separate model environments. Young CPU: SGE/RHEL7, source young_cpu_env.sh;
+GPU RHEL9 venv is incompatible; request all 40 cores for exclusive CPU nodes.
+Perlmutter data: `/pscratch/sd/v/victornr/H3O`, nersc-python; raw data under
+`~/work/tdi/H3O` and `~/work/quartz-work/tdi/h3o`. Scratch is purgeable.
+Use existing isolated checkout; no automatic worktree, PR, push or job submission.
+Preserve Claude/project guidance; do not overwrite results or scientific settings.
+Obtain user go-ahead for expensive runs. Validate paths/model/source provenance first.
+Report meV and kT, use 'lambda values', dt=0.5 fs; count insertion per added H.
+DFT energy is TOTEN; virial excludes ionic kinetic pressure; avoid double-counting
+N kT/V. Keep model error, finite sampling and statistical errors distinct.
+
+
+## GRACE–DFT validation update, 2026-11-01
+
+Read [the complete numerical audit](status/GRACE_DFT_AUDIT_2026-11-01.md) before
+interpreting solubility or declaring the model validated. It archives all supplied
+normal/pair/original-label/benchmark results, earlier 44-result mu/dG export, and
+raw logs. H2.25O ordinary 300-GPa/3000-K errors are substantial: raw energy
+RMSE140.87meV/atom, force componentRMSE1.163eV/Angstrom. The older21.684725
+meV/atom benchmark is MAE AFTER fitted elemental offsets, not raw RMSE. All20
+paired GRACE dU reproduce within0.07meV/H; pair selection is deliberately biased.
+Do not add their mean residual to a chemical potential or infer no H solubility.
+
+DFT jobs60649379/380/381 were submitted at500/400/600GPa,5000K, respectively,
+2nodes256tasks48h,4systems64ranks each, one replica. Later pasted worker tails
+confirm all12 workers advancing in host equilibration, with729-H reservoirs and
+warm=True calls. First-replica500-GPa data remain under the original `_1` root;
+400/600 use `_4x64`. Checkpoints242–528/3000 host steps,0/25 production frames,
+are normal before2000-step equilibration finishes. No completed physical DFT
+PWidom/BAR mu/dG has been supplied. Recent H-call medians61–70s imply about
+97–111h remaining MD BEFORE trials if unchanged, not48h guaranteed completion.
+Current state is not a live queue observation. Keep systematic model, sampling,
+finite-size/k-point, phase and numerical errors separate. No retraining/DFT
+free-energy result or SI-phase stability is established by these tails alone.

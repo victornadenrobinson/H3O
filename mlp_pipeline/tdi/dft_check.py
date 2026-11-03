@@ -521,27 +521,32 @@ def analyze_static(a, man, rows):
         pr("wrote", os.path.join(a.o, "static_results.csv"))
 
 
-ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest="cmd", required=True)
-for name in ("prep-probe", "prep-fep"):
-    p = sp.add_parser(name); p.add_argument("run"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
-    p.add_argument("-o", required=True); p.add_argument("--frames", type=int, default=2 if name == "prep-probe" else 20); p.add_argument("--seed", type=int, default=0)
-    if name == "prep-probe":
-        p.add_argument("--dirs", type=int, default=2); p.add_argument("--elements", nargs="*", default=["H"]); p.add_argument("--r", type=float, nargs="*", default=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2])
-    else:
-        p.add_argument("--h-run", default=None, help="pure-H run (<dir>/<tag>) for the G_H correction")
-p = sp.add_parser("prep-static"); p.add_argument("base", help="h3o_static.py output directory (contains P<P>/ or the *_relaxed.extxyz files)"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
-p.add_argument("--P", type=float, nargs="+", required=True, help="pressures (GPa) as run by h3o_static.py"); p.add_argument("--scales", type=float, nargs="+", default=[1.0], help="linear cell scalings (e.g. 0.98 1.0 1.02: three volumes, E(V) fit, enthalpy at the target P)")
-p.add_argument("--tel", type=float, default=1000.0, help="electronic temperature (K) of the Fermi smearing, ISMEAR=-1: a nearly cold static calculation (the MD template's SIGMA = kB T of 5000 K+ is NOT used)")
-p.add_argument("--kspacing", type=float, default=0.25, help="k-mesh spacing in 1/A (Gamma-centred; the MD template mesh is for 250-atom cells)"); p.add_argument("--only", nargs="*", default=None, help="only structures whose name contains one of these (iceX, Href, H3O, H2.5O ...)")
-p.add_argument("--model", default=None, help="MLP for analyze (default grace-ft:runs/grace/ft_m2)"); p.add_argument("-o", required=True)
-p = sp.add_parser("prep-selftest"); p.add_argument("--template", required=True); p.add_argument("-o", required=True); p.add_argument("--size", choices=["small", "template", "both"], default="both", help="small = 12-atom fcc H2O cell (fast chain check), template = the template's own cell (cost basis; 100s of atoms with hard PAW: hours on 8 ranks)"); p.add_argument("--vpa", type=float, default=2.2, help="A^3/atom of the small cell"); p.add_argument("--T", type=float, default=0.0, help="electronic temperature (K) if the template has ISMEAR=-1 (default: its TEBEG)")
-p.add_argument("--model", default=None)
-p = sp.add_parser("prep-widom"); p.add_argument("frames", help="pwidom.py frames file <out>/<tag>_frames.npz"); p.add_argument("--template", required=True); p.add_argument("-o", required=True)
-p.add_argument("--proxy", default="none", help="as pwidom.py: a toy_fit.py json, 'toyice' or 'none'"); p.add_argument("--K", type=int, default=2000); p.add_argument("--sel", type=int, default=3, help="Rosenbluth-sampled sites per frame")
-p.add_argument("--frames-n", type=int, default=4, help="host frames used"); p.add_argument("--model", default=None, help="MLP: adds the tier of sites where the MLP energy is lowest"); p.add_argument("--top", type=int, default=50)
-p.add_argument("--device", default="cuda"); p.add_argument("--L", type=float, default=0.0, help="cubic cell edge (A) if the frames are not from a cubic build_host cell"); p.add_argument("--seed", type=int, default=0)
-p = sp.add_parser("audit"); p.add_argument("o", help="a prepared directory (dirs.txt)"); p.add_argument("--template", required=True); p.add_argument("--train-outcar", default=None); p.add_argument("--new-outcar", default=None)
-p = sp.add_parser("status"); p.add_argument("o"); p.add_argument("--all", action="store_true", help="also list pending directories"); p.add_argument("--stale", type=float, default=900.0, help="seconds without output after which a started point counts as stopped")
-p = sp.add_parser("analyze"); p.add_argument("o"); p.add_argument("--model", default=None); p.add_argument("--device", default="cuda")
-a = ap.parse_args()
-{"prep-probe": prep_probe, "prep-fep": prep_fep, "prep-static": prep_static, "prep-selftest": prep_selftest, "prep-widom": prep_widom, "status": do_status, "audit": do_audit, "analyze": do_analyze}[a.cmd](a)
+def main():
+    ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("prep-probe", "prep-fep"):
+        p = sp.add_parser(name); p.add_argument("run"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
+        p.add_argument("-o", required=True); p.add_argument("--frames", type=int, default=2 if name == "prep-probe" else 20); p.add_argument("--seed", type=int, default=0)
+        if name == "prep-probe":
+            p.add_argument("--dirs", type=int, default=2); p.add_argument("--elements", nargs="*", default=["H"]); p.add_argument("--r", type=float, nargs="*", default=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2])
+        else:
+            p.add_argument("--h-run", default=None, help="pure-H run (<dir>/<tag>) for the G_H correction")
+    p = sp.add_parser("prep-static"); p.add_argument("base", help="h3o_static.py output directory (contains P<P>/ or the *_relaxed.extxyz files)"); p.add_argument("--template", required=True, help="a training DFT run directory with INCAR, KPOINTS, POTCAR and POSCAR")
+    p.add_argument("--P", type=float, nargs="+", required=True, help="pressures (GPa) as run by h3o_static.py"); p.add_argument("--scales", type=float, nargs="+", default=[1.0], help="linear cell scalings (e.g. 0.98 1.0 1.02: three volumes, E(V) fit, enthalpy at the target P)")
+    p.add_argument("--tel", type=float, default=1000.0, help="electronic temperature (K) of the Fermi smearing, ISMEAR=-1: a nearly cold static calculation (the MD template's SIGMA = kB T of 5000 K+ is NOT used)")
+    p.add_argument("--kspacing", type=float, default=0.25, help="k-mesh spacing in 1/A (Gamma-centred; the MD template mesh is for 250-atom cells)"); p.add_argument("--only", nargs="*", default=None, help="only structures whose name contains one of these (iceX, Href, H3O, H2.5O ...)")
+    p.add_argument("--model", default=None, help="MLP for analyze (default grace-ft:runs/grace/ft_m2)"); p.add_argument("-o", required=True)
+    p = sp.add_parser("prep-selftest"); p.add_argument("--template", required=True); p.add_argument("-o", required=True); p.add_argument("--size", choices=["small", "template", "both"], default="both", help="small = 12-atom fcc H2O cell (fast chain check), template = the template's own cell (cost basis; 100s of atoms with hard PAW: hours on 8 ranks)"); p.add_argument("--vpa", type=float, default=2.2, help="A^3/atom of the small cell"); p.add_argument("--T", type=float, default=0.0, help="electronic temperature (K) if the template has ISMEAR=-1 (default: its TEBEG)")
+    p.add_argument("--model", default=None)
+    p = sp.add_parser("prep-widom"); p.add_argument("frames", help="pwidom.py frames file <out>/<tag>_frames.npz"); p.add_argument("--template", required=True); p.add_argument("-o", required=True)
+    p.add_argument("--proxy", default="none", help="as pwidom.py: a toy_fit.py json, 'toyice' or 'none'"); p.add_argument("--K", type=int, default=2000); p.add_argument("--sel", type=int, default=3, help="Rosenbluth-sampled sites per frame")
+    p.add_argument("--frames-n", type=int, default=4, help="host frames used"); p.add_argument("--model", default=None, help="MLP: adds the tier of sites where the MLP energy is lowest"); p.add_argument("--top", type=int, default=50)
+    p.add_argument("--device", default="cuda"); p.add_argument("--L", type=float, default=0.0, help="cubic cell edge (A) if the frames are not from a cubic build_host cell"); p.add_argument("--seed", type=int, default=0)
+    p = sp.add_parser("audit"); p.add_argument("o", help="a prepared directory (dirs.txt)"); p.add_argument("--template", required=True); p.add_argument("--train-outcar", default=None); p.add_argument("--new-outcar", default=None)
+    p = sp.add_parser("status"); p.add_argument("o"); p.add_argument("--all", action="store_true", help="also list pending directories"); p.add_argument("--stale", type=float, default=900.0, help="seconds without output after which a started point counts as stopped")
+    p = sp.add_parser("analyze"); p.add_argument("o"); p.add_argument("--model", default=None); p.add_argument("--device", default="cuda")
+    a = ap.parse_args()
+    {"prep-probe": prep_probe, "prep-fep": prep_fep, "prep-static": prep_static, "prep-selftest": prep_selftest, "prep-widom": prep_widom, "status": do_status, "audit": do_audit, "analyze": do_analyze}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()

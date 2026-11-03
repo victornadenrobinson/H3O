@@ -41,6 +41,9 @@ def model_fingerprint(spec):
     toyice: the TOYICE_FIT file. Cached MD frames and pressures belong to ONE Hamiltonian: another model's frames are not an equilibrium ensemble of this one."""
     import hashlib
     kind, _, rest = spec.partition(":"); h = hashlib.sha256(kind.encode())
+    if kind == "vasp":
+        from tdi.vasp_backend import fingerprint
+        return fingerprint(rest)
     if kind.endswith("-ft") and rest and os.path.exists(rest):
         root = rest if os.path.isdir(rest) else os.path.dirname(rest)
         for f in ([rest] if os.path.isfile(rest) else sorted(os.path.join(d, x) for d, _, fs in os.walk(rest) for x in fs))[:200]:
@@ -110,9 +113,33 @@ class Model:
             from tdi.batched import GraceBatch
             self.gb = GraceBatch(self.calc)
 
-    def energies(self, structs):
+    def energies(self, structs, progress=None):
         out = []
-        for i in range(0, len(structs), self.batch):
+        cache = getattr(self, "energy_checkpoint", None)
+        if cache:
+            import hashlib
+            from tdi.pwidom_checkpoint import atomic_npz
+            digest = hashlib.sha256(str(self.checkpoint_model_fp).encode())
+            for at in structs:
+                for array in (at.numbers, at.positions, at.cell.array, at.pbc):
+                    digest.update(np.ascontiguousarray(array).tobytes())
+            fingerprint = digest.hexdigest()
+            source = getattr(self, "energy_resume", None)
+            if os.path.exists(cache) and not (getattr(self, "resume_in_place", False) and source and os.path.realpath(cache) == os.path.realpath(source)):
+                raise ValueError(f"Energy checkpoint exists: {cache}; choose fresh output")
+            if source and os.path.isfile(source):
+                with np.load(source, allow_pickle=False) as z:
+                    if str(z["fingerprint"]) != fingerprint:
+                        raise ValueError("Single-point checkpoint model/structures mismatch")
+                    values = z["energies"]
+                    if values.ndim != 1 or len(values) > len(structs) or not np.isfinite(values).all():
+                        raise ValueError("Invalid single-point checkpoint energies")
+                    out = list(values)
+                print(f"RESUME single points: {len(out)}/{len(structs)} saved energies", flush=True)
+            atomic_npz(cache, fingerprint=fingerprint, energies=np.asarray(out))
+        if progress:
+            progress.update("single points", 0, len(structs), "structures", force=True)
+        for i in range(len(out), len(structs), self.batch):
             part = structs[i:i + self.batch]; self.ncalls += 1
             if self.gb is not None:
                 if not getattr(self, "checked", False):   # batched vs single calls once, on the first structures (raises above tolerance: rerun with --batch 1)
@@ -121,24 +148,46 @@ class Model:
             else:
                 for at in part:
                     at.calc = self.calc; out.append(float(at.get_potential_energy())); at.calc = None
+            if cache:
+                atomic_npz(cache, fingerprint=fingerprint, energies=np.asarray(out))
+            if progress:
+                progress.update("single points", len(out), len(structs), "structures")
         return np.array(out)
 
 
 def md_frames(model, at0, a, seed, label):
     """free NVT Langevin MD with the real model (no springs): positions every --every-fs after --equil-ps, and the MLP pressure (incl. kinetic) at each frame"""
+    if getattr(a, "_checkpoint_prefix", None):
+        from tdi.pwidom_checkpoint import md_frames as checkpointed_md
+        return checkpointed_md(model, at0, a, seed, label)
     from ase.md.langevin import Langevin
     from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
     from ase import units
     at = at0.copy(); at.calc = model.calc; rng = np.random.default_rng(seed); t0 = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng)
     dyn = Langevin(at, a.dt * units.fs, temperature_K=a.T, friction=0.01, rng=rng)
-    dyn.run(int(a.equil_ps * 1000 / a.dt)); every = max(1, int(round(a.every_fs / a.dt))); nfr = int(a.ps * 1000 / a.every_fs)
+    equil_steps = int(a.equil_ps * 1000 / a.dt)
+    every = max(1, int(round(a.every_fs / a.dt))); nfr = int(a.ps * 1000 / a.every_fs)
+    progress = getattr(a, "_progress", None)
+    if progress and progress.path is not None:
+        progress.update(f"MD {label} equilibration", 0, equil_steps, "steps", force=True)
+        def md_progress():
+            if dyn.nsteps <= equil_steps:
+                progress.update(f"MD {label} equilibration", dyn.nsteps, equil_steps, "steps")
+            else:
+                progress.update(f"MD {label} sampling", dyn.nsteps - equil_steps, nfr * every, "steps")
+        dyn.attach(md_progress, interval=20)
+    dyn.run(equil_steps)
+    if progress:
+        progress.update(f"MD {label} sampling", 0, nfr * every, "steps", force=True)
     pos, P = [], []
     for k in range(nfr):
         dyn.run(every); pos.append(at.positions.copy())
         P.append(-at.get_stress()[:3].mean() * EV_A3_GPA + len(at) * units.kB * a.T / at.get_volume() * EV_A3_GPA)
         if (k + 1) % max(1, nfr // 5) == 0:
             print(f"  MD {label}: {k + 1}/{nfr} frames, P so far {np.mean(P):.1f} GPa, {(time.time() - t0) / 60:.1f} min", flush=True)
+    if progress:
+        progress.update(f"MD {label} sampling", nfr * every, nfr * every, "steps", force=True)
     return np.array(pos), np.array(P)
 
 
@@ -182,28 +231,84 @@ def apply_like(a):
 
 
 def cmd_run(a):
+    from tdi.pwidom_progress import from_environment
+    a._progress = progress = from_environment()
+    progress.update("model loading", force=True)
     if a.like:
         apply_like(a)
     assert a.vpa and a.T and a.P, "--vpa, --T and --P (or --like)"
     from ase import Atoms
     from tdi import refs
+    from tdi.pwidom_checkpoint import atomic_npz
     kT = KB * a.T; tag = a.tag or f"pw_{a.phase}{'' if a.hper == 2.0 or a.phase == 'H' else f'_h{a.hper:g}o'}_{a.P:g}GPa_{a.T:.0f}K"
     os.makedirs(a.out, exist_ok=True); ff = os.path.join(a.out, f"{tag}_frames.npz")
     host = build_host(a); cell = np.asarray(host.cell); V = host.get_volume(); isH = host.numbers == 1; NH = int(isH.sum())
-    model = Model(a.model, a.device, a.batch); rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
-    if os.path.exists(ff):
-        z = np.load(ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
+    if a.extend_from and os.path.exists(ff) and not a.resume_in_place:
+        raise SystemExit("--extend-from requires a fresh output cache; refusing to overwrite/reuse an existing one")
+    if a.resume_from and os.path.exists(ff) and not a.resume_in_place:
+        raise SystemExit("--resume-from requires a fresh output")
+    a._checkpoint_prefix = os.path.join(a.out, tag)
+    if a.resume_in_place and (not a.resume_from or os.path.realpath(a.resume_from) != os.path.realpath(a._checkpoint_prefix)):
+        raise SystemExit("--resume-in-place requires --resume-from matching output/tag")
+    source_ff = a.resume_from + "_frames.npz" if a.resume_from else ff
+    if a.resume_from and not any(os.path.isfile(a.resume_from + suffix) for suffix in
+                                ("_frames.npz", "_host_md.npz", "_full_md.npz")):
+        raise SystemExit("No saved frames/checkpoints for --resume-from; legacy unfinished MD cannot be recovered")
+    model = Model(a.model, a.device, a.batch)
+    if hasattr(model.calc,"temperature") and abs(model.calc.temperature-a.T)>1e-6:
+        raise ValueError("VASP electronic temperature/config must match PWidom T")
+    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
+    if os.path.exists(source_ff):
+        z = np.load(source_ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
         if "model_fp" in z.files:
             if str(z["model_fp"]) != mfp:
                 raise SystemExit(f"{ff}: frames and pressures were made with another Hamiltonian (fingerprint {z['model_fp']} vs {mfp} for {a.model}): they are not an equilibrium ensemble of this model; use another --out or --tag")
         else:
             print(f"WARNING: {ff} has no model fingerprint (made before the check): the model is NOT verified", flush=True)
+        if a.resume_from:
+            if "model_fp" not in z.files or not np.array_equal(z["numbers"], host.numbers) or not np.array_equal(z["cell"], cell):
+                raise SystemExit("Resume requires fingerprinted frames with matching species/cell")
+            from tdi.pwidom_checkpoint import atomic_npz
+            if not a.resume_in_place:
+                atomic_npz(ff, **{k: z[k] for k in z.files})
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
+    elif a.extend_from:
+        with np.load(a.extend_from) as old:
+            required = ("host", "full", "P_host", "P_full", "numbers", "model_fp", "V", "T")
+            if not all(k in old.files for k in required):
+                raise SystemExit("Extension requires complete, fingerprinted host/full frame and pressure arrays")
+            if (str(old["model_fp"]) != mfp or float(old["T"]) != a.T
+                    or abs(float(old["V"]) - V) > 1e-6 * V
+                    or not np.array_equal(old["numbers"], host.numbers)):
+                raise SystemExit("Extension source has different model / T / V / species")
+            previous = {k: np.array(old[k]) for k in ("host", "full", "P_host", "P_full")}
+            for key, n in (("host", len(host)), ("full", len(host)+1)):
+                frames = previous[key]
+                pressures = previous["P_host" if key == "host" else "P_full"]
+                if (frames.ndim != 3 or frames.shape[1:] != (n, 3) or not len(frames)
+                        or len(frames) != len(pressures) or not np.isfinite(frames).all()
+                        or not np.isfinite(pressures).all()):
+                    raise SystemExit(f"Invalid extension source {key} arrays")
+            segment_seed = max(a.seed, int(old["segment_seed"]) if "segment_seed" in old.files else a.seed) + 1009
+            segments = int(old["segments"]) + 1 if "segments" in old.files else 2
+        host0 = host.copy(); host0.positions = previous["host"][-1]
+        full0 = Atoms(numbers=np.r_[host.numbers, 1], positions=previous["full"][-1], cell=cell, pbc=True)
+        print(f"EXTENSION: {a.extend_from}; preserve {len(previous['host'])}/{len(previous['full'])} old frames; add {a.ps:g} ps per ensemble", flush=True)
+        print(f"Restarted segment: new thermal velocities, {a.equil_ps:g} ps re-equilibration; MD seed {segment_seed}. Not exact integrator continuation.", flush=True)
+        nh, nPh = md_frames(model, host0, a, segment_seed, "host")
+        nf, nPf = md_frames(model, full0, a, segment_seed+1, "host + 1 H")
+        fh, Ph = np.concatenate([previous["host"], nh]), np.concatenate([previous["P_host"], nPh])
+        fp, Pf = np.concatenate([previous["full"], nf]), np.concatenate([previous["P_full"], nPf])
+        atomic_npz(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T,
+                 natoms=len(host), numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp,
+                 segment_seed=segment_seed, segments=segments,
+                 parent_frames=os.path.abspath(a.extend_from), additional_ps=a.ps, reequil_ps=a.equil_ps)
+        print("wrote combined old+new frames", ff, flush=True)
     else:
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        np.savez(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp)   # both branches added fields: keep all (cell + model name, and the model fingerprint)
+        atomic_npz(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
         print("wrote", ff, flush=True)
     msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
@@ -220,6 +325,7 @@ def cmd_run(a):
     sfr = list(range(0, len(fh), a.stride)); S0, S1, ins = [], [], []; t_last = time.time()
     def tick(i, ntot, what):   # the proxy stage is CPU work of minutes with no other output: a line every 30 s
         nonlocal t_last
+        progress.update(f"proxy {what}", i, ntot, "frames")
         if time.time() - t_last >= 30:
             t_last = time.time(); el = t_last - t0; print(f"  proxy {what}: frame {i + 1}/{ntot}, {el / 60:.1f} min, ETA {el / (i + 1) * (ntot - i - 1) / 60:.1f} min for this part", flush=True)
     for i_f, f in enumerate(sfr):
@@ -245,6 +351,7 @@ def cmd_run(a):
             ws.append((phi_t, lse(-phik / kT) - np.log(K)))
         dele.append(ws)
     print(f"proxy {a.proxy} K {K}: {len(S1)} insertion and {len(D1)} deletion trials prepared ({(time.time() - t0) / 60:.1f} min); real-model single points: {len(S0) + len(S1) + len(D0) + len(D1)}", flush=True)
+    progress.update("proxy deletions", len(dfr), len(dfr), "frames", force=True)
     lk = os.environ.get("PW_GPU_LOCK")   # several pwidom processes on one GPU (pwidom_scan): only one at a time in the memory-hungry batched single-point stage
     if lk:
         import fcntl
@@ -252,9 +359,17 @@ def cmd_run(a):
         try:
             fcntl.flock(fh_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            progress.update("waiting for single-point GPU lock", force=True)
             print(f"waiting for the single-point GPU lock ({lk}): another host is in its single points", flush=True); fcntl.flock(fh_lock, fcntl.LOCK_EX)
             print(f"got the GPU lock after {(time.time() - t_w) / 60:.1f} min", flush=True)
-    E = model.energies(S0 + S1 + D0 + D1); n0, n1, m0 = len(S0), len(S1), len(D0)
+    energy_label = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
+    energy_suffix = f"_{energy_label}_K{K}_energies.npz"
+    model.energy_checkpoint = a._checkpoint_prefix + energy_suffix
+    model.energy_resume = a.resume_from + energy_suffix if a.resume_from else None
+    model.resume_in_place = a.resume_in_place
+    model.checkpoint_model_fp = mfp
+    E = model.energies(S0 + S1 + D0 + D1, progress=progress); n0, n1, m0 = len(S0), len(S1), len(D0)
+    progress.update("analysis", force=True)
     if lk: fcntl.flock(fh_lock, fcntl.LOCK_UN); fh_lock.close()
     e0, e1, f0, f1 = E[:n0], E[n0:n0 + n1].reshape(n0, a.sel), E[n0 + n1:n0 + n1 + m0], E[n0 + n1 + m0:]
     wf_frame, gap_ins = [], []
@@ -270,6 +385,30 @@ def cmd_run(a):
     ew = berr([-kT * (lse(-b / kT) - np.log(len(b))) for b in bf]); ed = berr([kT * (lse(b / kT) - np.log(len(b))) for b in br])
     eb = berr([bar(x, -y, kT) for x, y in zip(bf, br)])
     q = np.exp(-(wf - wf.min()) / kT); kish = float(q.sum() ** 2 / (q ** 2).sum() / len(q))   # effective fraction of the insertion samples
+    if a.candidate_dir:
+        from tdi.pwidom_candidates import export_trials
+        trials = []
+        for k, (phis, lnW) in enumerate(ins):
+            for j, phi in enumerate(phis):
+                du = float(e1[k, j] - e0[k])
+                trials.append(dict(direction="insertion", frame=sfr[k], trial=j,
+                    dU_mlp_eV=du, phi_eV=float(phi), gap_kT=(du-float(phi))/kT,
+                    log_weight=float(-wf_frame[k][j]/kT),
+                    structures=[S0[k], S1[k*a.sel+j]]))
+        offset = 0
+        for k, ws in enumerate(dele):
+            for j, (phi, lnW) in enumerate(ws):
+                du = float(f0[k] - f1[offset+j])
+                trials.append(dict(direction="deletion", frame=dfr[k], trial=j,
+                    dU_mlp_eV=du, phi_eV=float(phi), gap_kT=(du-float(phi))/kT,
+                    log_weight=float(wr_frame[k][j]/kT),
+                    structures=[D1[offset+j], D0[k]]))
+            offset += len(ws)
+        count = export_trials(a.candidate_dir, trials, a.candidate_limit,
+            dict(run=str(os.path.abspath(a.out)), tag=tag, model=a.model, model_fp=mfp,
+                 proxy=a.proxy, P_GPa=a.P, T_K=a.T, K=K,
+                 source_frames=str(os.path.abspath(ff))))
+        print(f"DFT candidate queue: {count} new paired requests in {a.candidate_dir}; unlabeled; no VASP submitted", flush=True)
     ideal = kT * np.log((NH + 1) / V) + 3 * kT * np.log(refs.thermal_wavelength(float(host.get_masses()[isH][0]), a.T))
     (ph, eph), (pf, epf) = frame_mean_P(Ph), frame_mean_P(Pf)
     B = a.bulk_gpa; dGP = -V / (2 * B) * ((pf - a.P) ** 2 - (ph - a.P) ** 2) / EV_A3_GPA if B else 0.0
@@ -285,7 +424,16 @@ def cmd_run(a):
     if not B:
         print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
     lab = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy)
+    workfile = os.path.join(a.out,f"{tag}_{lab}_K{K}_work.npz")
+    atomic_npz(workfile, forward_work_eV=np.asarray(wf_frame),
+             reverse_work_eV=-np.asarray(wr_frame), T=a.T, P_target=a.P,
+             N_H=NH, model=a.model, model_fp=mfp, proxy=a.proxy,
+             source_frames=os.path.abspath(ff), host_frame_ids=np.array(sfr),
+             full_frame_ids=np.array(dfr), seed=a.seed, frame_interval_fs=a.every_fs,
+             convention="BAR uses forward insertion work and negative deletion log-work; do not pool overlapping parent/extension frames as independent")
+    r["work_file"] = workfile
     fo = os.path.join(a.out, f"{tag}_{lab}_K{K}.json"); json.dump(r, open(fo, "w"), indent=1)
+    progress.update("complete", 1, 1, "result", force=True)
     print(f"{tag} proxy {lab} K {K}: {len(wf)} insertions ({len(sfr)} frames), {len(wr)} deletions, {model.ncalls} model calls, {(time.time() - t0) / 60:.1f} min")
     print(f"  mu_ex: Widom {mu_w * 1e3:8.1f} +- {ew * 1e3:5.1f}   deletion {mu_d * 1e3:8.1f} +- {ed * 1e3:5.1f}   BAR {mu_b * 1e3:8.1f} +- {eb * 1e3:5.1f} meV")
     print(f"  proxy quality: std(dU - phi) {r['proxy_gap_std_kT_ins']:.2f} kT (insertion) {r['proxy_gap_std_kT_del']:.2f} kT (deletion); Kish effective fraction of insertions {kish:.3f}")
@@ -326,6 +474,12 @@ def main():
     r.add_argument("--stride", type=int, default=1, help="use every stride-th cached frame"); r.add_argument("--batch", type=int, default=16, help="structures per batched model call (GRACE)")
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
+    r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints (default 300)")
+    r.add_argument("--resume-in-place", action="store_true", help="allow atomic checkpoint updates in the original output; normally use the locked launcher")
+    r.add_argument("--resume-from", help="previous output/tag prefix; continue MD into fresh --out without re-equilibration")
+    r.add_argument("--extend-from", help="cached frames: append a restarted MD segment in fresh --out; new thermal velocities and re-equilibration")
+    r.add_argument("--candidate-dir", default=None, help="optional unlabeled extxyz diagnostic queue; no DFT submission")
+    r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic trial pairs per host run")
     d = sub.add_parser("dg"); d.add_argument("ice"); d.add_argument("hfluid")
     a = ap.parse_args(); {"run": cmd_run, "dg": cmd_dg}[a.cmd](a)
 

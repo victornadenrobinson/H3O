@@ -1,5 +1,9 @@
 # Figures (docs/figures)
 
+Cluster simulation/TDI summary snapshots and their source/refresh information:
+[docs/status/README.md](status/README.md). These are separate from the data-coverage
+figures described below.
+
 Drawn by `docs/make_figures.py` from the tables in `docs/data/*.csv`. Those numbers were **transcribed from the Perlmutter terminal output**
 of `01_bin_inventory.py` and `07_crosscheck_eos.py` run on `runs/mined_h3o.csv` (2026-10-25): lambda_* TDI runs excluded, runs with <100 MD steps
 excluded from the T x P and composition x T tables, pressure = OUTCAR external pressure + N kB T / V, temperature from TEBEG / folder name.

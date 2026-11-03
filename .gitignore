@@ -5,3 +5,6 @@ __pycache__/
 docs/papers/*.pdf
 H3O_bundle_*.tar.gz
 perlmutter-runs/
+
+# Local licensed VASP template; never ship pseudopotentials.
+vasp_inputs/

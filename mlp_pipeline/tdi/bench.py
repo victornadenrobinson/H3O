@@ -22,7 +22,9 @@ SYSTEMS = {"h2o": ["--phase", "fcc", "--P", "400", "--T", "3000", "--k", "22.5"]
 def build(b):
     import io, contextlib
     from tdi import run_real
-    argv = [b.model] + SYSTEMS[b.system] + (["--vpa", str(b.vpa), "--bulk-gpa", "1000"] if b.vpa else ["--from-dft", b.from_dft]) + ["--dt", str(b.dt), "--device", b.device, "--outdir", "runs/bench_tmp"]
+    argv = [b.model] + SYSTEMS[b.system] + (["--vpa", str(b.vpa), "--bulk-gpa", "1000"] if b.vpa else ["--from-dft", b.from_dft]) + ["--dt", str(b.dt), "--device", b.device, "--outdir", b.workdir]
+    if b.cell_nrep is not None:
+        argv += ["--nrep", str(b.cell_nrep)]
     for k, v in (("--P", b.P), ("--T", b.T)):
         if v is not None:
             argv += [k, str(v)]
@@ -39,6 +41,13 @@ def comps_single(run_real, c, kE):
 
 def result(**d):
     d.update(host=os.uname().nodename, pid=os.getpid(), mps=bool(os.environ.get("CUDA_MPS_PIPE_DIRECTORY")), t=time.strftime("%Y-%m-%d %H:%M:%S"))
+    tf = sys.modules.get("tensorflow")
+    if tf is not None:
+        try:
+            memory = tf.config.experimental.get_memory_info("GPU:0")
+            d["tensorflow_peak_MiB"] = memory["peak"] / (1024*1024)
+        except (ValueError, RuntimeError):
+            pass
     print("RESULT " + json.dumps(d), flush=True)
 
 
@@ -50,34 +59,109 @@ def mode_engine(b):
         print("READY", flush=True)
         while not os.path.exists(b.barrier):
             time.sleep(0.2)
-    t = time.time(); r.advance(b.steps); el = time.time() - t
-    result(mode="engine", system=b.system, natoms=len(c["at0"]), steps=b.steps, seconds=el, steps_per_s=b.steps / el, ms_per_step=1000 * el / b.steps)
+    t = time.monotonic(); r.advance(b.steps); end = time.monotonic(); el = end - t
+    result(mode="engine", system=b.system, natoms=len(c["at0"]), steps=b.steps, seconds=el, steps_per_s=b.steps / el, ms_per_step=1000 * el / b.steps,
+           timed_started=t, timed_ended=end, lambda_steps=b.steps)
+
+
+def wait_for_benchmark(b):
+    if b.barrier:
+        print("READY", flush=True)
+        while not os.path.exists(b.barrier):
+            time.sleep(.2)
+
+
+def mode_pwmd(b):
+    """The direct ASE Langevin MD used by pwidom: one full-model force call/step."""
+    from importlib import import_module
+    from ase import units
+    from ase.md.langevin import Langevin
+    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+    from pwidom import build_host, Model
+    phase = "H" if b.system == "H" else "fcc"
+    args = argparse.Namespace(phase=phase, vpa=b.vpa, nrep=b.cell_nrep or (5 if phase == "H" else 3),
+                              hper=2., natoms=0, seed=3)
+    at = build_host(args)
+    at.calc = Model(b.model,b.device,1).calc
+    rng = np.random.default_rng(3)
+    MaxwellBoltzmannDistribution(at, temperature_K=b.T or 3000, rng=rng)
+    md = Langevin(at,b.dt*units.fs,temperature_K=b.T or 3000,friction=.01,rng=rng)
+    at.get_forces(); md.run(b.warm); wait_for_benchmark(b)
+    start = time.monotonic(); md.run(b.steps); end = time.monotonic()
+    result(mode="pwmd",system=b.system,natoms=len(at),steps=b.steps,seconds=end-start,
+           work_units=b.steps,unit="MD steps",timed_started=start,timed_ended=end)
+
+
+def mode_pwsp(b):
+    """The pwidom energy evaluator on independent host/host+H structures."""
+    from pwidom import build_host, Model
+    from tdi.run_real import add_ghosts
+    phase = "H" if b.system == "H" else "fcc"
+    args = argparse.Namespace(phase=phase, vpa=b.vpa, nrep=b.cell_nrep or (5 if phase == "H" else 3),
+                              hper=2., natoms=0, seed=3)
+    host = build_host(args); full = add_ghosts(host,1,10)
+    rng = np.random.default_rng(5); structures = []
+    for i in range(b.nrep):
+        at = (host if i%2==0 else full).copy()
+        at.positions += rng.normal(0,.01,at.positions.shape); structures.append(at)
+    model = Model(b.model,b.device,b.nrep)
+    # Model.energies self-checks batched against single calls on its first call.
+    def evaluate():
+        # In particular B=1 must not benchmark ASE's cached result on the same
+        # geometry. Reset calculator results while retaining the loaded model.
+        model.calc.reset()
+        return model.energies(structures)
+    for _ in range(max(1,b.warm)): evaluate()
+    wait_for_benchmark(b)
+    start = time.monotonic()
+    for _ in range(b.steps): evaluate()
+    end = time.monotonic()
+    result(mode="pwsp",system=b.system,natoms=len(host),batch=b.nrep,seconds=end-start,
+           work_units=b.nrep*b.steps,unit="structures",timed_started=start,timed_ended=end,
+           effective_max_atoms=getattr(model.gb,"max_atoms",0))
 
 
 def mode_batch(b):
     from tdi import batched
     run_real, a, c, kE = build(b)
     ev = batched.make_evaluator(c, b.max_atoms); bt = batched.Batcher(ev); n = b.nrep
+    if isinstance(ev, batched.GraceBatch):
+        structs = [c["at0"].copy()]
+        if c.get("host_idx") is not None:
+            structs.append(c["at0"][c["host_idx"]])
+        print(ev.selfcheck(structs), flush=True)
     lams = np.linspace(0.05, 1.0, n); runs = []
     for k in range(n):
         sm = batched.SlotModel(bt, k, c.get("host_idx")); bt.register(k)
         E = sm.host_part if c.get("host_idx") is not None else run_real.E_component(c, kE)
         runs.append(run_real.LambdaRun(c["at0"], {"full": sm.full, "E": E}, float(lams[k]), a.T, c["iO"], a.dt, a.tau, 1 + k, a.every, 0))
     gate = threading.Barrier(n + 1); done = threading.Barrier(n + 1)
+    go = threading.Event(); errors = []
 
     def work(k):
         r = runs[k]
         try:
-            r.at.get_forces(); r.start(); r.advance(b.warm); gate.wait(); r.advance(b.steps); done.wait()
+            r.at.get_forces(); r.start(); r.advance(b.warm); gate.wait(); go.wait(); r.advance(b.steps); done.wait()
+        except BaseException as ex:
+            errors.append(repr(ex)); gate.abort(); done.abort(); go.set()
         finally:
             bt.unregister(k)
     th = [threading.Thread(target=work, args=(k,), daemon=True) for k in range(n)]
     for x in th:
         x.start()
-    gate.wait(); t = time.time(); c0, m0 = bt.ncalls, bt.t_model; done.wait(); el = time.time() - t
+    try:
+        gate.wait()
+        if b.barrier:
+            print("READY", flush=True)
+            while not os.path.exists(b.barrier):
+                time.sleep(.2)
+        t = time.monotonic(); c0, m0 = bt.ncalls, bt.t_model; go.set(); done.wait(); end = time.monotonic(); el = end - t
+    except threading.BrokenBarrierError:
+        raise RuntimeError("batched benchmark worker failed: " + "; ".join(errors))
     calls = bt.ncalls - c0
     result(mode="batch", system=b.system, natoms=len(c["at0"]), nrep=n, steps=b.steps, seconds=el, steps_per_s=n * b.steps / el, ms_per_step=1000 * el / b.steps,
-           calls=calls, ms_per_call=1000 * (bt.t_model - m0) / max(calls, 1), model_frac=(bt.t_model - m0) / el, extract_s=getattr(ev, "t_extract", float("nan")))
+           calls=calls, ms_per_call=1000 * (bt.t_model - m0) / max(calls, 1), model_frac=(bt.t_model - m0) / el, extract_s=getattr(ev, "t_extract", float("nan")),
+           timed_started=t, timed_ended=end, lambda_steps=n*b.steps, effective_max_atoms=getattr(ev, "max_atoms", 0))
 
 
 def mode_calls(b):
@@ -138,10 +222,13 @@ def mode_dense(b):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["engine", "batch", "calls", "dense"]); ap.add_argument("system", choices=list(SYSTEMS))
+    ap.add_argument("mode", choices=["engine", "batch", "calls", "dense", "pwmd", "pwsp"]); ap.add_argument("system", choices=list(SYSTEMS))
     ap.add_argument("--model", default="grace-ft:runs/grace/ft_m2"); ap.add_argument("--from-dft", default="inventory_binned.csv"); ap.add_argument("--vpa", type=float, default=None)
     ap.add_argument("--P", type=float, default=None); ap.add_argument("--T", type=float, default=None); ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--device", default="cuda")
     ap.add_argument("--steps", type=int, default=150); ap.add_argument("--warm", type=int, default=20); ap.add_argument("--lam", type=float, default=0.5); ap.add_argument("--barrier", default=None)
     ap.add_argument("--nrep", type=int, default=8); ap.add_argument("--max-atoms", type=int, default=0); ap.add_argument("--sizes", default="1,2,4,8,16"); ap.add_argument("--repeat", type=int, default=5)
+    ap.add_argument("--cell-nrep", type=int, default=None, help="cell replication override (local toy benchmark checks)")
+    ap.add_argument("--workdir", default="runs/bench_tmp", help="isolated benchmark setup directory")
     b = ap.parse_args()
-    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls, "dense": mode_dense}[b.mode](b)
+    {"engine": mode_engine, "batch": mode_batch, "calls": mode_calls, "dense": mode_dense,
+     "pwmd":mode_pwmd,"pwsp":mode_pwsp}[b.mode](b)

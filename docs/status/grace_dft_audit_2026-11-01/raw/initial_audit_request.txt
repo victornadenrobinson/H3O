@@ -1,0 +1,186 @@
+# H3O/PWidom — Audit, Fix and Validate Automated High-Pressure Hydrogen Insertion Workflow
+
+## Repository and branch
+
+Repository: `victornadenrobinson/H3O`
+
+Base branch: `gpt/pwidom-diagnostics`
+
+Latest pushed commit: `eef2f6f` — Add PWidom EOS automation and RDF diagnostics.
+
+**Work from this branch, not main.** Create a separate task branch if necessary and prepare a reviewable pull request targeting `gpt/pwidom-diagnostics`.
+
+## Scientific objective
+
+We are investigating hydrogen insertion thermodynamics in superionic FCC H₂O at 200–600 GPa and 2000–6000 K using a fine-tuned GRACE machine-learning potential.
+
+Our calculation uses proxy-guided insertion/deletion, Rosenbluth reweighting, and Bennett acceptance ratio (BAR) to calculate hydrogen chemical potentials and insertion free energies.
+
+The automated pipeline should support arbitrary P–T conditions, four additional hydrogen counts (`--n 5 11 16 22`), multiple temperatures, automatic EOS generation, and safe resumption of existing calculations.
+
+We recently developed new scripts, which are now committed but not yet thoroughly validated.
+
+## Task 1 — Audit EOS generation
+
+Inspect `build_eos_2000.py` and its inventory dependencies.
+
+Verify:
+
+- Multiple pressures and temperatures are supported.
+- EOS fitting and root selection are mathematically and physically sensible.
+- Bulk modulus is correctly calculated and positive.
+- Temperature interpolation works.
+- Unrestricted pressure/temperature extrapolation is actually implemented.
+- Extrapolated results are explicitly marked and warned about.
+- `--force` is required to overwrite existing JSON files.
+- Automatically generated EOS JSONs contain the correct fields and compositions.
+
+**Important inventory issue:** `runs/inventory_binned.csv` has approximately 10,025 data rows, whereas an untracked `mlp_pipeline/inventory_binned.csv` on Perlmutter has approximately 64,497 rows containing unrelated iron–wüstite and silicate calculations.
+
+The larger inventory was deliberately NOT committed. Determine the correct intended inventory, ensure composition filtering excludes unrelated materials, and make the inventory path configurable where appropriate.
+
+Do not manufacture replacement DFT data.
+
+## Task 2 — Validate the automated launcher
+
+Inspect:
+
+- `mlp_pipeline/pwidom_auto.sh`
+- `mlp_pipeline/perlmutter_pwidom.sh`
+- `mlp_pipeline/tdi/perlmutter_pwidom.py`
+- `mlp_pipeline/tdi/pwidom.py`
+
+Check whether the automated launcher correctly:
+
+1. Generates missing EOS JSONs.
+2. Validates input pressure, temperature, volume and bulk modulus.
+3. Runs four reference systems on four GPUs.
+4. Runs extra-H calculations for `--n 5 11 16 22`.
+5. Processes multiple temperatures sequentially.
+6. Detects completed, incomplete and running calculations.
+7. Preserves previous results and resumes without destructive overwrites.
+8. Handles failures, allocation time limits and interruptions.
+
+Specifically verify that `--extra-h` and `--reference-run` are supported by the underlying launcher.
+
+Also investigate why the progress logs sometimes alternate between host MD and equilibration MD. Determine whether this is expected for independent systems and extensions or indicates repeated equilibration.
+
+Do not launch expensive MD.
+
+## Task 3 — Validate the scientific estimator
+
+The current method uses:
+
+- K=2000 proxy candidates per selected host snapshot.
+- 8 Boltzmann-selected insertion candidates.
+- 4 reverse deletion trials per full-system snapshot.
+- Batched GRACE single-point energies.
+- Rosenbluth-corrected forward and reverse work.
+- BAR and forward/reverse exponential estimators.
+
+Review the mathematical correctness of the selection probabilities, correction terms, work sign conventions and BAR normalization.
+
+Saved work arrays use:
+
+- `forward_work_eV`
+- `reverse_work_eV`
+
+The stored reverse work is already sign-adjusted for the production BAR call.
+
+Verify whether the implementation produces unbiased estimates under the intended ensemble and assumptions, including unequal numbers of insertion and deletion samples.
+
+Check the ideal chemical-potential and pressure corrections.
+
+Do not rewrite the scientific estimator without a demonstrable error and suitable regression tests.
+
+## Task 4 — Validate and improve RDF diagnostics
+
+Inspect `mlp_pipeline/plot_pwidom_diagnostics.py`.
+
+A previously identified bug mixed coordinates from the independent host and full-system trajectories.
+
+The extra-H calculation must use the N+1 configuration itself, e.g.:
+
+`delta = full[frame, :-1] - full[frame, -1]`
+
+Check that the fix is present.
+
+Verify periodic boundary handling, species selection, cell reconstruction and finite-size normalization.
+
+Existing trajectory caches contain `host`, `full`, `numbers`, `V`, `T`, and sometimes `cell`.
+
+Do not assume a cubic cell unless confirmed or explicitly requested.
+
+Ensure figures clearly distinguish:
+
+- Equilibrium host RDFs.
+- Local environments around a tagged hydrogen in the N+1 system.
+- True insertion-conditioned, statistically weighted RDFs (which may require additional saved data).
+
+## Task 5 — Implement BAR convergence diagnostics
+
+Create `mlp_pipeline/plot_bar_convergence.py` if missing.
+
+Read existing `*_work.npz` files and produce:
+
+- Cumulative BAR chemical potential versus trajectory fraction.
+- Forward and reverse work distributions.
+- BAR overlap diagnostics.
+- Kish effective-sample fraction.
+- Contiguous block-to-block BAR estimates.
+- CSV output with numerical diagnostics.
+
+Use the production BAR estimator or independently verify equivalence.
+
+Where corresponding result JSONs are available, check that the final BAR estimate reproduces `mu_ex_bar_meV`.
+
+Make it explicit that sampling fraction is not physical time unless frame timing is available.
+
+Do not treat correlated insertion trials as statistically independent when reporting uncertainty.
+
+## Task 6 — Add focused tests and documentation
+
+Add lightweight synthetic or fixture-based regression tests for EOS fitting, extrapolation, launcher argument compatibility, RDF distances, BAR sign conventions and convergence reconstruction.
+
+Tests should run without GPUs, GRACE checkpoints or Perlmutter-only datasets wherever possible.
+
+Document the required files, example commands and limitations.
+
+## Safety and scope
+
+Production repository on Perlmutter:
+
+`/pscratch/sd/v/victornr/H3O`
+
+Diagnostics worktree:
+
+`/pscratch/sd/v/victornr/H3O-diagnostics`
+
+Production calculation data are under the original repository's `runs/` directory. They may not be accessible in Codex Cloud.
+
+**Do not delete, overwrite, reorganize or regenerate production outputs.**
+
+Do not run `git clean`, `git reset --hard`, force-push or destructive cleanup.
+
+Do not commit model checkpoints, trajectories, large DFT inventories or unrelated scientific data.
+
+Do not make broad repository refactors. Keep changes minimal and reviewable.
+
+The generated `envs/pwidom_*` EOS JSONs are currently untracked on Perlmutter. They are not necessarily present in this cloud checkout. Do not treat their absence as a failure or attempt to fabricate them.
+
+## Deliverables
+
+Complete the feasible source-code changes and tests, not just an audit.
+
+Provide:
+
+1. Ranked findings: critical scientific issues, functional bugs and lesser improvements.
+2. Exact files modified and why.
+3. Tests run and their results.
+4. Remaining issues that require Perlmutter runtime data.
+5. A reviewable Git commit or pull request.
+6. Exact safe deployment commands for Perlmutter.
+
+Clearly distinguish verified results from assumptions or untested behaviour.
+
+Prioritise scientific correctness and preservation of existing simulations over code cleanup or new features.

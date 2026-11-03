@@ -1,0 +1,133 @@
+(
+> set -euo pipefail
+>
+> git pull --ff-only origin feature/pwidom-checkpoint-resume
+> export GRACE_ENV="$SCRATCH/grace-env"
+> export VASP_MODULE=vasp/5.4.4-cpu
+> module load "$VASP_MODULE"
+>
+> # Cancel only jobs submitted with our 48-hour script.
+> while read -r job; do
+>   [ -n "$job" ] || continue
+>   info=$(scontrol show job "$job" -o)
+>   if [[ "$info" == *"Command="*"perlmutter_dft_pwidom_48h.sbatch"* ]]; then
+>     scancel "$job"
+>   fi
+> done < <(squeue -u "$USER" -h -n dft-pwidom -o '%i')
+>
+> for P in 500 400 600; do
+>   plan="runs/dft_pwidom_${P}GPa_5000K_4x64"
+>   eos="runs/dft_eos_${P}GPa_5000K_48h.json"
+>
+>   if [ ! -f "$plan/dft_plan.json" ]; then
+>     if [ ! -f "$eos" ]; then
+>       bash mlp_pipeline/perlmutter_pwidom.sh --cpu \
+>         --P "$P" --T 5000 \
+>         --inspect-eos runs/inventory_binned.csv --save-eos "$eos"
+>     fi
+>
+>     bash mlp_pipeline/perlmutter_vasp_check.sh dft-plan \
+>       --state-json "$eos" --template vasp_inputs \
+>       --replicates 1 --ranks 64 --h-natoms 729 \
+>       --out "$plan"
+>   fi
+>
+>   sbatch --account=m3349 --qos=regular \
+>     mlp_pipeline/perlmutter_dft_pwidom_48h.sbatch "$plan"
+> done
+> )
+From https://github.com/victornadenrobinson/H3O
+ * branch            feature/pwidom-checkpoint-resume -> FETCH_HEAD
+Already up to date.
+
+Lmod is automatically replacing "gpu/1.0" with "cpu/1.0".
+
+Submitted batch job 60649379
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy)
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+ice: 416 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+/pscratch/sd/v/victornr/H3O/mlp_pipeline/17_eos_md.py:85: FutureWarning: Downcasting behavior in `replace` is deprecated and will be removed in a future version. To retain the old behavior, explicitly call `result.infer_objects(copy=False)`. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
+DFT fcc 5000 K: 416 runs, P 139-2506 GPa, V/atom 1.152-3.275
+  400 GPa: vpa=2.2896352 A^3/atom; B_GPa=1182.0494 (same EOS finite-difference convention)
+h225: 366 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+/pscratch/sd/v/victornr/H3O/mlp_pipeline/17_eos_md.py:85: FutureWarning: Downcasting behavior in `replace` is deprecated and will be removed in a future version. To retain the old behavior, explicitly call `result.infer_objects(copy=False)`. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
+DFT fcc 5000 K: 366 runs, P 287-2760 GPa, V/atom 1.063-2.521
+  400 GPa: vpa=2.2451198 A^3/atom; B_GPa=1057.3255 (same EOS finite-difference convention)
+H: 301 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+  400 GPa: vpa=1.3895199 A^3/atom; B_GPa=889.984 (same EOS finite-difference convention)
+Saved EOS inputs to runs/dft_eos_400GPa_5000K_48h.json; no MD or GPU calls. Crystal size nrep=3 (108 O), pure H 250 atoms.
+
+Currently Loaded Modules:
+  1) craype-x86-milan     4) xpmem/2.11.5-1.3_g73ade43320bc   7) PrgEnv-gnu/8.7.0     10) craype/2.7.36           13) sqs/2.0          16) vasp/5.4.4-cpu
+  2) libfabric/2.3.1      5) gcc-native/14                    8) cray-libsci/26.03.0  11) perftools-base/26.03.0  14) darshan/default
+  3) craype-network-ofi   6) cray-dsmml/0.3.1                 9) cray-mpich/9.1.0     12) cpe/26.03               15) cpu/1.0
+
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p083O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/H2p25O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64/pureH_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+Prepared 4 isolated workers. No MD/VASP executed. Plan: /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_400GPa_5000K_4x64
+Submitted batch job 60649380
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy)
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+ice: 416 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+/pscratch/sd/v/victornr/H3O/mlp_pipeline/17_eos_md.py:85: FutureWarning: Downcasting behavior in `replace` is deprecated and will be removed in a future version. To retain the old behavior, explicitly call `result.infer_objects(copy=False)`. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
+DFT fcc 5000 K: 416 runs, P 139-2506 GPa, V/atom 1.152-3.275
+  600 GPa: vpa=1.9935375 A^3/atom; B_GPa=1731.4057 (same EOS finite-difference convention)
+h225: 366 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+/pscratch/sd/v/victornr/H3O/mlp_pipeline/17_eos_md.py:85: FutureWarning: Downcasting behavior in `replace` is deprecated and will be removed in a future version. To retain the old behavior, explicitly call `result.infer_objects(copy=False)`. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+  df = df[df.T_bin == Tb].assign(vpa=lambda d: d.True_V_A3 / d.N_ions).replace([np.inf, -np.inf], np.nan).dropna(subset=["vpa", "True_P_GPa"])
+DFT fcc 5000 K: 366 runs, P 287-2760 GPa, V/atom 1.063-2.521
+  600 GPa: vpa=1.9320333 A^3/atom; B_GPa=1636.6127 (same EOS finite-difference convention)
+H: 301 runs in exact 5000 K bin after existing EOS phase filters
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+dropping 0 lambda_* (TDI) runs; 10025 remain
+pressure column already includes N kB T / V (file written by 01): not adding it again
+DFT pure H 5000 K: 301 runs, P 284-1290 GPa, V/atom 0.813-1.543
+  600 GPa: vpa=1.1599448 A^3/atom; B_GPa=1343.162 (same EOS finite-difference convention)
+Saved EOS inputs to runs/dft_eos_600GPa_5000K_48h.json; no MD or GPU calls. Crystal size nrep=3 (108 O), pure H 250 atoms.
+
+Currently Loaded Modules:
+  1) craype-x86-milan     4) xpmem/2.11.5-1.3_g73ade43320bc   7) PrgEnv-gnu/8.7.0     10) craype/2.7.36           13) sqs/2.0          16) vasp/5.4.4-cpu
+  2) libfabric/2.3.1      5) gcc-native/14                    8) cray-libsci/26.03.0  11) perftools-base/26.03.0  14) darshan/default
+  3) craype-network-ofi   6) cray-dsmml/0.3.1                 9) cray-mpich/9.1.0     12) cpe/26.03               15) cpu/1.0
+
+
+
+Perlmutter Python: /pscratch/sd/v/victornr/grace-env/bin/python (checked: numpy pandas ase scipy matplotlib)
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p083O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/H2p25O_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+VASP model spec: vasp:/pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64/pureH_rep0/vasp.json; same ASE MD and PWidom estimators, batch=1 recommended
+Prepared 4 isolated workers. No MD/VASP executed. Plan: /pscratch/sd/v/victornr/H3O/runs/dft_pwidom_600GPa_5000K_4x64
+Submitted batch job 60649381

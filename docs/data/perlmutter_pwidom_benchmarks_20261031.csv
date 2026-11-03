@@ -1,0 +1,67 @@
+run,kind,phase,gpu,mode,size,rate,unit,peak_MiB
+bench_20261031_131111,screen,energy_screen,0,pwsp,2,8.48,structures,4575.0
+bench_20261031_131111,screen,energy_screen,1,pwsp,4,8.72,structures,8713.0
+bench_20261031_131111,screen,energy_screen,2,pwsp,8,8.96,structures,25097.0
+bench_20261031_131111,screen,energy_screen,3,pwsp,16,9.01,structures,41481.0
+bench_20261031_131111,screen,md_screen,0,pwmd,1,5.78,MD steps,2525.0
+bench_20261031_131111,screen,md_screen,1,pwmd,2,11.48,MD steps,5045.0
+bench_20261031_131111,screen,md_screen,2,pwmd,4,21.42,MD steps,10085.0
+bench_20261031_131111,screen,md_screen,3,pwmd,8,20.07,MD steps,20167.0
+bench_20261031_131111,calibration,memory_calibration,0,pwmd,1,6.28,MD steps,2525.0
+bench_20261031_131111,calibration,memory_calibration,1,pwmd,1,6.32,MD steps,2525.0
+bench_20261031_131111,calibration,memory_calibration,2,pwmd,1,6.29,MD steps,2525.0
+bench_20261031_131111,calibration,memory_calibration,3,pwmd,1,6.22,MD steps,2525.0
+bench_20261031_131111,validation,pwmd_node_validation,0,pwmd,4,20.71,MD steps,10085.0
+bench_20261031_131111,validation,pwmd_node_validation,1,pwmd,4,19.92,MD steps,10085.0
+bench_20261031_131111,validation,pwmd_node_validation,2,pwmd,4,20.71,MD steps,10085.0
+bench_20261031_131111,validation,pwmd_node_validation,3,pwmd,4,20.7,MD steps,10085.0
+bench_20261031_131111,validation,pwsp_node_validation,0,pwsp,16,8.86,structures,41481.0
+bench_20261031_131111,validation,pwsp_node_validation,1,pwsp,16,8.87,structures,41481.0
+bench_20261031_131111,validation,pwsp_node_validation,2,pwsp,16,8.9,structures,41481.0
+bench_20261031_131111,validation,pwsp_node_validation,3,pwsp,16,8.51,structures,41481.0
+bench_20261031_131111,node_total,whole_node,all,pwmd,4,79.5,MD steps,
+bench_20261031_131111,node_total,whole_node,all,pwsp,16,34.06,structures,
+bench_20261031_131859,screen,energy_screen,0,pwsp,2,8.48,structures,4575.0
+bench_20261031_131859,screen,energy_screen,1,pwsp,4,8.71,structures,8713.0
+bench_20261031_131859,screen,energy_screen,2,pwsp,8,8.99,structures,25097.0
+bench_20261031_131859,screen,energy_screen,3,pwsp,16,8.95,structures,41481.0
+bench_20261031_131859,screen,md_screen,0,pwmd,1,5.84,MD steps,2525.0
+bench_20261031_131859,screen,md_screen,1,pwmd,2,11.53,MD steps,5045.0
+bench_20261031_131859,screen,md_screen,2,pwmd,4,20.82,MD steps,10085.0
+bench_20261031_131859,screen,md_screen,3,pwmd,8,20.11,MD steps,20167.0
+bench_20261031_131859,calibration,memory_calibration,0,pwmd,1,6.27,MD steps,2525.0
+bench_20261031_131859,calibration,memory_calibration,1,pwmd,1,6.29,MD steps,2525.0
+bench_20261031_131859,calibration,memory_calibration,2,pwmd,1,6.19,MD steps,2525.0
+bench_20261031_131859,calibration,memory_calibration,3,pwmd,1,6.23,MD steps,2525.0
+bench_20261031_131859,validation,pwmd_node_validation,0,pwmd,4,21.46,MD steps,10085.0
+bench_20261031_131859,validation,pwmd_node_validation,1,pwmd,4,21.07,MD steps,10085.0
+bench_20261031_131859,validation,pwmd_node_validation,2,pwmd,4,20.04,MD steps,10085.0
+bench_20261031_131859,validation,pwmd_node_validation,3,pwmd,4,19.39,MD steps,10085.0
+bench_20261031_131859,validation,pwsp_node_validation,0,pwsp,8,8.85,structures,25097.0
+bench_20261031_131859,validation,pwsp_node_validation,1,pwsp,8,8.86,structures,25097.0
+bench_20261031_131859,validation,pwsp_node_validation,2,pwsp,8,8.96,structures,25097.0
+bench_20261031_131859,validation,pwsp_node_validation,3,pwsp,8,8.93,structures,25097.0
+bench_20261031_131859,node_total,whole_node,all,pwmd,4,77.45,MD steps,
+bench_20261031_131859,node_total,whole_node,all,pwsp,8,35.34,structures,
+bench_20261031_133031,screen,energy_screen,0,pwsp,2,8.53,structures,4575.0
+bench_20261031_133031,screen,energy_screen,1,pwsp,4,9.04,structures,8713.0
+bench_20261031_133031,screen,energy_screen,2,pwsp,8,8.92,structures,25097.0
+bench_20261031_133031,screen,energy_screen,3,pwsp,16,8.9,structures,41481.0
+bench_20261031_133031,screen,md_screen,0,pwmd,1,5.83,MD steps,2525.0
+bench_20261031_133031,screen,md_screen,1,pwmd,2,11.54,MD steps,5045.0
+bench_20261031_133031,screen,md_screen,2,pwmd,4,19.75,MD steps,10085.0
+bench_20261031_133031,screen,md_screen,3,pwmd,8,20.14,MD steps,20167.0
+bench_20261031_133031,calibration,memory_calibration,0,pwmd,1,6.19,MD steps,2525.0
+bench_20261031_133031,calibration,memory_calibration,1,pwmd,1,6.24,MD steps,2525.0
+bench_20261031_133031,calibration,memory_calibration,2,pwmd,1,6.19,MD steps,2525.0
+bench_20261031_133031,calibration,memory_calibration,3,pwmd,1,6.23,MD steps,2525.0
+bench_20261031_133031,validation,pwmd_node_validation,0,pwmd,8,20.11,MD steps,20167.0
+bench_20261031_133031,validation,pwmd_node_validation,1,pwmd,8,20.06,MD steps,20167.0
+bench_20261031_133031,validation,pwmd_node_validation,2,pwmd,8,20.11,MD steps,20167.0
+bench_20261031_133031,validation,pwmd_node_validation,3,pwmd,8,20.09,MD steps,20167.0
+bench_20261031_133031,validation,pwsp_node_validation,0,pwsp,4,8.79,structures,8713.0
+bench_20261031_133031,validation,pwsp_node_validation,1,pwsp,4,8.77,structures,8713.0
+bench_20261031_133031,validation,pwsp_node_validation,2,pwsp,4,8.78,structures,8713.0
+bench_20261031_133031,validation,pwsp_node_validation,3,pwsp,4,8.83,structures,8713.0
+bench_20261031_133031,node_total,whole_node,all,pwmd,8,79.98,MD steps,
+bench_20261031_133031,node_total,whole_node,all,pwsp,4,34.99,structures,

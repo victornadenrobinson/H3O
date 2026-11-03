@@ -1,0 +1,10 @@
+Additional user inline lines, preceding the archived all-three-job paste:
+H2O_rep0 call504 natoms324 seconds35.5 warmTrue E=-606.74867340 eV
+H2O_rep0 call505 natoms324 seconds39.6 warmTrue E=-602.28304867 eV
+H2p083O_rep0 call484 natoms333 seconds31.7 warmTrue E=-584.39274063 eV
+H2p083O_rep0 call485 natoms333 seconds31.9 warmTrue E=-579.03618190 eV
+H2p25O_rep0 call373 natoms351 seconds45.0 warmTrue E=-555.24991790 eV
+H2p25O_rep0 call374 natoms351 seconds46.4 warmTrue E=-558.01928837 eV
+pureH729_rep0 checkpoint270/3000 host steps,0/25frames (followed by276/3000).
+All overlapping call lines retained in full all-three-job raw log.
+User estimated jobs approximately4hours in; this is approximate,not exact elapsed from Slurm.

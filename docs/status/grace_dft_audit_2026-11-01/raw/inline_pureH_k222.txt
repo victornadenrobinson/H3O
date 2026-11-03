@@ -1,0 +1,11 @@
+Exact matched Gamma vs 2x2x2 test, 32 ranks x 4 parallel VASP structures, vasp_std.
+p000_without_H TOTEN=-371.189277810 eV wall=198.6 s
+p000_with_H TOTEN=-370.211255850 eV wall=199.0 s
+PAIR 000 pureH deletion: dU_VASP=0.978022 eV; dU_GRACE=0.924953 eV; VASP-GRACE=+53.07 meV/H; k-mesh shift=-150.49 meV/H
+p001_without_H TOTEN=-360.885802000 eV wall=200.2 s
+p001_with_H TOTEN=-361.021631520 eV wall=200.8 s
+PAIR 001 pureH insertion: dU_VASP=-0.135830 eV; dU_GRACE=-0.103922 eV; VASP-GRACE=-31.91 meV/H; k-mesh shift=-403.07 meV/H
+4 selected points complete; 4 attempted; 0 failed/incomplete.
+Original Gamma corresponding live values:
+p006 pureH deletion dU_VASP=1.128508 dU_GRACE=0.924953 residual=+203.56 meV/H
+p007 pureH insertion dU_VASP=0.267243 dU_GRACE=-0.103922 residual=+371.17 meV/H
