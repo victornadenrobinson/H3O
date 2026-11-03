@@ -9,24 +9,27 @@ import argparse, json, os, sys
 import numpy as np
 
 ap = argparse.ArgumentParser(); ap.add_argument("prefix"); ap.add_argument("--min-host", type=int, default=8); ap.add_argument("--min-full", type=int, default=8)
-ap.add_argument("--max-frames", type=int, default=0); ap.add_argument("--dry", action="store_true"); a = ap.parse_args()
+ap.add_argument("--max-frames", type=int, default=0); ap.add_argument("--host-only", action="store_true", help="insertion side only (pure-H workers have no host + 1 H checkpoint): writes host frames, no full frames"); ap.add_argument("--dry", action="store_true"); a = ap.parse_args()
 out = a.prefix + "_frames.npz"
 if os.path.exists(out): sys.exit(f"{out} exists: refusing to overwrite (move it away first)")
 z = {}
-for k in ("host", "full"):
+for k in (("host",) if a.host_only else ("host", "full")):
     p = f"{a.prefix}_{k}_md.npz"
     if not os.path.isfile(p): sys.exit(f"missing {p}")
     with np.load(p, allow_pickle=False) as d: z[k] = {x: np.array(d[x]) for x in ("metadata", "numbers", "cell", "frames", "pressures", "step")}
 md = {k: json.loads(str(z[k]["metadata"])) for k in z}
-for k in ("model_fp", "T"):
-    if md["host"][k] != md["full"][k]: sys.exit(f"host and full checkpoints disagree on {k}: {md['host'][k]} vs {md['full'][k]}")
-if not np.array_equal(z["host"]["cell"], z["full"]["cell"]): sys.exit("host and full cells differ")
-n_h, n_f = len(z["host"]["numbers"]), len(z["full"]["numbers"])
-if n_f != n_h + 1 or not np.array_equal(z["full"]["numbers"][:n_h], z["host"]["numbers"]) or z["full"]["numbers"][-1] != 1: sys.exit("full system must be host + 1 H (H last)")
-nh, nf = len(z["host"]["frames"]), len(z["full"]["frames"])
-print(f"host: {nh} frames (step {int(z['host']['step'])}/{md['host']['equil_steps'] + md['host']['frames'] * md['host']['every']}), host + 1 H: {nf} frames (step {int(z['full']['step'])}); T {md['host']['T']} K, {n_h} + 1 atoms")
-if nh < a.min_host or nf < a.min_full: sys.exit(f"not enough frames (need host >= {a.min_host}, full >= {a.min_full}): wait for the MD, or lower --min-host/--min-full")
-fh, Ph, fp, Pf = z["host"]["frames"], z["host"]["pressures"], z["full"]["frames"], z["full"]["pressures"]
+n_h = len(z["host"]["numbers"])
+if not a.host_only:
+    for k in ("model_fp", "T"):
+        if md["host"][k] != md["full"][k]: sys.exit(f"host and full checkpoints disagree on {k}: {md['host'][k]} vs {md['full'][k]}")
+    if not np.array_equal(z["host"]["cell"], z["full"]["cell"]): sys.exit("host and full cells differ")
+    n_f = len(z["full"]["numbers"])
+    if n_f != n_h + 1 or not np.array_equal(z["full"]["numbers"][:n_h], z["host"]["numbers"]) or z["full"]["numbers"][-1] != 1: sys.exit("full system must be host + 1 H (H last)")
+nh = len(z["host"]["frames"]); nf = 0 if a.host_only else len(z["full"]["frames"])
+print(f"host: {nh} frames (step {int(z['host']['step'])}/{md['host']['equil_steps'] + md['host']['frames'] * md['host']['every']}), host + 1 H: {nf} frames; T {md['host']['T']} K, {n_h} atoms")
+if nh < a.min_host or (not a.host_only and nf < a.min_full): sys.exit(f"not enough frames (need host >= {a.min_host}, full >= {a.min_full}): wait for the MD, or lower --min-host/--min-full")
+fh, Ph = z["host"]["frames"], z["host"]["pressures"]
+fp, Pf = (np.zeros((0, n_h + 1, 3)), np.zeros(0)) if a.host_only else (z["full"]["frames"], z["full"]["pressures"])
 if a.max_frames: fh, Ph, fp, Pf = fh[:a.max_frames], Ph[:a.max_frames], fp[:a.max_frames], Pf[:a.max_frames]
 cell = z["host"]["cell"]; V = float(abs(np.linalg.det(cell)))
 if a.dry: sys.exit(f"dry run: would write {out} with {len(fh)} host and {len(fp)} full frames, V = {V:.3f} A^3")
