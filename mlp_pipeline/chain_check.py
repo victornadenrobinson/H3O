@@ -6,20 +6,21 @@
    chain; only frames present in the scored file count (valid_n has few chain frames: score the chain frames of the whole snapdb for more pairs, but train-split pairs are optimistic).
    Criterion from docs/MODEL_TEST_SUITE.md B1: mean error <= 100 meV, sd <= 200 meV per added H, no trend with n."""
 import argparse, collections, csv, math, os
-ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--set", default="B"); ap.add_argument("--split", default=""); ap.add_argument("--dE-max", type=float, default=0.0, help="drop pairs whose DFT insertion energy per H exceeds this (eV): unrelaxed close contacts"); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--set", default="B"); ap.add_argument("--split", default=""); ap.add_argument("--dE-max", type=float, default=0.0, help="drop pairs whose insertion energy per H exceeds this (eV): unrelaxed close contacts")
+ap.add_argument("--select", choices=("dft", "model"), default="dft", help="which insertion energy --dE-max and the quartiles use. model = what an estimator sees (sites chosen by the MODEL energy); dft conditions on the target and biases the error"); a = ap.parse_args()
 def stats(x):
     m = sum(x) / len(x); sd = math.sqrt(sum((v - m) ** 2 for v in x) / (len(x) - 1)) if len(x) > 1 else float("nan"); return m, sd
 for p in a.files:
     rows = [r for r in csv.DictReader(open(p)) if r["set"] == a.set and r.get("n_add", "") not in ("", None) and (not a.split or r.get("split", "") == a.split)]
     if not rows: print(f"{p}: no frames of set {a.set} with n_add (old CSV? rerun baseline_D.py)"); continue
     ch = collections.defaultdict(list)
-    for r in rows: ch[(r["host"], r["run_id"])].append((int(float(r["n_add"])), int(r["nH"]), float(r["D_F"]), float(r["F"])))
+    for r in rows: ch[(r["host"], r["run_id"])].append((int(float(r["n_add"])), int(r["nH"]), float(r["D_F"]), float(r["F"]), float(r["E_model"])))
     err = []; pairs = []; by_n = collections.defaultdict(list)
     for k, v in ch.items():
         v.sort()
-        for (n1, h1, d1, f1), (n2, h2, d2, f2) in zip(v, v[1:]):
+        for (n1, h1, d1, f1, m1), (n2, h2, d2, f2, m2) in zip(v, v[1:]):
             if h2 > h1:
-                de = (f2 - f1) / (h2 - h1)                                  # DFT insertion energy per added H [eV] (raw free-energy difference)
+                de = ((f2 - f1) if a.select == "dft" else (m2 - m1)) / (h2 - h1)      # insertion energy per added H [eV]: DFT free energy or the model energy
                 if a.dE_max and de > a.dE_max: continue
                 e = (d2 - d1) / (h2 - h1) * 1000.0; err.append(e); by_n[n1].append(e); pairs.append((de, e))      # meV per added H
     print(f"\n{os.path.basename(p)}: {len(rows)} chain frames in {len(ch)} chains -> {len(err)} consecutive pairs")
@@ -31,7 +32,7 @@ for p in a.files:
         print(f"   trend with n: {sl * 10:+.1f} meV per +10 n   |  by starting n: " + "  ".join(f"n={x}:{sum(by_n[x]) / len(by_n[x]):+.0f}({len(by_n[x])})" for x in xs[:12]))
     if len(pairs) >= 8:
         pairs.sort(); q = len(pairs) // 4 or 1
-        print("   error vs size of the DFT insertion energy per H (quartiles of the raw dE_DFT):")
+        print(f"   error vs size of the {a.select.upper()} insertion energy per H (quartiles):")
         for i in range(4):
             sub = pairs[i * q:(i + 1) * q if i < 3 else len(pairs)]; m, sd = stats([e for _, e in sub])
             print(f"      dE_DFT {sub[0][0]:+8.2f} .. {sub[-1][0]:+8.2f} eV   mean error {m:+7.0f}  sd {sd:5.0f} meV  (n={len(sub)})")
