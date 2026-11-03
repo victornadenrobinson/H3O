@@ -34,7 +34,7 @@ for path in files:
     split_of = (lambda f, kind="h": split_tag) if a.split == "tag" else (lambda f, kind="h": "valid" if int(hashlib.md5(f"{tag}:{kind}{int(f)}".encode()).hexdigest(), 16) % 1000 < 1000 * a.valid_frac else "train")
     h0 = len(fh) // 2; idx = h0 + np.linspace(0, len(fh) - h0 - 1, min(a.frames_n, len(fh) - h0)).round().astype(int)
     m = re.search(r"(\d+)GPa", tag); Pt = float(m.group(1)) if m else float("nan"); per = 2 + a.sel; nd = min(a.del_n, len(z["full"]) - len(z["full"]) // 2) if ("full" in z.files and a.del_n) else 0; tot += per * len(idx) + (1 + a.ndel) * nd
-    print(f"{tag}: {len(fh)} frames, {len(numbers)} atoms (H/O {nH}/{nO}), T {T:.0f} K, split {a.split}: {len(idx)} host frames x {per} points + {a.del_n if "full" in z.files else 0} full frames x {1 + a.ndel}", flush=True)
+    print(f"{tag}: {len(fh)} frames, {len(numbers)} atoms (H/O {nH}/{nO}), T {T:.0f} K, split {a.split}: {len(idx)} host frames x {per} points + {a.del_n if 'full' in z.files else 0} full frames x {1 + a.ndel}", flush=True)
     if a.dry: continue
     Lw = np.diag(cell) if np.allclose(cell, np.diag(np.diag(cell))) else None
     for f in idx:
