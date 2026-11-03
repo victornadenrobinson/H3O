@@ -35,4 +35,4 @@ for p in a.files:
         print(f"   error vs size of the {a.select.upper()} insertion energy per H (quartiles):")
         for i in range(4):
             sub = pairs[i * q:(i + 1) * q if i < 3 else len(pairs)]; m, sd = stats([e for _, e in sub])
-            print(f"      dE_DFT {sub[0][0]:+8.2f} .. {sub[-1][0]:+8.2f} eV   mean error {m:+7.0f}  sd {sd:5.0f} meV  (n={len(sub)})")
+            print(f"      dE_{a.select} {sub[0][0]:+8.2f} .. {sub[-1][0]:+8.2f} eV   mean error {m:+7.0f}  sd {sd:5.0f} meV  (n={len(sub)})")
