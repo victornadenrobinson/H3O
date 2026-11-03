@@ -11,6 +11,8 @@ NAIVE=""; [ "$MODE" = naive ] && NAIVE="--naive"
 "$GBIN/python" mlp_pipeline/grace_make_input.py "$D/input.yaml" --train "$R/train_$TT.pkl.gz" --test "$R/valid_$VT.pkl.gz" --updates "$UPD" --batch "$BS" --wE "$WE" --wF "$WF" --wS "$WS" --lr "$LR" $NAIVE || exit 1
 echo "fine-tune $NAME: train $TT valid $VT updates $UPD weights E$WE F$WF S$WS $MODE lr $LR batch $BS  gpu ${CUDA_VISIBLE_DEVICES:-all}" | tee "$D/recipe.txt"
 [ "${DRY:-0}" = 1 ] && { echo "(dry) cd $D && $GBIN/gracemaker input.yaml -l log.txt"; exit 0; }
+# fetch the foundation checkpoint ONCE (file lock: concurrent jobs wait, then find the finished cache). Needs internet: run this once on a login node if the compute node cannot download.
+( flock 9; "$GBIN/python" -c "from tensorpotential.calculator.foundation_models import get_or_download_checkpoint as g; print('checkpoint', g('GRACE-2L-SMAX-OMAT-medium'))" ) 9>"$R/.ckpt.lock" 2>&1 | tail -n 2
 cd "$D" && export TF_FORCE_GPU_ALLOW_GROWTH=true && "$GBIN/gracemaker" input.yaml -l log.txt > stdout.txt 2>&1; RC=$?
 echo "gracemaker exit code $RC"; [ $RC -eq 0 ] && echo "model: $D/seed/1/final_model" || grep -v -E "^(I0000|W0000|E0000|WARNING|20[0-9][0-9]-[0-9-]+ [0-9:.]+: [EIW]|\[tensorpotential\])" stdout.txt | tail -n 15
 exit $RC
