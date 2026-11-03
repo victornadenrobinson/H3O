@@ -32,34 +32,58 @@ at.calc = ToyIce(); rng = np.random.default_rng(a.seed); MaxwellBoltzmannDistrib
 dyn = Langevin(at, 1.0 * units.fs, temperature_K=a.T, friction=1 / (100 * units.fs), rng=rng)
 dp = DiffPrinter(); nO = int((at.numbers == 8).sum()); sys.stdout.write("\033[2J\033[?25l")
 yaw = 0.0; tilt = a.tilt; zoom = 1.0; spin = a.spin; paused = False; quit_ = False; vd = [float(c) for c in a.view] if a.view else None
-HELP = "drag: rotate  wheel/+/-: zoom  arrows: rotate  s: spin  space: pause MD  r: reset  q: quit"
+st = dict(bonds=not a.nobonds, box=not a.nobox, O=True, H=True, light=True, depth=True, spin=bool(a.spin), pause=False)
+ITEMS = [("bonds", "b"), ("box", "x"), ("O", "o"), ("H", "h"), ("light", "l"), ("depth", "d"), ("spin", "s"), ("pause", " ")]
+KEYS = {k: n for n, k in ITEMS}
+HELP = "drag: rotate   wheel / + / -: zoom   arrows: rotate   r: reset   q: quit   (click a box or press its letter)"
+fancy = a.lit or a.view3d or a.view
+
+
+def bar():
+    """checkbox line under the frame; returns the text and the click zones (x0, x1, name)"""
+    zones = []; x = 2; out = ""
+    for n, k in ITEMS:
+        t = f"[{'x' if st[n] else ' '}] {n} ({'space' if k == ' ' else k})  "; zones.append((x, x + len(t) - 2, n)); out += t; x += len(t)
+    return out, zones
+
+
+def toggle(n):
+    global paused, spin
+    st[n] = not st[n]
+    if n == "pause": paused = st[n]
+    if n == "spin": spin = 1.5 if st[n] else 0.0
+
+
 try:
     with Controls(mouse=not a.no_mouse) as ctl:
-        t_prev = time.time()
+        t_prev = time.time(); zones = []
         while not quit_ and (not a.steps or dyn.nsteps < a.steps):
             for ev in ctl.poll():
-                if ev[0] == "rot": yaw += ev[1] * 2.5; tilt = max(-89.0, min(89.0, tilt - ev[2] * 3.0))
+                if ev[0] == "click" and fancy and ev[2] == a.height + 4:
+                    for x0, x1, n in zones:
+                        if x0 <= ev[1] <= x1: toggle(n)
+                elif ev[0] == "rot": yaw += ev[1] * 2.5; tilt = max(-89.0, min(89.0, tilt - ev[2] * 3.0))
                 elif ev[0] == "zoom": zoom = max(0.4, min(3.0, zoom * (1.12 if ev[1] > 0 else 1 / 1.12)))
                 elif ev[0] == "arrow": yaw += {"left": -6, "right": 6}.get(ev[1], 0); tilt = max(-89.0, min(89.0, tilt + {"up": 6, "down": -6}.get(ev[1], 0)))
                 elif ev[0] == "key":
                     k = ev[1]
                     if k in ("q", "\x03"): quit_ = True
-                    elif k == " ": paused = not paused
-                    elif k == "s": spin = 0.0 if spin else 1.5
+                    elif k in KEYS: toggle(KEYS[k])
                     elif k in ("+", "="): zoom = min(3.0, zoom * 1.12)
                     elif k in ("-", "_"): zoom = max(0.4, zoom / 1.12)
-                    elif k == "r": yaw, tilt, zoom, spin = 0.0, a.tilt, 1.0, a.spin
+                    elif k == "r": yaw, tilt, zoom = 0.0, a.tilt, 1.0
             if not paused: dyn.run(a.every)
             yaw += spin
             Tk = 2 / 3 * at.get_kinetic_energy() / (len(at) * units.kB); at.info["T_inst"] = Tk
             now = time.time(); sps = a.every / max(now - t_prev, 1e-9) if not paused else 0.0; t_prev = now
-            note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s  tilt {tilt:.0f}  zoom {zoom:.2f}" + ("  [paused]" if paused else "")
-            if a.lit: txt = render_lit(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, note=note, bonds=not a.nobonds, box=not a.nobox, clip=a.clip, hi=a.hi, view_dir=vd, ortho=bool(a.view), zoom=min(a.zoom, 1.6) * 0.87 * zoom, mode=a.lit_mode)
-            elif a.view3d or a.view: txt = render3d(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=not (a.nobonds or a.ascii), box=not a.nobox, zoom=a.zoom * zoom, clip=a.clip, hi=a.hi, view_dir=vd, ortho=a.ortho or bool(a.view), braille=a.braille)
+            note = f"{nO} H2O {a.phase}  target {a.T:.0f} K  {sps:.0f} steps/s  tilt {tilt:.0f}  zoom {zoom:.2f}"
+            if a.lit: txt = render_lit(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, note=note, bonds=st["bonds"], box=st["box"], clip=a.clip, hi=a.hi, view_dir=vd, ortho=bool(a.view), zoom=min(a.zoom, 1.6) * 0.87 * zoom, mode=a.lit_mode, show_O=st["O"], show_H=st["H"], light=st["light"], depth_fade=st["depth"])
+            elif a.view3d or a.view: txt = render3d(at, yaw=yaw, tilt=tilt, step=dyn.nsteps, width=a.width, height=a.height, ascii_only=a.ascii, note=note, bonds=st["bonds"] and not a.ascii, box=st["box"], zoom=a.zoom * zoom, clip=a.clip, hi=a.hi, view_dir=vd, ortho=a.ortho or bool(a.view), braille=a.braille)
             else: txt = render(at, step=dyn.nsteps, width=a.width, height=a.height, slab=a.slab, note=note, atom_scale=a.atom_scale or None)
             if a.delta: dp.draw()
             else: print(txt, flush=True)
-            if (a.lit or a.view3d or a.view) and sys.stdout.isatty(): sys.stdout.write("\033[0m " + HELP + "\033[K"); sys.stdout.flush()
+            if fancy and sys.stdout.isatty():
+                btxt, zones = bar(); sys.stdout.write(f"\033[{a.height + 4};1H\033[0m " + btxt + "\033[K\n \033[2m" + HELP + "\033[0m\033[K"); sys.stdout.flush()
             time.sleep(max(0.0, 1.0 / a.fps - (time.time() - now)))
 except KeyboardInterrupt: pass
 finally: sys.stdout.write("\033[?25h\n")

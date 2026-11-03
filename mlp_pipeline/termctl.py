@@ -1,6 +1,6 @@
 """Non-blocking keyboard and mouse input for terminal viewers (standard library only). Enables xterm mouse reporting (button + drag + wheel, SGR format) and cbreak mode; always restores the terminal.
   with Controls() as ctl:
-      for ev in ctl.poll(): ...        # ('rot', dx_chars, dy_chars) left-button drag, ('zoom', +1/-1) wheel, ('key', 'q'), ('arrow', 'left'|'right'|'up'|'down')
+      for ev in ctl.poll(): ...        # ('rot', dx_chars, dy_chars) left-button drag, ('zoom', +1/-1) wheel, ('key', 'q'), ('arrow', 'left'|'right'|'up'|'down'), ('click', col, row) on every left-button press (1-based terminal coordinates)
 Does nothing (poll() returns []) when stdin is not a terminal. Mouse reporting needs a terminal that supports it (xterm, Windows Terminal, kitty, WezTerm, tmux with mouse on ...);
 the keyboard events work everywhere."""
 import os, re, select, sys
@@ -37,7 +37,7 @@ class Controls:
             if m:
                 code, x, y, kind = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4); i = m.end()
                 if code in (64, 65) and kind == "M": ev.append(("zoom", 1 if code == 64 else -1))
-                elif code == 0 and kind == "M": self.last = (x, y)
+                elif code == 0 and kind == "M": self.last = (x, y); ev.append(("click", x, y))
                 elif code == 32 and kind == "M" and self.last is not None: ev.append(("rot", x - self.last[0], y - self.last[1])); self.last = (x, y)
                 elif kind == "m": self.last = None
                 continue
