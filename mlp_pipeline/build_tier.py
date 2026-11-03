@@ -90,5 +90,5 @@ for name, fr in outs.items():
     write(P(name), fr)
 sets = sorted(set(by_set) | {setname(f) for f in new["valid"]}); print(f"\n{'file':22s}{'frames':>8s}   " + "  ".join(f"{s:>6s}" for s in sets))
 for name, fr in outs.items():
-    c = collections.Counter(setname(f) if "db_set" in f.info else "old" for f in fr); print(f"{name:22s}{len(fr):8d}   " + "  ".join(f"{c.get(s, 0):6d}" for s in sets) + (f"   (+{c.get('old', 0) + sum(v for k, v in c.items() if k not in sets)} old)" if old_tr and name.startswith(("train_m", "valid_m")) else ""))
+    c = collections.Counter(setname(f) if "db_set" in f.info else "old" for f in fr); print(f"{name:22s}{len(fr):8d}   " + "  ".join(f"{c.get(s, 0):6d}" for s in sets) + (f"   (+{sum(v for k, v in c.items() if k not in sets)} old)" if old_tr and name.startswith(("train_m", "valid_m")) else ""))
 print("\nnext: bash mlp_pipeline/grace_prep_pkl.sh " + " ".join(n.split('_', 1)[1] for n in outs if n.startswith("train_")) + "   (writes runs/grace/*.pkl.gz)")
