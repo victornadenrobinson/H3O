@@ -351,8 +351,9 @@ def plan(a):
             gpus = subprocess.check_output(
                 ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"], text=True
             ).split()
-        if len(gpus) != 4 or len(set(gpus)) != 4 or any(x in ("-1", "NoDevFiles") for x in gpus):
-            raise ValueError(f"Expected four distinct visible GPUs, found {gpus}")
+        sel_hosts = [h for h in (getattr(a, "hosts", None) or "").split(",") if h]
+        if (len(gpus) != 4 if not sel_hosts else len(gpus) < len(sel_hosts)) or len(set(gpus)) != len(gpus) or any(x in ("-1", "NoDevFiles") for x in gpus):
+            raise ValueError(f"Expected {'four' if not sel_hosts else str(len(sel_hosts))} distinct visible GPUs, found {gpus}")
         if not a.dry_run:
             for module in ("tensorflow", "tensorpotential", "matscipy"):
                 if importlib.util.find_spec(module) is None:
@@ -395,6 +396,11 @@ def plan(a):
                 cmdargs[cmdargs.index("--vpa")+1] = str((3*ice["vpa"] + (hp-2)/.25 *
                     (3.25*rich["vpa"]-3*ice["vpa"]))/(hp+1))
                 jobs.append((f"Hplus{count}", cmdargs, a.ice_proxy))
+    sel_hosts = [h for h in (getattr(a, "hosts", None) or "").split(",") if h]
+    if sel_hosts:
+        known = [j[0] for j in jobs]; missing = [h for h in sel_hosts if h not in known]
+        if missing: raise ValueError(f"--hosts {missing} not among this run's hosts {known}")
+        jobs = [j for j in jobs if j[0] in sel_hosts]
     reference = None
     if a.reference_run:
         refdir = Path(a.reference_run).resolve()
@@ -672,7 +678,7 @@ def run_unlocked(a):
                 except ProcessLookupError:
                     pass
             r["exit_code"] = p.wait()
-        complete = len(children) == 4 and all(
+        complete = len(children) == len(manifest["jobs"]) and len(children) >= 1 and all(
             p.returncode == 0 and Path(r["result"]).is_file() for r, p in children)
         manifest["status"] = "complete" if complete else (stopped or "failed")
         save(out / "manifest.json", manifest)
@@ -807,6 +813,7 @@ def main():
     r.add_argument("--batch", type=int, default=8)
     r.add_argument("--roots", nargs="+")
     r.add_argument("--state-json", help="explicit EOS inputs instead of prior stage0 files; see README")
+    r.add_argument("--hosts", help="comma-separated subset of this run's hosts to run here (e.g. pureH, or Hplus12 with --extra-h): needs only that many GPUs, so single-GPU shared jobs work; default = all four")
     r.add_argument("--seed", type=int, default=3, help="MD / host seed passed to every host (default 3): give each replica another one, identical settings otherwise repeat the same trajectory")
     r.add_argument("--thermostat", choices=("langevin", "bussi"), default="langevin", help="host MD thermostat: langevin (default) or bussi (stochastic velocity rescaling; --friction-fs is then its relaxation time)")
     r.add_argument("--friction-fs", type=float, default=None, help="Langevin damping time (fs) for the host MD; default 100 (the old code used ~1000)")

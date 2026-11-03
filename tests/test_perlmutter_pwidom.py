@@ -505,3 +505,22 @@ def test_legacy_in_place_restart_without_checkpoint(campaign):
     assert result.stdout.count('no checkpoint/cache; starting this host')==4
     assert json.loads((out/'manifest.json').read_text())['status']=='complete'
     for j in manifest['jobs']: assert Path(j['log']).read_text().startswith('old interrupted log\n')
+
+
+def test_hosts_subset_runs_one_host_and_checks_names(campaign):
+    env, args, out = campaign
+    one = shell("perlmutter_pwidom.sh", [*args, "--hosts", "pureH", "--out", str(out)], env)
+    assert one.returncode == 0, one.stdout + one.stderr
+    m = json.loads((out / "manifest.json").read_text())
+    assert m["status"] == "complete" and [j["name"] for j in m["jobs"]] == ["pureH"]
+    eos = out.parent / "composition_eos.json"
+    eos.write_text(json.dumps(dict(P=500, T=3000, ice=dict(vpa=3., B_GPa=1400., nrep=3, source="test"),
+        h225=dict(vpa=3., B_GPa=1400., nrep=3, source="test"), H=dict(vpa=3., B_GPa=1400., natoms=8, source="test"))))
+    custom_args = args[:args.index("--roots")] + args[args.index("--roots")+2:]
+    sub = shell("perlmutter_pwidom.sh", [*custom_args, "--state-json", str(eos), "--reference-run", str(out),
+        "--extra-h", "5", "11", "16", "22", "--hosts", "Hplus11", "--dry-run", "--out", str(out.parent/"sub")], env)
+    assert sub.returncode == 0, sub.stderr
+    assert "Hplus11: GPU CPU" in sub.stdout and "Hplus5" not in sub.stdout and "Hplus22" not in sub.stdout
+    bad = shell("perlmutter_pwidom.sh", [*custom_args, "--state-json", str(eos), "--reference-run", str(out),
+        "--extra-h", "5", "11", "16", "22", "--hosts", "Hplus99", "--dry-run"], env)
+    assert bad.returncode != 0 and "not among this run" in bad.stderr
