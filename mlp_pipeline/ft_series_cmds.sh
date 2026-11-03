@@ -43,5 +43,11 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-3_e50     mn mn $(upd 50 mn 1) $W frozen 0.001 1"
        echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e50_F50 mn mn $(upd 50 mn 1) 10 50 1 frozen 0.003 1"
        echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e50      n n $(upd 50 n 1) $W frozen 0.003 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long ..." >&2; exit 1;;
+  cap) W=${2:-10 10 1}   # CAPACITY round (after ft_curves showed frozen train error = test error: capacity-limited, not data-limited). 5 epochs of the replay tier each.
+       # (a,b) force-heavier loss, frozen; (c,d) UNFROZEN on the replay tier INCLUDING the 700+ atom cells (80 GB GPU, batch 1; the earlier unfrozen runs excluded them, which made their test error meaningless on pure H)
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e5_F50   mn mn $(upd 5 mn 1) 10 50 1 frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e5_F200  mn mn $(upd 5 mn 1) 10 200 1 frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr1e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0001 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_n_big_lr3e-4_e5   mn mn $(upd 5 mn 1) $W naive 0.0003 1";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap ..." >&2; exit 1;;
 esac
