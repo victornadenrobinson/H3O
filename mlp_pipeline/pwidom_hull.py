@@ -29,8 +29,9 @@ def hull(points, err_scale=1.0, mc=4000, seed=1):
         if gg[0] >= 0: return dict(bracketed=False, n_star=0.0, depth_O=0.0, depth_atom=0.0, positive=True)
         j = int(np.argmin(G)); return dict(bracketed=False, n_star=nn[j], depth_O=-G[j], depth_atom=-f[j], positive=False)
     base = summarise(g); G = dgmix(g); nn = np.r_[0.0, n] if n[0] > 0 else n
-    rng = np.random.default_rng(seed); runs = [summarise(rng.normal(g, e)) for _ in range(mc)] if mc and np.any(e > 0) else []
+    rng = np.random.default_rng(seed); draws = [rng.normal(g, e) for _ in range(mc)] if mc and np.any(e > 0) else []; runs = [summarise(d) for d in draws]
     out = dict(n=nn, G=G, per_atom=G / (3 + nn), x=(2 + nn) / (3 + nn), base=base)
+    if draws: Gs = np.array([dgmix(d) for d in draws]); out["G_ci"] = np.percentile(Gs, [16, 50, 84], axis=0); out["per_atom_ci"] = out["G_ci"] / (3 + nn)
     if runs:
         out["p_bracketed"] = float(np.mean([r["bracketed"] for r in runs])); d = np.array([r["depth_atom"] for r in runs]); out["depth_atom_ci"] = tuple(np.percentile(d, [16, 50, 84]))
         b = [r["n_star"] for r in runs if r["bracketed"]]; out["n_star_ci"] = tuple(np.percentile(b, [16, 50, 84])) if b else None
@@ -104,15 +105,17 @@ def main():
     for r in rows: print(f"{r['name']:8s}{r['n']:7.3f}{(2 + r['n']) / (3 + r['n']):7.3f}{r['dg']:9.0f} +-{r['err'] * a.err_scale:4.0f}  {' '.join(r['flags']) or '-'}" + ("   (excluded)" if r not in keep else ""))
     if len(keep) < 1: sys.exit("no usable host")
     hh = hull([(r["n"], r["dg"], r["err"]) for r in keep], a.err_scale, a.mc); b = hh["base"]
-    print(f"\n{'n':>7s}{'dG_mix meV/O':>14s}{'meV/atom':>10s}")
-    for ni, G, f in zip(hh["n"], hh["G"], hh["per_atom"]): print(f"{ni:7.3f}{G:14.1f}{f:10.2f}")
+    print(f"\n{'n':>7s}{'dG_mix meV/O':>26s}{'meV/atom':>26s}   (median, 16-84 %)")
+    for i, (ni, G, f) in enumerate(zip(hh["n"], hh["G"], hh["per_atom"])):
+        if "G_ci" in hh: lo, md, hi = hh["G_ci"][:, i]; plo, pmd, phi = hh["per_atom_ci"][:, i]; print(f"{ni:7.3f}{md:12.1f}  [{lo:6.1f}, {hi:6.1f}]{pmd:12.2f}  [{plo:6.2f}, {phi:6.2f}]")
+        else: print(f"{ni:7.3f}{G:14.1f}{f:10.2f}")
     if b["bracketed"]: ci = hh.get("n_star_ci"); print(f"\nhull minimum at n* = {b['n_star']:.3f} H/O (x_H = {(2 + b['n_star']) / (3 + b['n_star']):.3f}): depth {b['depth_O']:.1f} meV/O = {b['depth_atom']:.2f} meV/atom" + (f";  n* 16/50/84 % = {ci[0]:.3f}/{ci[1]:.3f}/{ci[2]:.3f}" if ci else ""))
     elif b.get("positive"): print(f"\nNO stable mixing in the scanned range: dg(0) >= 0 (H prefers the reservoir). hull depth 0.")
     else: print(f"\nhull NOT bracketed: dg < 0 up to n = {max(r['n'] for r in keep):.3f} (H still prefers the host); depth is a LOWER bound: {b['depth_O']:.1f} meV/O = {b['depth_atom']:.2f} meV/atom at n = {b['n_star']:.3f}. Scan larger n.")
-    if "depth_atom_ci" in hh: c = hh["depth_atom_ci"]; print(f"depth per atom 16/50/84 % over the error draws: {c[0]:.2f} / {c[1]:.2f} / {c[2]:.2f} meV;  P(bracketed) = {hh['p_bracketed']:.2f}")
+    if "depth_atom_ci" in hh: c = hh["depth_atom_ci"]; print(f"measured depth per atom = {c[1]:.2f} (+{c[2] - c[1]:.2f} / -{c[1] - c[0]:.2f}) meV  (16-84 % over the error draws; a LOWER bound unless bracketed);  P(bracketed) = {hh['p_bracketed']:.2f}")
     if len(keep) >= 2:
         ex = linear_extrapolation([(r["n"], r["dg"], r["err"]) for r in keep], a.err_scale, a.mc)
-        if ex and "n_star" in ex: print(f"EXTRAPOLATION (straight line dg(n) = {ex['a']:.0f} + {ex['b']:.0f} n): minimum at n* = {ex['n_star']:.3f}, depth {ex['depth_O']:.1f} meV/O = {ex['depth_atom']:.2f} meV/atom" + (f";  16/50/84 %: n* {ex['n_star_ci'][0]:.3f}/{ex['n_star_ci'][1]:.3f}/{ex['n_star_ci'][2]:.3f}, depth/atom {ex['depth_atom_ci'][0]:.2f}/{ex['depth_atom_ci'][1]:.2f}/{ex['depth_atom_ci'][2]:.2f};  P(slope > 0) = {ex['p_positive_slope']:.2f}" if "n_star_ci" in ex else ""))
+        if ex and "n_star" in ex: print(f"EXTRAPOLATION (straight line dg(n) = {ex['a']:.0f} + {ex['b']:.0f} n): minimum at n* = {ex['n_star']:.3f}, depth {ex['depth_O']:.1f} meV/O = {ex['depth_atom']:.2f} meV/atom" + (f"\n    with errors (16-84 %): n* = {ex['n_star_ci'][1]:.3f} (+{ex['n_star_ci'][2] - ex['n_star_ci'][1]:.3f} / -{ex['n_star_ci'][1] - ex['n_star_ci'][0]:.3f});  depth/atom = {ex['depth_atom_ci'][1]:.2f} (+{ex['depth_atom_ci'][2] - ex['depth_atom_ci'][1]:.2f} / -{ex['depth_atom_ci'][1] - ex['depth_atom_ci'][0]:.2f}) meV;  P(slope > 0) = {ex['p_positive_slope']:.2f}" if "n_star_ci" in ex else ""))
         elif ex: print(f"EXTRAPOLATION: straight-line dg(n) has slope {ex['b']:.0f} meV/H per unit n (P(slope > 0) = {ex['p_positive_slope']:.2f}): no minimum implied")
     print("Free-energy errors are statistical only; completion does not establish convergence. Flagged points are marked, melted ones excluded (--strict drops all flagged).")
 
