@@ -22,6 +22,7 @@ ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDe
 ap.add_argument("npz", nargs="+"); ap.add_argument("--proxy", default="none"); ap.add_argument("--K", type=int, default=2000); ap.add_argument("--sel", type=int, default=2); ap.add_argument("--frames-n", type=int, default=8)
 ap.add_argument("--del-n", type=int, default=0, help="frames per cache for deletion pairs (from the host + 1 H frames)"); ap.add_argument("--ndel", type=int, default=2, help="deletions per full frame")
 ap.add_argument("--split", choices=("tag", "frame"), default="tag", help="tag: whole cache to one side (C2, old behaviour); frame: --valid-frac of the frames held out in every cache"); ap.add_argument("--valid-frac", type=float, default=0.2)
+ap.add_argument("--min-pureh-atoms", type=int, default=500, help="skip pure-H caches with fewer atoms: Gamma-only labels of small metallic H cells are not converged (tested: -150/-403 meV/H shift with a 2x2x2 mesh); the plan uses 729-atom cells only")
 ap.add_argument("--seed", type=int, default=1); ap.add_argument("--out", default="widom_c2.extxyz"); ap.add_argument("--dry", action="store_true"); a = ap.parse_args()
 from tdi import pwidom as pw
 files = sorted({p for g in a.npz for p in glob.glob(g)}); rng = np.random.default_rng(a.seed); proxy = pw.proxy_params(a.proxy); n_out = 0; tot = 0
@@ -30,6 +31,7 @@ for path in files:
     z = np.load(path, allow_pickle=True); fh = z["host"]; numbers = z["numbers"]; V = float(z["V"]); T = float(z["T"]); kT = KB * T
     cell = np.asarray(z["cell"]) if "cell" in z.files else np.eye(3) * V ** (1 / 3); Ph = np.asarray(z["P_host"]) if "P_host" in z.files else None
     nO = int((numbers == 8).sum()); nH = int((numbers == 1).sum()); isH = numbers == 1; tag = os.path.basename(path).replace("_frames.npz", "")
+    if nO == 0 and len(numbers) < a.min_pureh_atoms: print(f"{tag}: SKIPPED pure-H cache with {len(numbers)} atoms (< {a.min_pureh_atoms}: Gamma-only labels not converged)"); continue
     split_tag = "valid" if int(hashlib.md5(tag.encode()).hexdigest(), 16) % 3 == 0 else "train"
     split_of = (lambda f, kind="h": split_tag) if a.split == "tag" else (lambda f, kind="h": "valid" if int(hashlib.md5(f"{tag}:{kind}{int(f)}".encode()).hexdigest(), 16) % 1000 < 1000 * a.valid_frac else "train")
     h0 = len(fh) // 2; idx = h0 + np.linspace(0, len(fh) - h0 - 1, min(a.frames_n, len(fh) - h0)).round().astype(int)

@@ -14,6 +14,7 @@ from ase.calculators.singlepoint import SinglePointCalculator
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--out-dir", default="runs"); ap.add_argument("--tag", default="n")
 ap.add_argument("--old-train"); ap.add_argument("--old-valid"); ap.add_argument("--fractions", type=int, nargs="*", default=[25, 50, 75]); ap.add_argument("--fmax", type=float, default=100.0); ap.add_argument("--valid-from", nargs="*", default=["F_toy", "F_H", "G"], help="sets that have no validation frames from the campaign split: this fraction of their groups goes to valid"); ap.add_argument("--valid-frac", type=float, default=0.25)
 ap.add_argument("--max-atoms", type=int, default=0, help="drop TRAIN frames with more atoms than this (unfrozen fine-tunes run out of GPU memory on the 700+ atom dense cells); valid files keep everything")
+ap.add_argument("--min-pureh-atoms", type=int, default=500, help="drop pure-H frames with fewer atoms (Gamma-only labels of small metallic H cells are not converged); 0 keeps them")
 ap.add_argument("--seed", default="tier1"); a = ap.parse_args()
 os.makedirs(a.out_dir, exist_ok=True); P = lambda n: os.path.join(a.out_dir, n + ".extxyz")
 
@@ -27,6 +28,7 @@ def setname(f):
 
 
 def clean(f):
+    if a.min_pureh_atoms and not (f.numbers == 8).any() and len(f) < a.min_pureh_atoms: drops["pureH_small"].append(0.0); return None
     F = f.get_potential_energy(); fo = f.get_forces(); st = f.get_stress(voigt=False)
     bad = not (np.isfinite(F) and np.isfinite(fo).all() and np.isfinite(st).all()); fm = float(np.abs(fo).max()) if np.isfinite(fo).all() else float("inf")
     if bad or fm > a.fmax: drops[setname(f)].append(fm); return None

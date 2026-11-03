@@ -14,7 +14,7 @@ from gamebar import Bar
 EV_A3_GPA = 160.21766208
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--model", required=True); ap.add_argument("--device", default="cuda"); ap.add_argument("--out", default="baseline_D.csv")
-ap.add_argument("--min-group", type=int, default=6); ap.add_argument("--limit", type=int, default=0); a = ap.parse_args()
+ap.add_argument("--min-pureh-atoms", type=int, default=500, help="skip pure-H frames with fewer atoms (unconverged Gamma labels); 0 keeps them"); ap.add_argument("--min-group", type=int, default=6); ap.add_argument("--limit", type=int, default=0); a = ap.parse_args()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
 calc = import_module("04_benchmark").get_calc_spec(a.model, a.device)
@@ -23,6 +23,9 @@ for p in a.files:
     for f in read(p, index=":"):
         if "E_sigma0_eV" not in f.info and "energy_sigma0" in f.info: f.info["E_sigma0_eV"] = f.info["energy_sigma0"]        # tier files (build_tier.py) use the name of the old tiers
         if "E_sigma0_eV" in f.info: frames.append(f)
+_n0 = len(frames)
+if a.min_pureh_atoms: frames = [f for f in frames if (f.numbers == 8).any() or len(f) >= a.min_pureh_atoms]
+if len(frames) < _n0: print(f"skipped {_n0 - len(frames)} pure-H frames with < {a.min_pureh_atoms} atoms (Gamma-only labels of small metallic H cells are not converged)")
 if a.limit: frames = frames[:a.limit]
 frames.sort(key=len)          # same-size frames back to back: the compiled GRACE kernels are reused (a new size can trigger a recompile)
 bar = Bar(len(frames), "GRACE-D"); rows = []; n = 0
