@@ -5,6 +5,7 @@
 # The launcher wants exactly four extra-H counts; each job passes all four but runs only its own host. 108 O per cell: count k -> n = k/108 extra H per O (3: 0.028, 9: 0.083 = H2.083O, 15: 0.139, 21: 0.194, 27 = H2.25O).
 #   STATES="400 500 600" T=5000 bash mlp_pipeline/pwidom_campaign.sh              prints what it would do (DRY=1 is the default)
 #   SUBMIT=1 STATES="500" COUNTS="3 9 15 21" bash mlp_pipeline/pwidom_campaign.sh  submits
+# REFDIR=<completed pure-H reference run dir> reuses it (no reference job, no dependency) for replicate / extra-composition runs of the same model, P, T.
 # env: MODEL (default the best fine-tune), T, STATES, COUNTS, MDPS (production ps, 1.0), EQPS (0.4), SEL (insertions per frame, 24), KK (proxy candidates, 3000), SEED0 (11; one seed per job), HOURS (wall limit per job, 6), OUT (runs/pw_prod),
 #      ICEPROXY / HPROXY (default: the launcher's). Needs the DFT EOS json per state: runs/dft_eos_<P>GPa_<T>K.json or ..._48h.json (make with --inspect-eos ... --save-eos).
 # Afterwards:  $PY mlp_pipeline/pwidom_hull.py $OUT/xh*_500GPa_5000K_*   (pooled per host; one column per run in plot_pwidom_hull.py)
@@ -25,9 +26,10 @@ for P in $STATES; do
   [ -e "$EOS" ] || { echo "skip $P GPa / $T K: no DFT EOS json (runs/dft_eos_${P}GPa_${T}K*.json)" >&2; continue; }
   tag=${P}GPa_${T}K; ref="$OUT/ref_$tag"
   common="--P $P --T $T --state-json $EOS --model $MODEL --ps $MDPS --equil-ps $EQPS --sel $SEL --K $KK --minutes $MIN --plain --interval 300 $PROXY"
-  jid=$(submit "ref_$tag" "$common --hosts pureH --seed $((SEED0 + n)) --out $ref" ""); n=$((n + 1)); echo "ref  $tag  job $jid" >&2
+  if [ -n "${REFDIR:-}" ]; then ref=$REFDIR; jid=""; echo "ref  $tag  reusing completed $ref (must be the same model/P/T; the launcher checks)" >&2
+  else jid=$(submit "ref_$tag" "$common --hosts pureH --seed $((SEED0 + n)) --out $ref" ""); n=$((n + 1)); echo "ref  $tag  job $jid" >&2; fi
   for k in "${CNT[@]}"; do
-    j=$(submit "xh${k}_${tag}_s$((SEED0 + n))" "$common --reference-run $ref --extra-h ${CNT[*]} --hosts Hplus$k --seed $((SEED0 + n)) --out $OUT/xh${k}_${tag}_s$((SEED0 + n))" "$jid"); echo "  Hplus$k ($(python3 -c "print(round($k/108,3))") H/O)  job $j  (after $jid)" >&2; n=$((n + 1))
+    j=$(submit "xh${k}_${tag}_s$((SEED0 + n))" "$common --reference-run $ref --extra-h ${CNT[*]} --hosts Hplus$k --seed $((SEED0 + n)) --out $OUT/xh${k}_${tag}_s$((SEED0 + n))" "$jid"); echo "  Hplus$k ($(python3 -c "print(round($k/108,3))") H/O)  job $j  (after ${jid:-nothing})" >&2; n=$((n + 1))
   done
 done
 [ "$SUBMIT" = 1 ] || echo "(dry run: nothing submitted; add SUBMIT=1)" >&2
