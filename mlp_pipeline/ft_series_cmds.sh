@@ -30,5 +30,10 @@ case $round in
        echo "bash mlp_pipeline/ft_one.sh mn_n_lr3e-4_e5    mnl mnl $(upd 5 mnl 1) $W naive 0.0003 1"
        echo "bash mlp_pipeline/ft_one.sh mn_n_lr1e-4_e20   mnl mnl $(upd 20 mnl 1) $W naive 0.0001 1"
        echo "bash mlp_pipeline/ft_one.sh n_n_lr1e-4_e5     nl nl $(upd 5 nl 1) $W naive 0.0001 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB ..." >&2; exit 1;;
+  lrC) W=${2:-10 10 1}   # after the lrA/lrB comparison on valid_n: best frozen run was lr 3e-3 (replay, 5 epochs); lr still rising -> 1e-2; longer; and the NO-replay control (n tier) at the same lr
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-2_e5   mn mn $(upd 5 mn 1) $W frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr3e-3_e20  mn mn $(upd 20 mn 1) $W frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mn_f_lr1e-2_e20  mn mn $(upd 20 mn 1) $W frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh n_f_lr3e-3_e5    n n $(upd 5 n 1) $W frozen 0.003 1";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC ..." >&2; exit 1;;
 esac
