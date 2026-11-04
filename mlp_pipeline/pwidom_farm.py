@@ -34,9 +34,9 @@ def drop_flag(cmd, flag):                      # boolean flag
     return [c for c in cmd if c != flag]
 
 
-def run_pool(tasks, gpus, per_gpu, dry, out=None, dash=15, plain=False, pattern="*_s[0-9]*.json"):
+def run_pool(tasks, gpus, per_gpu, dry, out=None, dash=15, plain=False, pattern="*_s[0-9]*.json", plan=None):
     """tasks: list of (name, cmd, logfile, outcheck); runs them with at most per_gpu concurrent processes per GPU"""
-    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []; board = Dashboard(out, dash, plain, pattern) if (out and dash and not dry) else None
+    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []; board = Dashboard(out, dash, plain, pattern, plan, q.qsize, len(gpus) * per_gpu) if (out and dash and not dry) else None
     def say(msg):                      # with the dashboard up, events go to the log (a print would break the in-place redraw)
         if board is None: print(msg, flush=True)
         else:
@@ -77,7 +77,10 @@ def cmd_farm(a):
             cmd += extra
             tag = cmd[cmd.index("--tag") + 1]; tasks.append((f"{j['name']} seed {s}", cmd, os.path.join(a.out, "logs", f"{j['name']}_s{s}.log"), os.path.join(out, tag + "_frames.npz")))
     print(f"{len(tasks)} MD replicas ({len(jobs)} hosts x {len(a.seeds)} seeds) on GPUs {gpus}, {a.per_gpu} per GPU", flush=True)
-    run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain)
+    c = tasks[0][1]; val = lambda f, d: float(c[len(c) - 1 - c[::-1].index(f) + 1]) if f in c else d       # last occurrence wins (argparse)
+    dt, ps, eq, ev = val("--dt", 0.5), val("--ps", 4.0), val("--equil-ps", 0.5), val("--every-fs", 20.0); nfr = int(ps * 1000 / ev); every = max(1, int(round(ev / dt)))
+    plan = [("MD host equilibration", int(eq * 1000 / dt)), ("MD host sampling", nfr * every), ("MD host + 1 H equilibration", int(eq * 1000 / dt)), ("MD host + 1 H sampling", nfr * every)]
+    run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, plan=plan)
 
 
 def cmd_pool(a):
@@ -116,7 +119,7 @@ def mem_gb():
     except Exception: return None, None
 
 
-def render(out, prev, pattern="*_s[0-9]*.json"):
+def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0):
     """dashboard lines for the runs in OUT/progress: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run (stage, bar, speed, GPU memory of that process, elapsed, ETA).
     speed = progress units per second since the previous call (recent), else the stage average. prev: dict kept by the caller between calls."""
     now = time.time(); runs = []; L = []
@@ -126,7 +129,7 @@ def render(out, prev, pattern="*_s[0-9]*.json"):
         except Exception: r = None
         runs.append((name, gpu, pid, r))
     apps = {x[0]: x[1] for x in smi("compute-apps", ["pid", "used_memory"])}; gpus = {x[0]: x for x in smi("gpu", ["index", "utilization.gpu", "memory.used", "memory.total"])}
-    rows = []; per_gpu = {}
+    rows = []; per_gpu = {}; run_etas = []; speeds = []
     for name, gpu, pid, r in runs:
         if r is None: rows.append((name, gpu, "starting", None, "", apps.get(pid, "") if pid else "", "", "")); continue
         el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0)
@@ -135,7 +138,11 @@ def render(out, prev, pattern="*_s[0-9]*.json"):
         elif el > 20 and done > 0: sp = done / el
         prev[key] = (now, done); eta = r.get("eta_seconds"); running = r["stage"] != "complete" and stale < 300
         if sp and running: per_gpu.setdefault(gpu, []).append(sp)
-        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
+        reta = None                                    # whole-run ETA: rest of this stage + the later stages of the plan, at this run's stage-average speed
+        if plan and r["stage"] in [x[0] for x in plan] and el > 20 and done > 0 and r["stage"] != "complete":
+            i = [x[0] for x in plan].index(r["stage"]); rem = max(0, r.get("total", 0) - done) + sum(x[1] for x in plan[i + 1:]); reta = rem / (done / el); run_etas.append(reta)
+        if plan and sp and r["stage"] in [x[0] for x in plan] and running: speeds.append(sp)
+        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), ("-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)) + ("/" + ("%d:%02d" % divmod(int(reta // 60), 60)) if reta else "")))
     done_n = len(glob.glob(os.path.join(out, "farm", "*", "*_frames.npz")))
     L.append(f"{out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
     used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
@@ -149,17 +156,21 @@ def render(out, prev, pattern="*_s[0-9]*.json"):
         if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
         L.append(msg + note)
     if warn: L.append("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
-    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA':<6}")
-    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<6}")
+    if plan and run_etas:
+        full = sum(x[1] for x in plan); sp_mean = sum(speeds) / len(speeds) if speeds else None
+        tail = (queued / max(1, slots)) * (full / sp_mean) if (queued and sp_mean) else 0.0; tot = max(run_etas) + tail
+        L.append(f"whole farm: {queued} queued, about {tot / 60:.0f} min to go (running runs finish in ~{max(run_etas) / 60:.0f} min" + (f", then ~{tail / 60:.0f} min for the queue" if tail else "") + "; assumes the current speeds)")
+    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA stage/run':<14}")
+    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<14}")
     return L
 
 
 class Dashboard:
     """redraws render() every `interval` seconds in a background thread: in place by cursor movement on a terminal (scrollback is kept), plain blocks every minute when stdout is not a terminal"""
-    def __init__(self, out, interval, plain=False, pattern="*_s[0-9]*.json"):
-        self.pattern = pattern; self.out, self.interval, self.prev, self.n, self.stop = out, interval, {}, 0, threading.Event(); self.tty = sys.stdout.isatty() and not plain; self.t = None
+    def __init__(self, out, interval, plain=False, pattern="*_s[0-9]*.json", plan=None, queued=None, slots=0):
+        self.pattern, self.plan, self.queued, self.slots = pattern, plan, queued, slots; self.out, self.interval, self.prev, self.n, self.stop = out, interval, {}, 0, threading.Event(); self.tty = sys.stdout.isatty() and not plain; self.t = None
     def draw(self, final=False):
-        L = render(self.out, self.prev, self.pattern)
+        L = render(self.out, self.prev, self.pattern, self.plan, self.queued() if self.queued else 0, self.slots)
         if self.tty:
             if self.n: sys.stdout.write("\033[%dA" % self.n)
             cols = max(60, shutil.get_terminal_size((200, 24)).columns - 1); sys.stdout.write("".join(l[:cols] + "\033[K\n" for l in L) + ("\033[J" if True else "")); sys.stdout.flush(); self.n = len(L)
