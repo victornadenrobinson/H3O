@@ -10,7 +10,7 @@ Everything is taken from the manifest of an earlier launcher run (its job comman
   3. sp   : python3 mlp_pipeline/pwidom_farm.py sp TEMPLATE_RUN OUT [--gpus 0,1,2,3] [--sp-args "--sel 24 --K 3000 --batch 4"] [--dry-run]
             the single-point stage on the pooled frames, ONE process per GPU at a time (queued when hosts > GPUs), results in OUT/pooled/.
 Do not pool frames made with the old thermostat or another model: the pool refuses a different model fingerprint, V or T, but it cannot know the friction; use only runs made after the thermostat fix."""
-import argparse, glob, json, os, queue, subprocess, sys, threading, time
+import argparse, glob, json, os, queue, shutil, subprocess, sys, threading, time
 import numpy as np
 
 PY = sys.executable
@@ -34,15 +34,19 @@ def drop_flag(cmd, flag):                      # boolean flag
     return [c for c in cmd if c != flag]
 
 
-def run_pool(tasks, gpus, per_gpu, dry):
+def run_pool(tasks, gpus, per_gpu, dry, out=None, dash=15, plain=False, pattern="*_s[0-9]*.json"):
     """tasks: list of (name, cmd, logfile, outcheck); runs them with at most per_gpu concurrent processes per GPU"""
-    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []
+    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []; board = Dashboard(out, dash, plain, pattern) if (out and dash and not dry) else None
+    def say(msg):                      # with the dashboard up, events go to the log (a print would break the in-place redraw)
+        if board is None: print(msg, flush=True)
+        else:
+            with open(os.path.join(out, "events.log"), "a") as ef: ef.write(time.strftime("%H:%M:%S ") + msg + "\n")
     def worker(g):
         while True:
             try: name, cmd, log, done = q.get_nowait()
             except queue.Empty: return
-            if done and os.path.exists(done): print(f"[gpu {g}] skip {name} (finished)", flush=True); continue
-            print(f"[gpu {g}] start {name}", flush=True); t0 = time.time()
+            if done and os.path.exists(done): say(f"[gpu {g}] skip {name} (finished)"); continue
+            say(f"[gpu {g}] start {name}"); t0 = time.time()
             if dry: print("   DRY:", " ".join(cmd)); continue
             os.makedirs(os.path.dirname(log), exist_ok=True)
             prog = os.path.join(os.path.dirname(os.path.dirname(log)), "progress", os.path.basename(log)[:-4] + ".json"); os.makedirs(os.path.dirname(prog), exist_ok=True)
@@ -51,11 +55,15 @@ def run_pool(tasks, gpus, per_gpu, dry):
             with open(log, "a") as lf:
                 proc = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT); open(prog + ".pid", "w").write(str(proc.pid)); rc = proc.wait()
             with lock:
-                print(f"[gpu {g}] {'done' if rc == 0 else 'FAILED rc=%d' % rc} {name} ({(time.time() - t0) / 60:.1f} min) log {log}", flush=True)
+                say(f"[gpu {g}] {'done' if rc == 0 else 'FAILED rc=%d' % rc} {name} ({(time.time() - t0) / 60:.1f} min) log {log}")
                 if rc: fails.append(name)
     ths = [threading.Thread(target=worker, args=(g,)) for g in gpus for _ in range(per_gpu)]
-    [t.start() for t in ths]; [t.join() for t in ths]
-    if fails: print("FAILED:", fails); sys.exit(1)
+    if board: os.makedirs(os.path.join(out, "progress"), exist_ok=True); board.start()
+    try: [t.start() for t in ths]; [t.join() for t in ths]
+    except KeyboardInterrupt: print("\ninterrupted: running replicas keep their checkpoints; rerun the same command to continue", flush=True); os._exit(130)
+    finally:
+        if board: board.finish()
+    if fails: print("FAILED:", fails, "(see events.log and the run logs)"); sys.exit(1)
 
 
 def cmd_farm(a):
@@ -69,7 +77,7 @@ def cmd_farm(a):
             cmd += extra
             tag = cmd[cmd.index("--tag") + 1]; tasks.append((f"{j['name']} seed {s}", cmd, os.path.join(a.out, "logs", f"{j['name']}_s{s}.log"), os.path.join(out, tag + "_frames.npz")))
     print(f"{len(tasks)} MD replicas ({len(jobs)} hosts x {len(a.seeds)} seeds) on GPUs {gpus}, {a.per_gpu} per GPU", flush=True)
-    run_pool(tasks, gpus, a.per_gpu, a.dry_run)
+    run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain)
 
 
 def cmd_pool(a):
@@ -108,49 +116,68 @@ def mem_gb():
     except Exception: return None, None
 
 
+def render(out, prev, pattern="*_s[0-9]*.json"):
+    """dashboard lines for the runs in OUT/progress: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run (stage, bar, speed, GPU memory of that process, elapsed, ETA).
+    speed = progress units per second since the previous call (recent), else the stage average. prev: dict kept by the caller between calls."""
+    now = time.time(); runs = []; L = []
+    for pf in sorted(glob.glob(os.path.join(out, "progress", "*.json"))):
+        name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"; pid = open(pf + ".pid").read().strip() if os.path.exists(pf + ".pid") else ""
+        try: r = json.load(open(pf))
+        except Exception: r = None
+        runs.append((name, gpu, pid, r))
+    apps = {x[0]: x[1] for x in smi("compute-apps", ["pid", "used_memory"])}; gpus = {x[0]: x for x in smi("gpu", ["index", "utilization.gpu", "memory.used", "memory.total"])}
+    rows = []; per_gpu = {}
+    for name, gpu, pid, r in runs:
+        if r is None: rows.append((name, gpu, "starting", None, "", apps.get(pid, "") if pid else "", "", "")); continue
+        el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0)
+        key = (name, r["stage"]); sp = None
+        if key in prev and done > prev[key][1] and now > prev[key][0]: sp = (done - prev[key][1]) / (now - prev[key][0])
+        elif el > 20 and done > 0: sp = done / el
+        prev[key] = (now, done); eta = r.get("eta_seconds"); running = r["stage"] != "complete" and stale < 300
+        if sp and running: per_gpu.setdefault(gpu, []).append(sp)
+        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
+    done_n = len(glob.glob(os.path.join(out, "farm", "*", "*_frames.npz")))
+    L.append(f"{out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
+    used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
+    L.append(f"node: load {load:.0f}/{ncpu} cores" + (f", RAM {used:.0f}/{tot:.0f} GB" if used else ""))
+    warn = []
+    for g in sorted(gpus):
+        _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for x in runs if x[1] == g and x[3] and x[3]["stage"] != "complete"); tp = per_gpu.get(g, [])
+        msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} steps/s ({sum(tp) / len(tp):.1f} each)" if tp else ""); note = ""
+        if ut >= 95 and nrun >= 2: note = "  << SATURATED: more runs here will not add throughput"; warn.append(g)
+        elif ut < 60 and nrun >= 1: note = "  (headroom: could take another run)"
+        if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
+        L.append(msg + note)
+    if warn: L.append("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
+    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA':<6}")
+    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<6}")
+    return L
+
+
+class Dashboard:
+    """redraws render() every `interval` seconds in a background thread: in place by cursor movement on a terminal (scrollback is kept), plain blocks every minute when stdout is not a terminal"""
+    def __init__(self, out, interval, plain=False, pattern="*_s[0-9]*.json"):
+        self.pattern = pattern; self.out, self.interval, self.prev, self.n, self.stop = out, interval, {}, 0, threading.Event(); self.tty = sys.stdout.isatty() and not plain; self.t = None
+    def draw(self, final=False):
+        L = render(self.out, self.prev, self.pattern)
+        if self.tty:
+            if self.n: sys.stdout.write("\033[%dA" % self.n)
+            cols = max(60, shutil.get_terminal_size((200, 24)).columns - 1); sys.stdout.write("".join(l[:cols] + "\033[K\n" for l in L) + ("\033[J" if True else "")); sys.stdout.flush(); self.n = len(L)
+        elif final or time.time() - getattr(self, "last", 0) > 60:
+            print("\n".join(L), flush=True); self.last = time.time()
+    def start(self):
+        def loop():
+            while not self.stop.wait(self.interval): self.draw()
+        self.t = threading.Thread(target=loop, daemon=True); self.t.start()
+    def finish(self):
+        self.stop.set(); self.t and self.t.join(); self.draw(final=True)
+
+
 def cmd_status(a):
-    """live dashboard: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run (stage, bar, steps/s, GPU memory of that process, elapsed, ETA).
-    steps/s = progress units per second in the current stage (recent value in --watch mode, else stage average). --watch N refreshes every N seconds."""
     prev = {}
     while True:
-        now = time.time(); runs = []; gpu_of = {}
-        for pf in sorted(glob.glob(os.path.join(a.out, "progress", "*.json"))):
-            name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"; pid = open(pf + ".pid").read().strip() if os.path.exists(pf + ".pid") else ""
-            try: r = json.load(open(pf))
-            except Exception: r = None
-            runs.append((name, gpu, pid, r))
-        apps = {x[0]: x[1] for x in smi("compute-apps", ["pid", "used_memory"])}; gpus = {x[0]: x for x in smi("gpu", ["index", "utilization.gpu", "memory.used", "memory.total"])}
-        lines = []; per_gpu = {}
-        for name, gpu, pid, r in runs:
-            if r is None: lines.append((name, gpu, "starting", None, "", pid and apps.get(pid, ""), "", "")); continue
-            el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0)
-            key = (name, r["stage"]); sp = None
-            if key in prev and done > prev[key][1] and now > prev[key][0]: sp = (done - prev[key][1]) / (now - prev[key][0])
-            elif el > 20 and done > 0: sp = done / el
-            prev[key] = (now, done); eta = r.get("eta_seconds"); running = r["stage"] != "complete" and stale < 300
-            if sp and running: per_gpu.setdefault(gpu, []).append(sp)
-            lines.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
-        if a.watch: os.system("clear")
-        done_n = len(glob.glob(os.path.join(a.out, "farm", "*", "*_frames.npz")))
-        print(f"{a.out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
-        used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
-        print(f"node: load {load:.0f}/{ncpu} cores" + (f", RAM {used:.0f}/{tot:.0f} GB" if used else ""))
-        warn = []
-        for g in sorted(gpus):
-            _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for x in runs if x[1] == g and x[3] and x[3]["stage"] != "complete"); tp = per_gpu.get(g, [])
-            msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} steps/s ({sum(tp) / len(tp):.1f} each)" if tp else "")
-            note = ""
-            if ut >= 95 and nrun >= 2: note = "  << SATURATED: more runs here will not add throughput"
-            elif ut < 60 and nrun >= 1: note = "  (headroom: could take another run)"
-            if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
-            print(msg + note)
-            if "SATURATED" in note: warn.append(g)
-        if warn: print("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
-        print(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA':<6}")
-        for t in lines:
-            if len(t) == 8: n, g, st, f, sp, gm, el, eta = t
-            else: n, g, st, f, sp, gm, el, eta = t[0], t[1], t[2], t[3], "", t[5], "", ""
-            print(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<6}")
+        if a.watch and sys.stdout.isatty(): d = Dashboard(a.out, a.watch, pattern=a.pattern); d.prev = prev; d.draw(); time.sleep(a.watch); continue      # in-place redraw (no screen clear, scrollback stays)
+        print("\n".join(render(a.out, prev, a.pattern)))
         if not a.watch: return
         time.sleep(a.watch)
 
@@ -162,7 +189,7 @@ def cmd_sp(a):
         cmd += extra; tag = cmd[cmd.index("--tag") + 1]; lab = cmd[cmd.index("--label") + 1] if "--label" in cmd else "candidate"; K = cmd[cmd.index("--K") + 1]
         res = os.path.join(pooled, f"{tag}_{lab}_K{K}.json"); mjobs.append(dict(name=j["name"], result=res, gpu="-", command=cmd))
         tasks.append((j["name"], cmd, os.path.join(a.out, "logs", f"sp_{j['name']}.log"), res))
-    run_pool(tasks, gpus, 1, a.dry_run)
+    run_pool(tasks, gpus, 1, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, pattern="sp_*.json")
     ref = m.get("reference")
     json.dump(dict(model=m.get("model"), P=m.get("P"), T=m.get("T"), jobs=mjobs, status="complete", pooled_from=os.path.abspath(a.out), **({"reference": ref} if ref else {})), open(os.path.join(pooled, "manifest.json"), "w"), indent=1)
     print("wrote", os.path.join(pooled, "manifest.json"), "-> python3 mlp_pipeline/pwidom_hull.py", pooled)
@@ -171,10 +198,10 @@ def cmd_sp(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("farm"); f.add_argument("template"); f.add_argument("--seeds", type=int, nargs="+", required=True); f.add_argument("--out", required=True); f.add_argument("--gpus", default="0,1,2,3"); f.add_argument("--per-gpu", type=int, default=2)
-    f.add_argument("--hosts", default=None); f.add_argument("--md-args", default=""); f.add_argument("--checkpoint-seconds", type=int, default=300); f.add_argument("--dry-run", action="store_true")
+    f.add_argument("--hosts", default=None); f.add_argument("--md-args", default=""); f.add_argument("--checkpoint-seconds", type=int, default=300); f.add_argument("--dry-run", action="store_true"); f.add_argument("--dash", type=int, default=15, help="dashboard refresh seconds (0 = none)"); f.add_argument("--plain", action="store_true", help="no in-place redraw: a status block every minute")
     p = sub.add_parser("pool"); p.add_argument("out"); p.add_argument("--hosts", default=None); p.add_argument("--exclude-seeds", type=int, nargs="*", default=[])
-    s = sub.add_parser("sp"); s.add_argument("template"); s.add_argument("out"); s.add_argument("--gpus", default="0,1,2,3"); s.add_argument("--hosts", default=None); s.add_argument("--sp-args", default=""); s.add_argument("--seed", type=int, default=3); s.add_argument("--dry-run", action="store_true")
-    t = sub.add_parser("status"); t.add_argument("out"); t.add_argument("--watch", type=int, default=0, help="refresh every N seconds")
+    s = sub.add_parser("sp"); s.add_argument("template"); s.add_argument("out"); s.add_argument("--gpus", default="0,1,2,3"); s.add_argument("--hosts", default=None); s.add_argument("--sp-args", default=""); s.add_argument("--seed", type=int, default=3); s.add_argument("--dry-run", action="store_true"); s.add_argument("--dash", type=int, default=15); s.add_argument("--plain", action="store_true")
+    t = sub.add_parser("status"); t.add_argument("out"); t.add_argument("--watch", type=int, default=0, help="refresh every N seconds"); t.add_argument("--pattern", default="*_s[0-9]*.json", help="progress files to show (sp stage: sp_*.json)")
     a = ap.parse_args(); {"farm": cmd_farm, "pool": cmd_pool, "sp": cmd_sp, "status": cmd_status}[a.cmd](a)
 
 
