@@ -103,6 +103,10 @@ def cmd_pool(a):
     json.dump(dict(pooled_hosts=jobs), open(os.path.join(pooled, "pooled_hosts.json"), "w"))
 
 
+def hms(sec):
+    sec = max(0, int(round(sec))); return "%d:%02d:%02d" % (sec // 3600, sec % 3600 // 60, sec % 60)
+
+
 def bar_txt(f, n=16):
     k = 0 if f is None else int(round(max(0.0, min(1.0, f)) * n)); return "#" * k + "." * (n - k)
 
@@ -142,7 +146,7 @@ def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0):
         if plan and r["stage"] in [x[0] for x in plan] and el > 20 and done > 0 and r["stage"] != "complete":
             i = [x[0] for x in plan].index(r["stage"]); rem = max(0, r.get("total", 0) - done) + sum(x[1] for x in plan[i + 1:]); reta = rem / (done / el); run_etas.append(reta)
         if plan and sp and r["stage"] in [x[0] for x in plan] and running: speeds.append(sp)
-        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), ("-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)) + ("/" + ("%d:%02d" % divmod(int(reta // 60), 60)) if reta else "")))
+        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", hms(el), ("-" if eta is None else hms(eta)) + ("/" + hms(reta) if reta else "")))
     done_n = len(glob.glob(os.path.join(out, "farm", "*", "*_frames.npz")))
     L.append(f"{out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
     used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
@@ -160,8 +164,8 @@ def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0):
         full = sum(x[1] for x in plan); sp_mean = sum(speeds) / len(speeds) if speeds else None
         tail = (queued / max(1, slots)) * (full / sp_mean) if (queued and sp_mean) else 0.0; tot = max(run_etas) + tail
         L.append(f"whole farm: {queued} queued, about {tot / 60:.0f} min to go (running runs finish in ~{max(run_etas) / 60:.0f} min" + (f", then ~{tail / 60:.0f} min for the queue" if tail else "") + "; assumes the current speeds)")
-    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA stage/run':<14}")
-    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<14}")
+    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed (h:m:s)':<17}{'ETA stage/run':<18}")
+    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<17}{eta:<18}")
     return L
 
 
