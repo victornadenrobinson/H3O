@@ -172,12 +172,12 @@ def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0, ex
     warn = []
     for g in sorted(gpus):
         _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for n in names if info.get(n, ("-",))[0] == g and n in info and info[n][2] and info[n][2]["stage"] != "complete" and not glob.glob(os.path.join(out, "farm", n, "*_frames.npz"))); tp = per_gpu.get(g, [])
-        msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} steps/s ({sum(tp) / len(tp):.1f} each)" if tp else ""); note = ""
+        msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} units/s ({sum(tp) / len(tp):.1f} each; steps, frames or structures per s, see the speed column)" if tp else ""); note = ""
         if ut >= 95 and nrun >= 2: note = "  << SATURATED: more runs here will not add throughput"; warn.append(g)
         elif ut < 60 and nrun >= 1: note = "  (headroom: could take another run)"
         if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
         L.append(msg + note)
-    if warn: L.append("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
+    if warn: L.append("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run speed is a fraction of a lone run, lower --per-gpu")
     if plan and (run_etas or counts["queued"]):
         sp_mean = sum(speeds) / len(speeds) if speeds else None; tail = (counts["queued"] / max(1, slots)) * (full / sp_mean) if (counts["queued"] and sp_mean) else 0.0; cur = max(run_etas) if run_etas else 0.0
         L.append(f"whole farm: ~{(cur + tail) / 60:.0f} min to go ({counts['running']} running finish in ~{cur / 60:.0f} min" + (f", then ~{tail / 60:.0f} min for the {counts['queued']} queued" if tail else "") + f"); each run = {len(plan)} stages: " + ", ".join(SHORT[x[0]] for x in plan))
