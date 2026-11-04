@@ -19,7 +19,9 @@ print(f"{'N':>5} {'L(A)':>6} {'P host':>7} {'mu_ex':>8} {'mu_P':>8} {'fs':>6} {'
 for r in rows: print(f"{r['N']:>5d} {r['L']:>6.2f} {r['P']:>7.1f} {r['mex']:>8.1f} {r['muP']:>8.1f} {r['fs']:>6.1f} {r['G']:>8.1f} {r['e']:>5.1f} {r['gap']:>6.0f} {r['kish']:>5.2f} {r['nf']:>6d}  {r['f'].split('/')[-2] if '/' in r['f'] else r['f']}")
 by = collections.defaultdict(list)
 for r in rows: by[r["N"]].append(r)
-ref = a.ref or max(by); gref = np.mean([r["G"] for r in by[ref]])
+ref = a.ref if a.ref in by else max(by)
+if a.ref and a.ref not in by: print(f"(no N = {a.ref} result yet: comparing with N = {ref})")
+gref = np.mean([r["G"] for r in by[ref]])
 print(f"\nG_H per size (mean over runs) relative to N = {ref}: should be ~0 (within the errors) if N = {ref} and below are converged")
 for N in sorted(by):
     g = np.array([r["G"] for r in by[N]]); sd = g.std(ddof=1) if len(g) > 1 else float("nan")

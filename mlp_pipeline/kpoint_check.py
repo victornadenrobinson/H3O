@@ -22,7 +22,9 @@ if a.collect:
             try: E = float(read(oc, index=-1, format="vasp-out").get_potential_energy(force_consistent=True))
             except Exception: continue
             rows.append(dict(mesh=mesh, key=r["kpt_key"], system=r["kpt_sys"], natoms=r["natoms"], E_mesh=E, E_gamma=float(r["E_gamma_eV"]), T_K=r.get("T_K", "")))
-    w = csv.DictWriter(open(fn, "w", newline=""), fieldnames=["mesh", "key", "system", "natoms", "E_mesh", "E_gamma", "T_K"]); w.writeheader(); w.writerows(rows); print(f"{len(rows)} finished points -> {fn}")
+    with open(fn, "w", newline="") as fh:                                  # closed (flushed) before the tables below read it back
+        w = csv.DictWriter(fh, fieldnames=["mesh", "key", "system", "natoms", "E_mesh", "E_gamma", "T_K"]); w.writeheader(); w.writerows(rows)
+    print(f"{len(rows)} finished points -> {fn}")
 rows = list(csv.DictReader(open(fn))); rng = np.random.default_rng(1)
 by = collections.defaultdict(list)
 for r in rows: by[(r["mesh"], r["system"])].append(dict(key=r["key"], n=int(r["natoms"]), d=float(r["E_gamma"]) - float(r["E_mesh"])))
