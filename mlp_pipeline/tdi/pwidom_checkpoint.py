@@ -71,6 +71,8 @@ def md_frames(model, at0, a, seed, label):
     at = at0.copy(); at.calc = model.calc
     rng = np.random.default_rng(seed)
     positions, pressures, step = [], [], 0
+    trace = []                                           # (time_fs, kinetic T, E_pot eV) every 10 steps, incl. equilibration; side file <prefix>_<label>_trace.npz (diagnostic only, not part of the checkpoint)
+    trace_file = Path(a._checkpoint_prefix + f'_{label}_trace.npz'); trace_src = Path(a.resume_from + f'_{label}_trace.npz') if a.resume_from else None
     if source and source.exists():
         with np.load(source, allow_pickle=False) as z:
             if json.loads(str(z['metadata'])) != metadata:
@@ -96,6 +98,10 @@ def md_frames(model, at0, a, seed, label):
         # A missing ensemble checkpoint means this ensemble never started. The
         # launcher requires at least one checkpoint/cache across a resumed job.
         MaxwellBoltzmannDistribution(at, temperature_K=a.T, rng=rng)
+    if source and source.exists() and trace_src is not None and trace_src.exists():
+        try:
+            with np.load(trace_src) as zt: trace = [tuple(r) for r in zt['trace'] if r[0] <= step * a.dt + 1e-9]
+        except Exception: trace = []
     dyn = make_dynamics(at, a, rng, friction=friction)
     dyn.nsteps = step
     requested = [None]
@@ -111,12 +117,17 @@ def md_frames(model, at0, a, seed, label):
                    initial_positions=at0.positions, step=dyn.nsteps,
                    frames=np.asarray(positions).reshape(-1,len(at),3), pressures=np.asarray(pressures),
                    rng_state=json.dumps(rng.bit_generator.state))
+        try: atomic_npz(trace_file, trace=np.asarray(trace, float).reshape(-1, 3), columns='time_fs,T_kin_K,Epot_eV')
+        except Exception: pass
         last_save = time.monotonic()
         print(f"CHECKPOINT {label}: step {dyn.nsteps}/{total}, {len(positions)}/{nframes} frames -> {destination}", flush=True)
 
     def observe():
         nonlocal last_observed
         current = dyn.nsteps
+        if current != last_observed and current % 10 == 0:
+            try: trace.append((current * a.dt, 2 * at.get_kinetic_energy() / (3 * len(at) * units.kB), float(at.get_potential_energy())))
+            except Exception: pass
         if current != last_observed:
             if current > eq and (current-eq) % every == 0:
                 positions.append(at.positions.copy())
