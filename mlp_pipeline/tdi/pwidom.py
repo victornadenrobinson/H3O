@@ -50,6 +50,8 @@ def model_fingerprint(spec):
             h.update(os.path.relpath(f, root).encode()); h.update(open(f, "rb").read(1 << 24))
     elif kind == "toyice" and os.environ.get("TOYICE_FIT") and os.path.exists(os.environ["TOYICE_FIT"]):
         h.update(open(os.environ["TOYICE_FIT"], "rb").read())
+    elif kind == "toyice" and os.environ.get("TOYICE"):
+        h.update(os.environ["TOYICE"].encode())                                      # k=v overrides of toy_ice.params change the Hamiltonian too (review #9)
     else:
         h.update(rest.encode())
     return h.hexdigest()[:16]
@@ -126,7 +128,11 @@ class Model:
             fingerprint = digest.hexdigest()
             source = getattr(self, "energy_resume", None)
             if os.path.exists(cache) and not (getattr(self, "resume_in_place", False) and source and os.path.realpath(cache) == os.path.realpath(source)):
-                raise ValueError(f"Energy checkpoint exists: {cache}; choose fresh output")
+                try:
+                    with np.load(cache, allow_pickle=False) as z0: same = str(z0["fingerprint"]) == fingerprint
+                except Exception: same = False
+                if not same: raise ValueError(f"Energy checkpoint exists: {cache}, but for other structures / another model; choose fresh output")
+                source = cache; print(f"energy checkpoint {cache} matches these structures and this model: resuming from it (review #2)", flush=True)     # a plain rerun into the same --out continues instead of crashing
             if source and os.path.isfile(source):
                 with np.load(source, allow_pickle=False) as z:
                     if str(z["fingerprint"]) != fingerprint:
@@ -162,6 +168,26 @@ def thermostat_friction(a):
     from ase import units
     if getattr(a, "legacy_friction", False): return 0.01
     return 1.0 / (float(getattr(a, "friction_fs", None) or 100.0) * units.fs)
+
+
+def md_settings(a):
+    """the MD settings that decide what ensemble the cached frames sample; stored in <tag>_frames.npz and compared on reuse (review #3, #7)"""
+    return dict(friction=float(thermostat_friction(a)), thermostat=getattr(a, "thermostat", "langevin"), dt=float(a.dt), every_fs=float(a.every_fs), equil_ps=float(a.equil_ps), ps=float(a.ps))
+
+
+def check_md_settings(z, a, path):
+    """cached frames vs the requested MD: physics settings (friction, thermostat, dt, frame spacing) must match, else refuse (--allow-cache-mismatch overrides); equil / length differences and caches with no
+    recorded settings (made before this check, possibly with the old ~1 ps damping) only warn"""
+    req = md_settings(a)
+    if "md_settings" not in z.files:
+        print(f"WARNING {path}: no MD settings recorded (cache made before they were stored): friction / thermostat / dt / equilibration of these frames are UNKNOWN; frames from the old code (friction 0.01, ~1 ps damping) are not equilibrated at T", flush=True); return None
+    old = json.loads(str(z["md_settings"]))
+    bad = {k: (old[k], req[k]) for k in ("friction", "thermostat", "dt", "every_fs") if k in old and ((old[k] != req[k]) if k == "thermostat" else abs(float(old[k]) - float(req[k])) > 1e-9 * max(1.0, abs(float(req[k]))))}
+    if bad and not getattr(a, "allow_cache_mismatch", False):
+        raise SystemExit(f"{path}: cached frames were made with other MD settings {bad} (cached, requested): they are not the requested ensemble; use another --out / --tag, or --allow-cache-mismatch to reuse them anyway")
+    for k in ("equil_ps", "ps"):
+        if k in old and abs(float(old[k]) - float(req[k])) > 1e-9: print(f"WARNING {path}: cached frames were made with {k} {old[k]:g}, requested {req[k]:g}", flush=True)
+    return old
 
 
 def make_dynamics(at, a, rng, friction=None):
@@ -222,7 +248,7 @@ def o_msd(pos, numbers):
 
 
 def blocks(x, nb=5):
-    return np.array_split(np.asarray(x), nb)
+    return np.array_split(np.asarray(x), max(1, min(nb, len(x))))      # fewer frames than blocks: one block per frame (review #10)
 
 
 def berr(vals):
@@ -278,9 +304,10 @@ def cmd_run(a):
     model = Model(a.model, a.device, a.batch)
     if hasattr(model.calc,"temperature") and abs(model.calc.temperature-a.T)>1e-6:
         raise ValueError("VASP electronic temperature/config must match PWidom T")
-    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model); segs = {"host": None, "full": None}      # segs: frame counts of the independent trajectories of a POOLED cache (pwidom_farm.py pool)
+    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model); segs = {"host": None, "full": None}; cache_ms = None      # segs: frame counts of the independent trajectories of a POOLED cache (pwidom_farm.py pool)
     if os.path.exists(source_ff):
         z = np.load(source_ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
+        cache_ms = None if (a.resume_from or a.extend_from) else check_md_settings(z, a, ff)
         if "model_fp" in z.files:
             if str(z["model_fp"]) != mfp:
                 raise SystemExit(f"{ff}: frames and pressures were made with another Hamiltonian (fingerprint {z['model_fp']} vs {mfp} for {a.model}): they are not an equilibrium ensemble of this model; use another --out or --tag")
@@ -321,7 +348,7 @@ def cmd_run(a):
         nf, nPf = md_frames(model, full0, a, segment_seed+1, "host + 1 H")
         fh, Ph = np.concatenate([previous["host"], nh]), np.concatenate([previous["P_host"], nPh])
         fp, Pf = np.concatenate([previous["full"], nf]), np.concatenate([previous["P_full"], nPf])
-        atomic_npz(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T,
+        atomic_npz(ff, host=fh, full=fp, P_host=Ph, P_full=Pf, V=V, T=a.T, md_settings=json.dumps(md_settings(a)),
                  natoms=len(host), numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp,
                  segment_seed=segment_seed, segments=segments,
                  parent_frames=os.path.abspath(a.extend_from), additional_ps=a.ps, reequil_ps=a.equil_ps)
@@ -330,7 +357,8 @@ def cmd_run(a):
         from tdi.run_real import add_ghosts
         full0 = add_ghosts(host, 1, a.seed + 7)
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
-        atomic_npz(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
+        atomic_npz(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1, md_settings=json.dumps(md_settings(a)))
+        cache_ms = md_settings(a)
         print("wrote", ff, flush=True)
     def msd_of(x, nu, lens):   # a pooled cache is several independent trajectories: MSD within each, report the one that moved most (the melt test must not compare frames of different runs)
         if not lens or len(lens) < 2: return o_msd(x, nu)
@@ -476,7 +504,7 @@ def cmd_run(a):
              proxy_gap_std_kT_ins=float(np.std(gap_ins) / kT), proxy_gap_std_kT_del=float(np.std(gap_del) / kT), kish_frac_ins=kish,
              ideal_meV=ideal * 1e3, P_host_GPa=ph, P_host_err_GPa=eph, P_full_GPa=pf, P_full_err_GPa=epf, B_GPa=B, dG_P_meV=dGP * 1e3, dG_P_err_meV=dGPe * 1e3,
              msd_O_host=msd["host"], msd_O_full=msd["full"], melted=melted,
-             model_fp=mfp, pressure_corrected=bool(B),
+             model_fp=mfp, md_settings=cache_ms, pressure_corrected=bool(B),
              mu_fixedV_meV=(mu_b + ideal) * 1e3, mu_P_meV=(mu_b + ideal + dGP) * 1e3, mu_P_err_meV=float(np.hypot(eb, dGPe)) * 1e3)
     if not B:
         print("WARNING: no --bulk-gpa: mu_P_meV is the FIXED-VOLUME value (no pressure correction to P_target); the json says pressure_corrected = false", flush=True)
@@ -532,6 +560,7 @@ def main():
     r.add_argument("--thermostat", choices=("langevin", "bussi"), default="langevin", help="host MD thermostat (default Langevin; bussi = stochastic velocity rescaling, gentler on the dynamics, ASE >= 3.24)"); r.add_argument("--friction-fs", type=float, default=None, help="Langevin damping time in fs (default 100; the old code used ~1000 fs)"); r.add_argument("--legacy-friction", action="store_true", help="old friction 0.01 (resume pre-fix checkpoints only; detected automatically)")
     r.add_argument("--seed", type=int, default=3); r.add_argument("--out", default="runs/pwidom"); r.add_argument("--tag", default=None); r.add_argument("--label", default=None)
     r.add_argument("--frames-only", action="store_true")
+    r.add_argument("--allow-cache-mismatch", action="store_true", help="reuse cached frames even if they were made with other MD settings (friction, thermostat, dt, frame spacing)")
     r.add_argument("--checkpoint-seconds", type=float, default=300, help="wall seconds between atomic MD checkpoints (default 300)")
     r.add_argument("--resume-in-place", action="store_true", help="allow atomic checkpoint updates in the original output; normally use the locked launcher")
     r.add_argument("--resume-from", help="previous output/tag prefix; continue MD into fresh --out without re-equilibration")

@@ -133,7 +133,7 @@ def cmd_fit(a):
     sw = np.sqrt(w * tr)[:, None]; A = (X * sw).T @ (X * sw); b = (X * sw).T @ (y[:, None] * sw); o = np.r_[0, np.cumsum([bb.n for bb in bases])]
     for k in (0, 1):
         D2 = np.diff(np.eye(bases[k].n), 2, axis=0); A[o[k]:o[k + 1], o[k]:o[k + 1]] += a.smooth * (w * tr).sum() * D2.T @ D2
-    c = np.linalg.solve(A, b[:, 0]); phi_new = X @ c - c[-1]
+    c = np.linalg.solve(A, b[:, 0]); phi_new = X @ c - c[-1] + core      # + core: the fit is to dU - core, the proxy energy includes it (review #4)
     p0 = proxy_params(a.base); phi_old = np.zeros(M)
     for f in np.unique(fid):
         idx = np.nonzero(fid == f)[0]; phi_old[idx] = proxy_energy(p0, pts[idx], fpos[f], fnum[f] == 1, fcell[f])

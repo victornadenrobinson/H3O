@@ -316,7 +316,7 @@ def main():
     p.add_argument('--root', type=Path, default=Path('runs'))
     p.add_argument('--from-bundle', type=Path, help='replot exported JSON-only results without Perlmutter files')
     p.add_argument('--out', type=Path, required=True, help='fresh output directory')
-    p.add_argument('--pressure-mode', choices=['measured','robust'], default='measured')
+    p.add_argument('--pressure-mode', choices=['measured','robust'], default='robust', help='robust (default, as pwidom_scan / the launcher) or measured (noisy in short runs)')
     p.add_argument('--include-flagged', action='store_true', help='include sampling-flagged points in explicitly provisional hulls; still exclude melted/unverified')
     a = p.parse_args()
     if a.from_bundle:

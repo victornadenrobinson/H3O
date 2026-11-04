@@ -102,9 +102,10 @@ def cmd_pool(a):
                 if not np.array_equal(z[k], z0[k]): sys.exit(f"{f}: different {k} from {files[0]}")
             if abs(float(z["V"]) - float(z0["V"])) > 1e-6 * float(z0["V"]) or float(z["T"]) != float(z0["T"]) or str(z["model_fp"]) != str(z0["model_fp"]): sys.exit(f"{f}: other V / T / model fingerprint than {files[0]}")
         out = os.path.join(pooled, os.path.basename(files[0]))
+        mss = {str(z["md_settings"]) for z in zs if "md_settings" in z.files}; extra = {"md_settings": mss.pop()} if (len(mss) == 1 and all("md_settings" in z.files for z in zs)) else {}      # carried over only if every replica recorded the same settings
         np.savez(out, host=np.concatenate([z["host"] for z in zs]), full=np.concatenate([z["full"] for z in zs]), P_host=np.concatenate([z["P_host"] for z in zs]), P_full=np.concatenate([z["P_full"] for z in zs]),
                  seg_host=np.array([len(z["host"]) for z in zs]), seg_full=np.array([len(z["full"]) for z in zs]), V=z0["V"], T=z0["T"], natoms=z0["natoms"], numbers=z0["numbers"], cell=z0["cell"], model=z0["model"], model_fp=z0["model_fp"],
-                 segment_seed=0, segments=len(zs), pooled_from=np.array([os.path.abspath(f) for f in files]))
+                 segment_seed=0, segments=len(zs), pooled_from=np.array([os.path.abspath(f) for f in files]), **extra)
         print(f"{h}: pooled {len(files)} replicas -> {sum(len(z['host']) for z in zs)} host + {sum(len(z['full']) for z in zs)} host+1H frames  {out}")
         jobs.append(h)
     json.dump(dict(pooled_hosts=jobs), open(os.path.join(pooled, "pooled_hosts.json"), "w"))

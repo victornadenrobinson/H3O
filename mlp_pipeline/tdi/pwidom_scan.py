@@ -44,7 +44,7 @@ def pw_args(f, kind):
     """pwidom.py run arguments that rebuild the host of stage0 json f"""
     st = json.load(open(f)); g = st["args"]
     if kind == "H":
-        nat = g.get("natoms") or 250
+        nat = g.get("natoms") or 2 * (g.get("nrep") or 5) ** 3
         return ["--phase", "H", "--natoms", str(nat), "--vpa", repr(st["vpa"]), "--T", repr(st["T"]), "--P", repr(st["P_target"]), "--bulk-gpa", repr(st["B_GPa"]), "--model", g["model"]]
     return ["--phase", "fcc", "--nrep", str(g.get("nrep") or 3), "--hper", repr(float(g.get("hper", 2.0))), "--vpa", repr(st["vpa"]), "--T", repr(st["T"]), "--P", repr(st["P_target"]),
             "--bulk-gpa", repr(st["B_GPa"]), "--model", g["model"]]

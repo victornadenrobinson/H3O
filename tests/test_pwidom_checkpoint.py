@@ -57,8 +57,10 @@ def test_interrupted_md_matches_uninterrupted(tmp_path,monkeypatch,cut):
 
 def test_mismatch_and_existing_destination_refused(tmp_path):
     model,atoms,args=setup(tmp_path)
-    cp.md_frames(model,atoms,args,3,'host')
-    with pytest.raises(ValueError,match='Checkpoint exists'): cp.md_frames(model,atoms,args,3,'host')
+    first=cp.md_frames(model,atoms,args,3,'host')
+    again=cp.md_frames(model,atoms,args,3,'host')                      # plain rerun into the same output: resumes from the complete matching checkpoint
+    for x,y in zip(first,again): np.testing.assert_array_equal(x,y)
+    with pytest.raises(ValueError,match='mismatch'): cp.md_frames(model,atoms,args,4,'host')      # another seed: refused
     args.resume_from=args._checkpoint_prefix; args._checkpoint_prefix=str(tmp_path/'bad'); args.T=400
     with pytest.raises(ValueError,match='mismatch'): cp.md_frames(model,atoms,args,3,'host')
     assert not Path(args._checkpoint_prefix+'_host_md.npz').exists()

@@ -50,7 +50,9 @@ def md_frames(model, at0, a, seed, label):
     destination = Path(a._checkpoint_prefix + suffix)
     source = Path(a.resume_from + suffix) if a.resume_from else None
     if destination.exists() and not (getattr(a, "resume_in_place", False) and source and destination.resolve() == source.resolve()):
-        raise ValueError(f'Checkpoint exists: {destination}; resume into a fresh --out')
+        if source is None and not getattr(a, 'resume_from', None):      # a plain rerun into the same --out: continue from this checkpoint (the metadata check below refuses another seed / model / settings)
+            source = destination; print(f'MD checkpoint {destination} exists: resuming from it (review #2)', flush=True)
+        else: raise ValueError(f'Checkpoint exists: {destination}; resume into a fresh --out')
     eq = int(a.equil_ps*1000/a.dt)
     every = max(1, int(round(a.every_fs/a.dt)))
     nframes = int(a.ps*1000/a.every_fs)
@@ -72,7 +74,7 @@ def md_frames(model, at0, a, seed, label):
     rng = np.random.default_rng(seed)
     positions, pressures, step = [], [], 0
     trace = []                                           # (time_fs, kinetic T, E_pot eV) every 10 steps, incl. equilibration; side file <prefix>_<label>_trace.npz (diagnostic only, not part of the checkpoint)
-    trace_file = Path(a._checkpoint_prefix + f'_{label}_trace.npz'); trace_src = Path(a.resume_from + f'_{label}_trace.npz') if a.resume_from else None
+    tsfx = 'host' if label == 'host' else 'full'; trace_file = Path(a._checkpoint_prefix + f'_{tsfx}_trace.npz'); trace_src = Path(a.resume_from + f'_{tsfx}_trace.npz') if a.resume_from else None      # no spaces in the file name
     if source and source.exists():
         with np.load(source, allow_pickle=False) as z:
             if json.loads(str(z['metadata'])) != metadata:
