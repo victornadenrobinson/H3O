@@ -5,13 +5,16 @@ Every distinct geometry is written once (a host shared by several trials is labe
 request, tag, direction, small_id (host without the selected H / full minus H), large_id, draw_count, log_weight, dU_mlp_eV, T_K. Then:  TEMPLATE=... FRAMES_EXTXYZ=<out> bash mlp_pipeline/dgcheck_jobs.sh ."""
 import argparse, csv, glob, json, os
 from ase.io import read, write
-ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="+"); ap.add_argument("--out", required=True); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="+"); ap.add_argument("--out", required=True); ap.add_argument("--min-pureh-atoms", type=int, default=500); a = ap.parse_args()
 frames, rows, seen = [], [], set()
 for d in a.dirs:
     for line in open(os.path.join(d, "queue.jsonl")):
         q = json.loads(line)
         if q.get("policy") != "weighted" or len(q["structures"]) != 2: continue
         ids = [s[:-len(".extxyz")] for s in q["structures"]]
+        if "pureH" in q.get("tag", "") and a.min_pureh_atoms:          # small pure-H cells are not valid Gamma-only labels (same rule as widom_frames)
+            n_at = len(read(os.path.join(d, q["structures"][1])))
+            if n_at < a.min_pureh_atoms: continue
         for gid, f in zip(ids, q["structures"]):
             if gid in seen: continue
             at = read(os.path.join(d, f)); at.info.update(geometry_id=gid, run_id=gid, T_K=q["T_K"], P_target=q["P_GPa"], tag=q["tag"], widom_role="cand", db_set="PW"); frames.append(at); seen.add(gid)
