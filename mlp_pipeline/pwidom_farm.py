@@ -218,7 +218,10 @@ def cmd_sp(a):
     m, jobs = template_jobs(a.template, a.hosts.split(",") if a.hosts else None); pooled = os.path.join(a.out, "pooled"); gpus = [int(x) for x in a.gpus.split(",")]; tasks = []; mjobs = []; extra = a.sp_args.split() if a.sp_args else []
     for j in jobs:
         cmd = drop_flag(set_val(set_val(list(j["command"]), "--out", pooled), "--seed", a.seed), "--frames-only")
-        cmd += extra; tag = cmd[cmd.index("--tag") + 1]; lab = cmd[cmd.index("--label") + 1] if "--label" in cmd else "candidate"; K = cmd[cmd.index("--K") + 1]
+        cmd += extra; tag = cmd[cmd.index("--tag") + 1]; lab = cmd[cmd.index("--label") + 1] if "--label" in cmd else "candidate"; K = cmd[len(cmd) - 1 - cmd[::-1].index("--K") + 1]    # last --K wins
+        part = os.path.join(pooled, f"{tag}_{lab}_K{K}_energies.npz")
+        if os.path.exists(part) and not os.path.exists(os.path.join(pooled, f"{tag}_{lab}_K{K}.json")) and "--resume-from" not in cmd:       # an interrupted single-point stage: continue from its saved energies (same structures: same seed, K, sel)
+            cmd += ["--resume-from", os.path.join(pooled, tag), "--resume-in-place"]; print(f"{j['name']}: resuming single points from {part}", flush=True)
         res = os.path.join(pooled, f"{tag}_{lab}_K{K}.json"); mjobs.append(dict(name=j["name"], result=res, gpu="-", command=cmd))
         tasks.append((j["name"], cmd, os.path.join(a.out, "logs", f"sp_{j['name']}.log"), res))
     run_pool(tasks, gpus, 1, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, pattern="sp_*.json", expected=["sp_" + t[0] for t in tasks])
