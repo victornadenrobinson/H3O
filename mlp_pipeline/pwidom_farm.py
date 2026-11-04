@@ -34,9 +34,9 @@ def drop_flag(cmd, flag):                      # boolean flag
     return [c for c in cmd if c != flag]
 
 
-def run_pool(tasks, gpus, per_gpu, dry, out=None, dash=15, plain=False, pattern="*_s[0-9]*.json", plan=None):
+def run_pool(tasks, gpus, per_gpu, dry, out=None, dash=15, plain=False, pattern="*_s[0-9]*.json", plan=None, expected=None):
     """tasks: list of (name, cmd, logfile, outcheck); runs them with at most per_gpu concurrent processes per GPU"""
-    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []; board = Dashboard(out, dash, plain, pattern, plan, q.qsize, len(gpus) * per_gpu) if (out and dash and not dry) else None
+    q = queue.Queue(); [q.put(t) for t in tasks]; lock = threading.Lock(); fails = []; board = Dashboard(out, dash, plain, pattern, plan, q.qsize, len(gpus) * per_gpu, expected) if (out and dash and not dry) else None
     def say(msg):                      # with the dashboard up, events go to the log (a print would break the in-place redraw)
         if board is None: print(msg, flush=True)
         else:
@@ -80,7 +80,8 @@ def cmd_farm(a):
     c = tasks[0][1]; val = lambda f, d: float(c[len(c) - 1 - c[::-1].index(f) + 1]) if f in c else d       # last occurrence wins (argparse)
     dt, ps, eq, ev = val("--dt", 0.5), val("--ps", 4.0), val("--equil-ps", 0.5), val("--every-fs", 20.0); nfr = int(ps * 1000 / ev); every = max(1, int(round(ev / dt)))
     plan = [("MD host equilibration", int(eq * 1000 / dt)), ("MD host sampling", nfr * every), ("MD host + 1 H equilibration", int(eq * 1000 / dt)), ("MD host + 1 H sampling", nfr * every)]
-    run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, plan=plan)
+    expected = [t[0].replace(" seed ", "_s") for t in tasks]
+    run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, plan=plan, expected=expected)
 
 
 def cmd_pool(a):
@@ -123,58 +124,68 @@ def mem_gb():
     except Exception: return None, None
 
 
-def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0):
-    """dashboard lines for the runs in OUT/progress: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run (stage, bar, speed, GPU memory of that process, elapsed, ETA).
-    speed = progress units per second since the previous call (recent), else the stage average. prev: dict kept by the caller between calls."""
-    now = time.time(); runs = []; L = []
-    for pf in sorted(glob.glob(os.path.join(out, "progress", "*.json"))):
+SHORT = {"MD host equilibration": "host equil", "MD host sampling": "host MD", "MD host + 1 H equilibration": "+1H equil", "MD host + 1 H sampling": "+1H MD"}
+
+
+def render(out, prev, pattern="*_s[0-9]*.json", plan=None, queued=0, slots=0, expected=None):
+    """dashboard lines: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run: state (queued / k of n stages / done), whole-run bar and %, current-stage %, speed, GPU memory, elapsed, ETA.
+    expected: names of all runs of the farm (so queued ones are listed from the start); plan: [(stage, steps)] in order. prev: dict kept by the caller between calls (recent speeds)."""
+    now = time.time(); L = []; info = {}
+    for pf in sorted(glob.glob(os.path.join(out, "progress", pattern))):
         name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"; pid = open(pf + ".pid").read().strip() if os.path.exists(pf + ".pid") else ""
         try: r = json.load(open(pf))
         except Exception: r = None
-        runs.append((name, gpu, pid, r))
+        info[name] = (gpu, pid, r)
+    names = list(expected or []) + [n for n in info if n not in (expected or [])]
     apps = {x[0]: x[1] for x in smi("compute-apps", ["pid", "used_memory"])}; gpus = {x[0]: x for x in smi("gpu", ["index", "utilization.gpu", "memory.used", "memory.total"])}
-    rows = []; per_gpu = {}; run_etas = []; speeds = []
-    for name, gpu, pid, r in runs:
-        if r is None: rows.append((name, gpu, "starting", None, "", apps.get(pid, "") if pid else "", "", "")); continue
-        el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0)
-        key = (name, r["stage"]); sp = None
+    rows = []; per_gpu = {}; run_etas = []; speeds = []; counts = dict(queued=0, running=0, done=0); stages = [x[0] for x in plan] if plan else []; full = sum(x[1] for x in plan) if plan else 0
+    for name in names:
+        done_file = glob.glob(os.path.join(out, "farm", name, "*_frames.npz")) if os.path.isdir(os.path.join(out, "farm")) else []
+        gpu, pid, r = info.get(name, ("-", "", None))
+        if done_file: counts["done"] += 1; rows.append((name, gpu, "done", 1.0, "", "", "", "")); continue
+        if name not in info or (r is None and not pid): counts["queued"] += 1; rows.append((name, "-", "queued (waiting for GPU)", None, "", "", "", "")); continue
+        counts["running"] += 1
+        if r is None: rows.append((name, gpu, "starting", None, "", apps.get(pid, ""), "", "")); continue
+        el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0); st = r["stage"]
+        key = (name, st); sp = None
         if key in prev and done > prev[key][1] and now > prev[key][0]: sp = (done - prev[key][1]) / (now - prev[key][0])
         elif el > 20 and done > 0: sp = done / el
-        prev[key] = (now, done); eta = r.get("eta_seconds"); running = r["stage"] != "complete" and stale < 300
+        prev[key] = (now, done); eta = r.get("eta_seconds"); running = stale < 300
         if sp and running: per_gpu.setdefault(gpu, []).append(sp)
-        reta = None                                    # whole-run ETA: rest of this stage + the later stages of the plan, at this run's stage-average speed
-        if plan and r["stage"] in [x[0] for x in plan] and el > 20 and done > 0 and r["stage"] != "complete":
-            i = [x[0] for x in plan].index(r["stage"]); rem = max(0, r.get("total", 0) - done) + sum(x[1] for x in plan[i + 1:]); reta = rem / (done / el); run_etas.append(reta)
-        if plan and sp and r["stage"] in [x[0] for x in plan] and running: speeds.append(sp)
-        rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", hms(el), ("-" if eta is None else hms(eta)) + ("/" + hms(reta) if reta else "")))
-    done_n = len(glob.glob(os.path.join(out, "farm", "*", "*_frames.npz")))
-    L.append(f"{out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
+        ov = None; reta = None; label = st
+        if plan and st in stages:
+            i = stages.index(st); ov = (sum(x[1] for x in plan[:i]) + done) / full; label = f"{i + 1}/{len(plan)} {SHORT[st]} {100 * (r.get('fraction') or 0):.0f}%"
+            if el > 20 and done > 0: reta = (max(0, r.get("total", 0) - done) + sum(x[1] for x in plan[i + 1:])) / (done / el); run_etas.append(reta)
+            if sp and running: speeds.append(sp)
+        elif r.get("fraction") is not None: ov = r["fraction"]
+        if stale > 300: label += f"  (stale {int(stale / 60)}m)"
+        rows.append((name, gpu, label, ov, ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", hms(el), ("-" if eta is None else hms(eta)) + ("/" + hms(reta) if reta else "")))
+    L.append(f"{out}: {counts['done']} done, {counts['running']} running, {counts['queued']} queued   ({time.strftime('%H:%M:%S')})")
     used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
     L.append(f"node: load {load:.0f}/{ncpu} cores" + (f", RAM {used:.0f}/{tot:.0f} GB" if used else ""))
     warn = []
     for g in sorted(gpus):
-        _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for x in runs if x[1] == g and x[3] and x[3]["stage"] != "complete"); tp = per_gpu.get(g, [])
+        _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for n in names if info.get(n, ("-",))[0] == g and n in info and info[n][2] and info[n][2]["stage"] != "complete" and not glob.glob(os.path.join(out, "farm", n, "*_frames.npz"))); tp = per_gpu.get(g, [])
         msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} steps/s ({sum(tp) / len(tp):.1f} each)" if tp else ""); note = ""
         if ut >= 95 and nrun >= 2: note = "  << SATURATED: more runs here will not add throughput"; warn.append(g)
         elif ut < 60 and nrun >= 1: note = "  (headroom: could take another run)"
         if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
         L.append(msg + note)
     if warn: L.append("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
-    if plan and run_etas:
-        full = sum(x[1] for x in plan); sp_mean = sum(speeds) / len(speeds) if speeds else None
-        tail = (queued / max(1, slots)) * (full / sp_mean) if (queued and sp_mean) else 0.0; tot = max(run_etas) + tail
-        L.append(f"whole farm: {queued} queued, about {tot / 60:.0f} min to go (running runs finish in ~{max(run_etas) / 60:.0f} min" + (f", then ~{tail / 60:.0f} min for the queue" if tail else "") + "; assumes the current speeds)")
-    L.append(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed (h:m:s)':<17}{'ETA stage/run':<18}")
-    for n, g, st, f, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<17}{eta:<18}")
+    if plan and (run_etas or counts["queued"]):
+        sp_mean = sum(speeds) / len(speeds) if speeds else None; tail = (counts["queued"] / max(1, slots)) * (full / sp_mean) if (counts["queued"] and sp_mean) else 0.0; cur = max(run_etas) if run_etas else 0.0
+        L.append(f"whole farm: ~{(cur + tail) / 60:.0f} min to go ({counts['running']} running finish in ~{cur / 60:.0f} min" + (f", then ~{tail / 60:.0f} min for the {counts['queued']} queued" if tail else "") + f"); each run = {len(plan)} stages: " + ", ".join(SHORT[x[0]] for x in plan))
+    L.append(f"{'run':<14}{'GPU':<4}{'state / stage':<34}{'whole run':<26}{'speed':<15}{'GPU mem':<10}{'elapsed':<10}{'ETA stage/run':<18}")
+    for n, g, st, ov, sp, gm, el, eta in rows: L.append(f"{n:<14}{g:<4}{st:<34}{bar_txt(ov)} {('%3.0f%%' % (100 * ov)) if ov is not None else '  - '}   {sp:<15}{(gm + ' MiB') if gm else '-':<10}{el:<10}{eta:<18}")
     return L
 
 
 class Dashboard:
     """redraws render() every `interval` seconds in a background thread: in place by cursor movement on a terminal (scrollback is kept), plain blocks every minute when stdout is not a terminal"""
-    def __init__(self, out, interval, plain=False, pattern="*_s[0-9]*.json", plan=None, queued=None, slots=0):
-        self.pattern, self.plan, self.queued, self.slots = pattern, plan, queued, slots; self.out, self.interval, self.prev, self.n, self.stop = out, interval, {}, 0, threading.Event(); self.tty = sys.stdout.isatty() and not plain; self.t = None
+    def __init__(self, out, interval, plain=False, pattern="*_s[0-9]*.json", plan=None, queued=None, slots=0, expected=None):
+        self.pattern, self.plan, self.queued, self.slots, self.expected = pattern, plan, queued, slots, expected; self.out, self.interval, self.prev, self.n, self.stop = out, interval, {}, 0, threading.Event(); self.tty = sys.stdout.isatty() and not plain; self.t = None
     def draw(self, final=False):
-        L = render(self.out, self.prev, self.pattern, self.plan, self.queued() if self.queued else 0, self.slots)
+        L = render(self.out, self.prev, self.pattern, self.plan, self.queued() if self.queued else 0, self.slots, self.expected)
         if self.tty:
             if self.n: sys.stdout.write("\033[%dA" % self.n)
             cols = max(60, shutil.get_terminal_size((200, 24)).columns - 1); sys.stdout.write("".join(l[:cols] + "\033[K\n" for l in L) + ("\033[J" if True else "")); sys.stdout.flush(); self.n = len(L)
@@ -204,7 +215,7 @@ def cmd_sp(a):
         cmd += extra; tag = cmd[cmd.index("--tag") + 1]; lab = cmd[cmd.index("--label") + 1] if "--label" in cmd else "candidate"; K = cmd[cmd.index("--K") + 1]
         res = os.path.join(pooled, f"{tag}_{lab}_K{K}.json"); mjobs.append(dict(name=j["name"], result=res, gpu="-", command=cmd))
         tasks.append((j["name"], cmd, os.path.join(a.out, "logs", f"sp_{j['name']}.log"), res))
-    run_pool(tasks, gpus, 1, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, pattern="sp_*.json")
+    run_pool(tasks, gpus, 1, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, pattern="sp_*.json", expected=["sp_" + t[0] for t in tasks])
     ref = m.get("reference")
     json.dump(dict(model=m.get("model"), P=m.get("P"), T=m.get("T"), jobs=mjobs, status="complete", pooled_from=os.path.abspath(a.out), **({"reference": ref} if ref else {})), open(os.path.join(pooled, "manifest.json"), "w"), indent=1)
     print("wrote", os.path.join(pooled, "manifest.json"), "-> python3 mlp_pipeline/pwidom_hull.py", pooled)
