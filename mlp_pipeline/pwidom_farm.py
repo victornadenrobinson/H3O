@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Farm many independent MD replicas, pool their frames, then run ONE single-point stage per host (no GPU-memory clash between hosts' single-point stages, MD replicas are cheap and can share a GPU).
 Everything is taken from the manifest of an earlier launcher run (its job commands hold every host argument), so the host, volume, model, proxy, K, sel, batch are exactly those of that run unless you override them.
-  1. farm : python3 mlp_pipeline/pwidom_farm.py farm TEMPLATE_RUN --seeds 31 32 33 34 --out runs/farm_500GPa_5000K [--per-gpu 3] [--gpus 0,1,2,3] [--hosts H2O,pureH] [--md-args "--ps 2.0 --equil-ps 0.5"] [--dry-run]
+  1. farm : python3 mlp_pipeline/pwidom_farm.py farm TEMPLATE_RUN --seeds 31 32 33 34 --out runs/farm_500GPa_5000K [--per-gpu 3] [--gpus 0,1,2,3] [--hosts H2O,pureH] [--md-args "--ps 2.0 --equil-ps 0.5"] [--sp-args "--sel 24 --K 3000 --batch 4"] [--no-sp] [--dry-run]
+            DOES THE WHOLE CHAIN by default: MD replicas, then step 2 (pool) and step 3 (single points) automatically; --no-sp stops after the MD. Steps 2 and 3 below are also separate commands (to redo them).
             MD-only (--frames-only): one process per (host, seed), at most --per-gpu concurrent per GPU, frames to OUT/farm/<host>_s<seed>/. Resumable: finished frame files are skipped.
   2. pool : python3 mlp_pipeline/pwidom_farm.py pool OUT [--hosts ...] [--exclude-seeds N ...]
             merges all replicas of each host into OUT/pooled/<tag>_frames.npz (checks identical species / cell / volume / T / model fingerprint; keeps per-trajectory lengths so the melt test and block errors stay per trajectory)
@@ -82,6 +83,11 @@ def cmd_farm(a):
     plan = [("MD host equilibration", int(eq * 1000 / dt)), ("MD host sampling", nfr * every), ("MD host + 1 H equilibration", int(eq * 1000 / dt)), ("MD host + 1 H sampling", nfr * every)]
     expected = [t[0].replace(" seed ", "_s") for t in tasks]
     run_pool(tasks, gpus, a.per_gpu, a.dry_run, out=a.out, dash=a.dash, plain=a.plain, plan=plan, expected=expected)
+    if a.dry_run or a.no_sp: return
+    # the whole chain in one command: pool the replicas, then ONE single-point stage per host (one process per GPU at a time), same dashboard
+    print("\nall MD replicas finished: pooling frames, then the single-point stage ...", flush=True)
+    cmd_pool(argparse.Namespace(out=a.out, hosts=a.hosts, exclude_seeds=[]))
+    cmd_sp(argparse.Namespace(template=a.template, out=a.out, gpus=a.gpus, hosts=a.hosts, sp_args=a.sp_args, seed=a.sp_seed, dry_run=False, dash=a.dash, plain=a.plain))
 
 
 def cmd_pool(a):
@@ -225,6 +231,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("farm"); f.add_argument("template"); f.add_argument("--seeds", type=int, nargs="+", required=True); f.add_argument("--out", required=True); f.add_argument("--gpus", default="0,1,2,3"); f.add_argument("--per-gpu", type=int, default=2)
     f.add_argument("--hosts", default=None); f.add_argument("--md-args", default=""); f.add_argument("--checkpoint-seconds", type=int, default=300); f.add_argument("--dry-run", action="store_true"); f.add_argument("--dash", type=int, default=15, help="dashboard refresh seconds (0 = none)"); f.add_argument("--plain", action="store_true", help="no in-place redraw: a status block every minute")
+    f.add_argument("--no-sp", action="store_true", help="MD replicas only: stop before pooling and the single-point stage"); f.add_argument("--sp-args", default="", help="extra pwidom.py args for the single-point stage, e.g. \"--sel 24 --K 3000 --batch 4\""); f.add_argument("--sp-seed", type=int, default=3)
     p = sub.add_parser("pool"); p.add_argument("out"); p.add_argument("--hosts", default=None); p.add_argument("--exclude-seeds", type=int, nargs="*", default=[])
     s = sub.add_parser("sp"); s.add_argument("template"); s.add_argument("out"); s.add_argument("--gpus", default="0,1,2,3"); s.add_argument("--hosts", default=None); s.add_argument("--sp-args", default=""); s.add_argument("--seed", type=int, default=3); s.add_argument("--dry-run", action="store_true"); s.add_argument("--dash", type=int, default=15); s.add_argument("--plain", action="store_true")
     t = sub.add_parser("status"); t.add_argument("out"); t.add_argument("--watch", type=int, default=0, help="refresh every N seconds"); t.add_argument("--pattern", default="*_s[0-9]*.json", help="progress files to show (sp stage: sp_*.json)")
