@@ -6,6 +6,7 @@ Everything is taken from the manifest of an earlier launcher run (its job comman
   2. pool : python3 mlp_pipeline/pwidom_farm.py pool OUT [--hosts ...] [--exclude-seeds N ...]
             merges all replicas of each host into OUT/pooled/<tag>_frames.npz (checks identical species / cell / volume / T / model fingerprint; keeps per-trajectory lengths so the melt test and block errors stay per trajectory)
             and writes OUT/pooled/manifest.json so pwidom_hull.py / plot scripts read it like any run.
+  0. status: python3 mlp_pipeline/pwidom_farm.py status OUT [--watch 20]     live table: stage, bar, elapsed/ETA, GPU per run (farm and sp stage)
   3. sp   : python3 mlp_pipeline/pwidom_farm.py sp TEMPLATE_RUN OUT [--gpus 0,1,2,3] [--sp-args "--sel 24 --K 3000 --batch 4"] [--dry-run]
             the single-point stage on the pooled frames, ONE process per GPU at a time (queued when hosts > GPUs), results in OUT/pooled/.
 Do not pool frames made with the old thermostat or another model: the pool refuses a different model fingerprint, V or T, but it cannot know the friction; use only runs made after the thermostat fix."""
@@ -44,7 +45,9 @@ def run_pool(tasks, gpus, per_gpu, dry):
             print(f"[gpu {g}] start {name}", flush=True); t0 = time.time()
             if dry: print("   DRY:", " ".join(cmd)); continue
             os.makedirs(os.path.dirname(log), exist_ok=True)
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g), TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="1"); env.pop("PW_GPU_LOCK", None)
+            prog = os.path.join(os.path.dirname(os.path.dirname(log)), "progress", os.path.basename(log)[:-4] + ".json"); os.makedirs(os.path.dirname(prog), exist_ok=True)
+            open(prog + ".gpu", "w").write(str(g))
+            env = dict(os.environ, PW_PROGRESS_FILE=prog, CUDA_VISIBLE_DEVICES=str(g), TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="1"); env.pop("PW_GPU_LOCK", None)
             with open(log, "a") as lf: rc = subprocess.call(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT)
             with lock:
                 print(f"[gpu {g}] {'done' if rc == 0 else 'FAILED rc=%d' % rc} {name} ({(time.time() - t0) / 60:.1f} min) log {log}", flush=True)
@@ -88,6 +91,29 @@ def cmd_pool(a):
     json.dump(dict(pooled_hosts=jobs), open(os.path.join(pooled, "pooled_hosts.json"), "w"))
 
 
+def bar_txt(f, n=16):
+    k = 0 if f is None else int(round(max(0.0, min(1.0, f)) * n)); return "#" * k + "." * (n - k)
+
+
+def cmd_status(a):
+    """one line per run: stage, bar, elapsed / ETA, GPU. Works while the farm or the sp stage is running (progress files written by the runs); --watch N refreshes every N seconds."""
+    while True:
+        rows = []
+        for pf in sorted(glob.glob(os.path.join(a.out, "progress", "*.json"))):
+            name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"
+            try: r = json.load(open(pf))
+            except Exception: rows.append((name, gpu, "starting", None, "", "")); continue
+            age = time.time() - r.get("updated", 0); eta = r.get("eta_seconds"); el = r.get("elapsed_seconds", 0)
+            rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (age / 60) if age > 300 and r["stage"] != "complete" else ""), r.get("fraction"), "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
+        done = len(glob.glob(os.path.join(a.out, "farm", "*", "*_frames.npz"))); total = len(rows)
+        if a.watch: os.system("clear")
+        print(f"{a.out}: {done} frame files finished, {total} runs with progress files   ({time.strftime('%H:%M:%S')})")
+        print(f"{'run':<18}{'GPU':<5}{'stage':<34}{'progress':<22}{'elapsed':<9}{'ETA':<7}")
+        for n, g, st, f, el, eta in rows: print(f"{n:<18}{g:<5}{st:<34}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {el:<9}{eta:<7}")
+        if not a.watch: return
+        time.sleep(a.watch)
+
+
 def cmd_sp(a):
     m, jobs = template_jobs(a.template, a.hosts.split(",") if a.hosts else None); pooled = os.path.join(a.out, "pooled"); gpus = [int(x) for x in a.gpus.split(",")]; tasks = []; mjobs = []; extra = a.sp_args.split() if a.sp_args else []
     for j in jobs:
@@ -107,7 +133,8 @@ def main():
     f.add_argument("--hosts", default=None); f.add_argument("--md-args", default=""); f.add_argument("--checkpoint-seconds", type=int, default=300); f.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("pool"); p.add_argument("out"); p.add_argument("--hosts", default=None); p.add_argument("--exclude-seeds", type=int, nargs="*", default=[])
     s = sub.add_parser("sp"); s.add_argument("template"); s.add_argument("out"); s.add_argument("--gpus", default="0,1,2,3"); s.add_argument("--hosts", default=None); s.add_argument("--sp-args", default=""); s.add_argument("--seed", type=int, default=3); s.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args(); {"farm": cmd_farm, "pool": cmd_pool, "sp": cmd_sp}[a.cmd](a)
+    t = sub.add_parser("status"); t.add_argument("out"); t.add_argument("--watch", type=int, default=0, help="refresh every N seconds")
+    a = ap.parse_args(); {"farm": cmd_farm, "pool": cmd_pool, "sp": cmd_sp, "status": cmd_status}[a.cmd](a)
 
 
 if __name__ == "__main__":

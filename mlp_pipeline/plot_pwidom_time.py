@@ -4,8 +4,10 @@
   row 2  E_pot/atom and MD pressure of the sampled host frames vs sampling time (always available), with the target pressure
   row 3  running insertion (Widom) and deletion estimates of mu_ex vs number of frames used, the BAR value (dashed) and the block values (dots): are the estimators settling, and do they bracket BAR?
    python3 mlp_pipeline/plot_pwidom_time.py runs/pwidom_endmem_new_500GPa_5000K [more run dirs] [-o prefix] [--blocks 4]"""
-import argparse, glob, json, os
+import argparse, glob, json, os, sys
 import numpy as np
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdi")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from toy_validate import bar as bar_est
 KB = 8.617333262e-5
 lse = lambda x: np.max(x) + np.log(np.sum(np.exp(x - np.max(x))))
 
@@ -24,8 +26,11 @@ def main():
     for run in a.runs:
         hf = host_files(run)
         if not hf: print(f"{run}: no finished hosts"); continue
-        any_tr = any(os.path.exists(os.path.join(run, json.load(open(jf))["tag"] + "_host_trace.npz")) for jf, _ in hf); nr = 3 if any_tr else 2
-        fig, ax = plt.subplots(nr, len(hf), figsize=(4.6 * len(hf), 3.2 * nr + 0.6), squeeze=False, constrained_layout=True); o = 0 if any_tr else -1
+        any_tr = any(os.path.exists(os.path.join(run, json.load(open(jf))["tag"] + "_host_trace.npz")) for jf, _ in hf); nr = 4 if any_tr else 3
+        try:
+            import pwidom_hull as ph; dgfinal = {r_["name"]: r_["dg"] for r_ in ph.load_run(run)[1]}
+        except (SystemExit, Exception): dgfinal = {}          # no pure-H reference in this run dir: dg row shows the mu_ex shift only
+        fig, ax = plt.subplots(nr, len(hf), figsize=(4.6 * len(hf), 3.1 * nr + 0.6), squeeze=False, constrained_layout=True); o = 0 if any_tr else -1
         for c, (jf, base) in enumerate(hf):
             r = json.load(open(jf)); kT = KB * r["T"]; tag = r["tag"]; W = np.load(base + "_work.npz", allow_pickle=True); n0 = r["n_frames_host"]
             wf = np.asarray(W["forward_work_eV"]); wr = -np.asarray(W["reverse_work_eV"]); dt_f = float(W["frame_interval_fs"]) / 1000
@@ -50,13 +55,19 @@ def main():
             # row 2: sampled frames
             ax[1 + o, c].plot(t, e0, "o-", ms=3, color="#d55181", lw=0.7); ax[1 + o, c].set_xlabel("sampling time (ps)"); ax[1 + o, c].set_ylabel("E_pot meV/atom (pink)"); a3 = ax[1 + o, c].twinx()
             if P is not None: a3.plot(t, P, "s-", ms=3, color="#5b8f3a", lw=0.7); a3.axhline(r["P_target"], color="#5b8f3a", lw=0.8, ls=":"); a3.set_ylabel("P host GPa (green)")
-            # row 3: running estimators
+            # row 3: running mu_ex estimators incl. BAR; row 4: the same as dg(t) = dg_final + (mu_ex(t) - mu_ex_final BAR) (the pure-H reference is converged; only the host estimate moves)
             k = np.arange(1, n0 + 1); cw = [-kT * (lse(-wf[:i].ravel() / kT) - np.log(wf[:i].size)) * 1e3 for i in k]
             nd = len(wr); kd = np.arange(1, nd + 1); cd = [kT * (lse(wr[:i].ravel() / kT) - np.log(wr[:i].size)) * 1e3 for i in kd]
-            ax[2 + o, c].plot(k, cw, color="#d55181", label="Widom (running)"); ax[2 + o, c].plot(kd, cd, color="#2a7fa8", label="deletion (running)"); ax[2 + o, c].axhline(r["mu_ex_bar_meV"], color="k", ls="--", lw=1, label=f"BAR {r['mu_ex_bar_meV']:.0f}")
+            kb = np.unique(np.linspace(2, min(n0, nd), 30).astype(int)); cb = [bar_est(wf[:i].ravel(), -wr[:i].ravel(), kT) * 1e3 for i in kb]
+            A3, A4 = ax[2 + o, c], ax[3 + o, c]; bf = r["mu_ex_bar_meV"]; name = tag.split("_")[1]; dgf = dgfinal.get(name)
+            A3.plot(k, cw, color="#d55181", lw=1, label="Widom (running)"); A3.plot(kd, cd, color="#2a7fa8", lw=1, label="deletion (running)"); A3.plot(kb, cb, color="k", lw=1.8, label="BAR (running)"); A3.axhline(bf, color="k", ls=":", lw=0.8)
+            sh = (lambda y: np.asarray(y) - bf + dgf) if dgf is not None else (lambda y: np.asarray(y) - bf)
+            A4.plot(k, sh(cw), color="#d55181", lw=1); A4.plot(kd, sh(cd), color="#2a7fa8", lw=1); A4.plot(kb, sh(cb), color="k", lw=1.8); A4.axhline(0, color="k", lw=0.8)
+            A4.set_ylabel("dg (meV/H)" if dgf is not None else "mu_ex shift vs final BAR (meV)"); A4.set_xlabel("host / full frames used (sampling time = frames x %g fs)" % (dt_f * 1000)); A4.grid(alpha=0.25)
+            if dgf is not None: A4.set_title(f"final dg {dgf:+.0f} meV/H, running BAR at the end {sh(cb)[-1]:+.0f}", fontsize=8)
             for ii in np.array_split(np.arange(n0), a.blocks):
-                w = wf[ii].ravel(); ax[2 + o, c].plot([ii[-1] + 1], [-kT * (lse(-w / kT) - np.log(len(w))) * 1e3], "o", color="#d55181", mfc="none", ms=6)
-            ax[2 + o, c].set_xlabel("host / full frames used"); ax[2 + o, c].set_ylabel("mu_ex (meV)"); ax[2 + o, c].legend(fontsize=7); ax[2 + o, c].grid(alpha=0.25)
+                w = wf[ii].ravel(); A3.plot([ii[-1] + 1], [-kT * (lse(-w / kT) - np.log(len(w))) * 1e3], "o", color="#d55181", mfc="none", ms=6)
+            A3.set_ylabel("mu_ex (meV)"); A3.legend(fontsize=7); A3.grid(alpha=0.25)
         fig.suptitle(f"{os.path.basename(os.path.normpath(run))}", fontsize=11); out = (a.o or run.rstrip("/")) + "_time.png"; fig.savefig(out, dpi=120); print("figure ->", out)
 
 
