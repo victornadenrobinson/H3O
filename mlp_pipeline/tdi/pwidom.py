@@ -278,7 +278,7 @@ def cmd_run(a):
     model = Model(a.model, a.device, a.batch)
     if hasattr(model.calc,"temperature") and abs(model.calc.temperature-a.T)>1e-6:
         raise ValueError("VASP electronic temperature/config must match PWidom T")
-    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model)
+    rng = np.random.default_rng(a.seed + 17); mfp = model_fingerprint(a.model); segs = {"host": None, "full": None}      # segs: frame counts of the independent trajectories of a POOLED cache (pwidom_farm.py pool)
     if os.path.exists(source_ff):
         z = np.load(source_ff); assert abs(float(z["V"]) - V) < 1e-6 * V and int(z["natoms"]) == len(host) and float(z["T"]) == a.T, f"{ff}: other V / size / T: use another --out or --tag"
         if "model_fp" in z.files:
@@ -293,6 +293,7 @@ def cmd_run(a):
             if not a.resume_in_place:
                 atomic_npz(ff, **{k: z[k] for k in z.files})
         fh, Ph, fp, Pf = z["host"], z["P_host"], z["full"], z["P_full"]; print(f"frames from {ff}: host {len(fh)}, host + 1 H {len(fp)}")
+        if "seg_host" in z.files and "seg_full" in z.files: segs = {"host": [int(x) for x in z["seg_host"]], "full": [int(x) for x in z["seg_full"]]}; print(f"pooled cache: {len(segs['host'])} independent trajectories (host frames {segs['host']}, host + 1 H {segs['full']})", flush=True)
     elif a.extend_from:
         with np.load(a.extend_from) as old:
             required = ("host", "full", "P_host", "P_full", "numbers", "model_fp", "V", "T")
@@ -331,7 +332,13 @@ def cmd_run(a):
         fh, Ph = md_frames(model, host, a, a.seed, "host"); fp, Pf = md_frames(model, full0, a, a.seed + 1, "host + 1 H")
         atomic_npz(ff, host=fh, P_host=Ph, full=fp, P_full=Pf, V=V, natoms=len(host), T=a.T, numbers=host.numbers, cell=cell, model=a.model, model_fp=mfp, segment_seed=a.seed, segments=1)
         print("wrote", ff, flush=True)
-    msd = {k: o_msd(x, nu) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
+    def msd_of(x, nu, lens):   # a pooled cache is several independent trajectories: MSD within each, report the one that moved most (the melt test must not compare frames of different runs)
+        if not lens or len(lens) < 2: return o_msd(x, nu)
+        parts, i = [], 0
+        for L in lens: parts.append(o_msd(x[i:i + L], nu) if L >= 4 else []); i += L
+        parts = [q for q in parts if q]
+        return max(parts, key=lambda q: q[-1]) if parts else []
+    msd = {k: msd_of(x, nu, segs[k]) for k, x, nu in (("host", fh, host.numbers), ("full", fp, np.r_[host.numbers, 1]))}
     melted = any(m and (m[-1] > 1.0 or (len(m) >= 4 and m[-1] - m[len(m) // 2] > 0.25)) for m in msd.values())   # solid O plateaus at < ~0.35 A^2; melted: large, OR still growing
     # over the second half (> 0.25 A^2: H2.5O at 600 GPa 5000 K went 0.32 -> 0.71 / 0.23 -> 0.89 A^2 in 0.8 ps, a slow melt the old 1 A^2 threshold missed)
     if msd["host"]:
