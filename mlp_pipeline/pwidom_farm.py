@@ -48,7 +48,8 @@ def run_pool(tasks, gpus, per_gpu, dry):
             prog = os.path.join(os.path.dirname(os.path.dirname(log)), "progress", os.path.basename(log)[:-4] + ".json"); os.makedirs(os.path.dirname(prog), exist_ok=True)
             open(prog + ".gpu", "w").write(str(g))
             env = dict(os.environ, PW_PROGRESS_FILE=prog, CUDA_VISIBLE_DEVICES=str(g), TF_FORCE_GPU_ALLOW_GROWTH="true", TF_CPP_MIN_LOG_LEVEL="2", OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="1"); env.pop("PW_GPU_LOCK", None)
-            with open(log, "a") as lf: rc = subprocess.call(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT)
+            with open(log, "a") as lf:
+                proc = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT); open(prog + ".pid", "w").write(str(proc.pid)); rc = proc.wait()
             with lock:
                 print(f"[gpu {g}] {'done' if rc == 0 else 'FAILED rc=%d' % rc} {name} ({(time.time() - t0) / 60:.1f} min) log {log}", flush=True)
                 if rc: fails.append(name)
@@ -95,21 +96,61 @@ def bar_txt(f, n=16):
     k = 0 if f is None else int(round(max(0.0, min(1.0, f)) * n)); return "#" * k + "." * (n - k)
 
 
+def smi(query, fields):
+    try: out = subprocess.check_output(["nvidia-smi", f"--query-{query}=" + ",".join(fields), "--format=csv,noheader,nounits"], text=True, timeout=20)
+    except Exception: return []
+    return [[x.strip() for x in l.split(",")] for l in out.strip().splitlines() if l.strip()]
+
+
+def mem_gb():
+    try:
+        m = {l.split(":")[0]: float(l.split()[1]) for l in open("/proc/meminfo")}; return (m["MemTotal"] - m["MemAvailable"]) / 1048576, m["MemTotal"] / 1048576
+    except Exception: return None, None
+
+
 def cmd_status(a):
-    """one line per run: stage, bar, elapsed / ETA, GPU. Works while the farm or the sp stage is running (progress files written by the runs); --watch N refreshes every N seconds."""
+    """live dashboard: per-GPU utilisation / memory / throughput with crowding warnings, then one line per run (stage, bar, steps/s, GPU memory of that process, elapsed, ETA).
+    steps/s = progress units per second in the current stage (recent value in --watch mode, else stage average). --watch N refreshes every N seconds."""
+    prev = {}
     while True:
-        rows = []
+        now = time.time(); runs = []; gpu_of = {}
         for pf in sorted(glob.glob(os.path.join(a.out, "progress", "*.json"))):
-            name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"
+            name = os.path.basename(pf)[:-5]; gpu = open(pf + ".gpu").read().strip() if os.path.exists(pf + ".gpu") else "?"; pid = open(pf + ".pid").read().strip() if os.path.exists(pf + ".pid") else ""
             try: r = json.load(open(pf))
-            except Exception: rows.append((name, gpu, "starting", None, "", "")); continue
-            age = time.time() - r.get("updated", 0); eta = r.get("eta_seconds"); el = r.get("elapsed_seconds", 0)
-            rows.append((name, gpu, r["stage"] + ("  (stale %dm)" % (age / 60) if age > 300 and r["stage"] != "complete" else ""), r.get("fraction"), "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
-        done = len(glob.glob(os.path.join(a.out, "farm", "*", "*_frames.npz"))); total = len(rows)
+            except Exception: r = None
+            runs.append((name, gpu, pid, r))
+        apps = {x[0]: x[1] for x in smi("compute-apps", ["pid", "used_memory"])}; gpus = {x[0]: x for x in smi("gpu", ["index", "utilization.gpu", "memory.used", "memory.total"])}
+        lines = []; per_gpu = {}
+        for name, gpu, pid, r in runs:
+            if r is None: lines.append((name, gpu, "starting", None, "", pid and apps.get(pid, ""), "", "")); continue
+            el = r.get("elapsed_seconds", 0); done = r.get("done", 0); unit = r.get("unit", ""); stale = now - r.get("updated", 0)
+            key = (name, r["stage"]); sp = None
+            if key in prev and done > prev[key][1] and now > prev[key][0]: sp = (done - prev[key][1]) / (now - prev[key][0])
+            elif el > 20 and done > 0: sp = done / el
+            prev[key] = (now, done); eta = r.get("eta_seconds"); running = r["stage"] != "complete" and stale < 300
+            if sp and running: per_gpu.setdefault(gpu, []).append(sp)
+            lines.append((name, gpu, r["stage"] + ("  (stale %dm)" % (stale / 60) if stale > 300 and r["stage"] != "complete" else ""), r.get("fraction"), ("%.2f %s/s" % (sp, unit[:4])) if sp else "-", apps.get(pid, "") if pid else "", "%d:%02d" % divmod(int(el // 60), 60), "-" if eta is None else "%d:%02d" % divmod(int(eta // 60), 60)))
         if a.watch: os.system("clear")
-        print(f"{a.out}: {done} frame files finished, {total} runs with progress files   ({time.strftime('%H:%M:%S')})")
-        print(f"{'run':<18}{'GPU':<5}{'stage':<34}{'progress':<22}{'elapsed':<9}{'ETA':<7}")
-        for n, g, st, f, el, eta in rows: print(f"{n:<18}{g:<5}{st:<34}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {el:<9}{eta:<7}")
+        done_n = len(glob.glob(os.path.join(a.out, "farm", "*", "*_frames.npz")))
+        print(f"{a.out}: {done_n} frame files finished, {len(runs)} runs   ({time.strftime('%H:%M:%S')})")
+        used, tot = mem_gb(); load = os.getloadavg()[0]; ncpu = os.cpu_count() or 1
+        print(f"node: load {load:.0f}/{ncpu} cores" + (f", RAM {used:.0f}/{tot:.0f} GB" if used else ""))
+        warn = []
+        for g in sorted(gpus):
+            _, ut, mu, mt = gpus[g]; ut, mu, mt = float(ut), float(mu) / 1024, float(mt) / 1024; nrun = sum(1 for x in runs if x[1] == g and x[3] and x[3]["stage"] != "complete"); tp = per_gpu.get(g, [])
+            msg = f"GPU{g}: util {ut:3.0f}%  mem {mu:5.1f}/{mt:.0f} GiB  {nrun} run(s)" + (f"  total {sum(tp):.1f} steps/s ({sum(tp) / len(tp):.1f} each)" if tp else "")
+            note = ""
+            if ut >= 95 and nrun >= 2: note = "  << SATURATED: more runs here will not add throughput"
+            elif ut < 60 and nrun >= 1: note = "  (headroom: could take another run)"
+            if mu / mt > 0.85: note += "  << MEMORY high: single-point stages could run out"
+            print(msg + note)
+            if "SATURATED" in note: warn.append(g)
+        if warn: print("warning: GPU(s) " + ",".join(warn) + " saturated; if per-run steps/s is a fraction of a lone run, lower --per-gpu")
+        print(f"{'run':<14}{'GPU':<4}{'stage':<30}{'progress':<22}{'speed':<16}{'GPU mem':<9}{'elapsed':<9}{'ETA':<6}")
+        for t in lines:
+            if len(t) == 8: n, g, st, f, sp, gm, el, eta = t
+            else: n, g, st, f, sp, gm, el, eta = t[0], t[1], t[2], t[3], "", t[5], "", ""
+            print(f"{n:<14}{g:<4}{st:<30}{bar_txt(f)} {('%3.0f%%' % (100 * f)) if f is not None else '  - '}   {sp:<16}{(gm + ' MiB') if gm else '-':<9}{el:<9}{eta:<6}")
         if not a.watch: return
         time.sleep(a.watch)
 
