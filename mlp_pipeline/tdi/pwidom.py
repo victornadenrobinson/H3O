@@ -356,28 +356,57 @@ def cmd_run(a):
         progress.update(f"proxy {what}", i, ntot, "frames")
         if time.time() - t_last >= 30:
             t_last = time.time(); el = t_last - t0; print(f"  proxy {what}: frame {i + 1}/{ntot}, {el / 60:.1f} min, ETA {el / (i + 1) * (ntot - i - 1) / 60:.1f} min for this part", flush=True)
-    for i_f, f in enumerate(sfr):
-        tick(i_f, len(sfr), "insertions")
-        x = fh[f]; c = rng.random((K, 3)) @ cell; phi = proxy_energy(p, c, x, isH, cell)
-        lnW = lse(-phi / kT) - np.log(K); pr = np.exp(-phi / kT - lse(-phi / kT)); s = rng.choice(K, a.sel, p=pr)
-        S0.append(Atoms(numbers=host.numbers, positions=x, cell=cell, pbc=True))
-        S1 += [Atoms(numbers=numbers1, positions=np.vstack([x, c[j]]), cell=cell, pbc=True) for j in s]; ins.append((phi[s], lnW))
-    # ---- deletion: per full frame, a.ndel randomly chosen H (incl. the added one: all H are identical)
-    iH1 = np.where(isH1)[0]; dfr = list(range(0, len(fp), a.stride)); D0, D1, dele = [], [], []
-    t0 = time.time()
-    for i_f, f in enumerate(dfr):
-        tick(i_f, len(dfr), "deletions")
-        x = fp[f]; ts = rng.choice(iH1, min(a.ndel, len(iH1)), replace=False); D0.append(Atoms(numbers=numbers1, positions=x, cell=cell, pbc=True)); ws = []
-        for t in ts:
-            keep = np.ones(len(x), bool); keep[t] = False; xr = x[keep]; hr = isH1[keep]
-            D1.append(Atoms(numbers=numbers1[keep], positions=xr, cell=cell, pbc=True))
-            phi_t = proxy_energy(p, x[t:t + 1], xr, hr, cell)[0]
-            if K > 1:
-                c = rng.random((K - 1, 3)) @ cell; phik = np.r_[phi_t, proxy_energy(p, c, xr, hr, cell)]
-            else:
-                phik = np.array([phi_t])
-            ws.append((phi_t, lse(-phik / kT) - np.log(K)))
-        dele.append(ws)
+    # ---- the proxy stage (site selection) is checkpointed too: <tag>_<label>_K<K>_proxy.npz holds the chosen sites / deleted H and their proxy weights, keyed by a fingerprint of the frames, K, sel, ndel, stride, seed, proxy, model;
+    # a rerun with the same inputs loads it (no recomputation); different inputs recompute and overwrite it
+    import hashlib
+    lab0 = a.label or (os.path.basename(a.proxy).split(".")[0] if a.proxy not in ("none", "toyice") else a.proxy); px_file = a._checkpoint_prefix + f"_{lab0}_K{K}_proxy.npz"
+    hx = hashlib.sha256()
+    for v in (fh, fp): hx.update(np.ascontiguousarray(v).tobytes())
+    hx.update(repr((K, a.sel, a.ndel, a.stride, a.seed, float(a.T), mfp)).encode())
+    if p is not None: hx.update(repr(sorted((k, str(v)) for k, v in p.items())).encode())
+    px_fp = hx.hexdigest(); cached = None
+    if os.path.exists(px_file):
+        try:
+            with np.load(px_file, allow_pickle=False) as zp:
+                if str(zp["fingerprint"]) == px_fp: cached = {k: np.array(zp[k]) for k in ("ins_phi", "ins_lnw", "ins_sites", "del_t", "del_phi", "del_lw")}
+        except Exception: cached = None
+    iH1 = np.where(isH1)[0]; dfr = list(range(0, len(fp), a.stride)); D0, D1, dele, dts = [], [], [], []
+    if cached is not None:
+        print(f"proxy stage: loaded the saved sites and weights from {px_file} (same frames / K / sel / ndel / seed / proxy / model): not recomputed", flush=True)
+        for k, f in enumerate(sfr):
+            x = fh[f]; S0.append(Atoms(numbers=host.numbers, positions=x, cell=cell, pbc=True))
+            S1 += [Atoms(numbers=numbers1, positions=np.vstack([x, cached["ins_sites"][k, j]]), cell=cell, pbc=True) for j in range(a.sel)]; ins.append((cached["ins_phi"][k], float(cached["ins_lnw"][k])))
+        for k, f in enumerate(dfr):
+            x = fp[f]; D0.append(Atoms(numbers=numbers1, positions=x, cell=cell, pbc=True)); ws = []
+            for j, t in enumerate(cached["del_t"][k]):
+                keep = np.ones(len(x), bool); keep[t] = False; D1.append(Atoms(numbers=numbers1[keep], positions=x[keep], cell=cell, pbc=True)); ws.append((float(cached["del_phi"][k, j]), float(cached["del_lw"][k, j])))
+            dele.append(ws)
+        t0 = time.time()
+    else:
+        for i_f, f in enumerate(sfr):
+            tick(i_f, len(sfr), "insertions")
+            x = fh[f]; c = rng.random((K, 3)) @ cell; phi = proxy_energy(p, c, x, isH, cell)
+            lnW = lse(-phi / kT) - np.log(K); pr = np.exp(-phi / kT - lse(-phi / kT)); s = rng.choice(K, a.sel, p=pr)
+            S0.append(Atoms(numbers=host.numbers, positions=x, cell=cell, pbc=True))
+            S1 += [Atoms(numbers=numbers1, positions=np.vstack([x, c[j]]), cell=cell, pbc=True) for j in s]; ins.append((phi[s], lnW))
+        # ---- deletion: per full frame, a.ndel randomly chosen H (incl. the added one: all H are identical)
+        t0 = time.time()
+        for i_f, f in enumerate(dfr):
+            tick(i_f, len(dfr), "deletions")
+            x = fp[f]; ts = rng.choice(iH1, min(a.ndel, len(iH1)), replace=False); dts.append(np.asarray(ts)); D0.append(Atoms(numbers=numbers1, positions=x, cell=cell, pbc=True)); ws = []
+            for t in ts:
+                keep = np.ones(len(x), bool); keep[t] = False; xr = x[keep]; hr = isH1[keep]
+                D1.append(Atoms(numbers=numbers1[keep], positions=xr, cell=cell, pbc=True))
+                phi_t = proxy_energy(p, x[t:t + 1], xr, hr, cell)[0]
+                if K > 1:
+                    c = rng.random((K - 1, 3)) @ cell; phik = np.r_[phi_t, proxy_energy(p, c, xr, hr, cell)]
+                else:
+                    phik = np.array([phi_t])
+                ws.append((phi_t, lse(-phik / kT) - np.log(K)))
+            dele.append(ws)
+        atomic_npz(px_file, fingerprint=px_fp, ins_phi=np.array([i[0] for i in ins]), ins_lnw=np.array([i[1] for i in ins]), ins_sites=np.array([q.positions[-1] for q in S1]).reshape(len(sfr), a.sel, 3),
+                   del_t=np.array(dts), del_phi=np.array([[w[0] for w in ws] for ws in dele]), del_lw=np.array([[w[1] for w in ws] for ws in dele]))
+        print(f"proxy stage saved: {px_file}", flush=True)
     print(f"proxy {a.proxy} K {K}: {len(S1)} insertion and {len(D1)} deletion trials prepared ({(time.time() - t0) / 60:.1f} min); real-model single points: {len(S0) + len(S1) + len(D0) + len(D1)}", flush=True)
     progress.update("proxy deletions", len(dfr), len(dfr), "frames", force=True)
     lk = os.environ.get("PW_GPU_LOCK")   # several pwidom processes on one GPU (pwidom_scan): only one at a time in the memory-hungry batched single-point stage
