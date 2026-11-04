@@ -46,10 +46,27 @@ def enqueue(out, structures, metadata):
     return True
 
 
-def export_trials(out, trials, limit, provenance):
-    """Choose leverage, residual and representative trials, bounded per host run."""
+def export_trials(out, trials, limit, provenance, policy="top", seed=0):
+    """Choose trials for DFT, bounded per host run. policy 'top': leverage / residual / representative (diagnostic). policy 'weighted': limit//2 draws per direction WITH replacement with
+    probability proportional to the estimator weight exp(log_weight) (importance resampling of the model's own Widom / deletion ensemble); a trial drawn k times is exported once with draw_count = k.
+    The mean of exp(-beta dD) over the draws (dD = DFT - model difference of the pair) is then the DFT-over-model correction factor of the estimator (see reweight_dft.py)."""
     if limit <= 0 or not trials:
         return 0
+    if policy == "weighted":
+        rng = np.random.default_rng(seed + 4242); selected = {}
+        for direction in ("insertion", "deletion"):
+            group = [i for i, t in enumerate(trials) if t["direction"] == direction]
+            if not group: continue
+            lw = np.array([trials[i]["log_weight"] for i in group]); pr = np.exp(lw - lw.max()); pr /= pr.sum()
+            for j in rng.choice(len(group), size=max(1, limit // 2), p=pr, replace=True): selected.setdefault(group[j], {"n": 0})["n"] += 1
+        count = 0
+        for i, d in selected.items():
+            trial = dict(trials[i]); structures = trial.pop("structures")
+            metadata = dict(provenance, **trial, reasons=["weighted_draw"], draw_count=d["n"], policy="weighted",
+                            diagnosis="importance-resampled trial for the DFT-over-model correction; not a measured GRACE error",
+                            geometry_order=["host_without_selected_H", "host_with_selected_H"])
+            count += enqueue(out, structures, metadata)
+        return count
     selected = {}
     # Disagreement is centered within each direction to remove an arbitrary proxy offset.
     for direction in ("insertion", "deletion"):

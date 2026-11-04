@@ -432,7 +432,7 @@ def cmd_run(a):
                     log_weight=float(wr_frame[k][j]/kT),
                     structures=[D1[offset+j], D0[k]]))
             offset += len(ws)
-        count = export_trials(a.candidate_dir, trials, a.candidate_limit,
+        count = export_trials(a.candidate_dir, trials, a.candidate_limit, policy=getattr(a, "candidate_policy", "top"), seed=a.seed, provenance=
             dict(run=str(os.path.abspath(a.out)), tag=tag, model=a.model, model_fp=mfp,
                  proxy=a.proxy, P_GPa=a.P, T_K=a.T, K=K,
                  source_frames=str(os.path.abspath(ff))))
@@ -508,6 +508,7 @@ def main():
     r.add_argument("--resume-from", help="previous output/tag prefix; continue MD into fresh --out without re-equilibration")
     r.add_argument("--extend-from", help="cached frames: append a restarted MD segment in fresh --out; new thermal velocities and re-equilibration")
     r.add_argument("--candidate-dir", default=None, help="optional unlabeled extxyz diagnostic queue; no DFT submission")
+    r.add_argument("--candidate-policy", choices=("top", "weighted"), default="top", help="top: dominant-weight / residual / representative trials (diagnostic); weighted: --candidate-limit//2 importance-resampled draws per direction for the DFT-over-model correction (reweight_dft.py)")
     r.add_argument("--candidate-limit", type=int, default=10, help="maximum diagnostic trial pairs per host run")
     d = sub.add_parser("dg"); d.add_argument("ice"); d.add_argument("hfluid")
     a = ap.parse_args(); {"run": cmd_run, "dg": cmd_dg}[a.cmd](a)
