@@ -56,12 +56,14 @@ try:
 except Exception as e: ph = None; say(f"  cannot import pwidom_hull ({e}): run with the grace env python")
 
 
-def mol_frac(npz, nfr=5, cut=0.95):
-    """fraction of H atoms with a partner closer than `cut` A in the pure-H frames (minimum image): ~0 = atomic fluid, ~1 = molecular H2. The single-H insertion of PWidom is only meaningful where this is small."""
+def mol_frac(npz, nfr=5, bond=1.0, ratio=1.6):
+    """fraction of H atoms that sit in an isolated pair: nearest neighbour closer than `bond` A AND the second neighbour more than `ratio` x farther (an H2 molecule has r2/r1 of ~2.5; atomic compressed fluid ~1.1-1.3).
+    ~0 = atomic fluid, ~1 = molecular. The single-H insertion of PWidom is only meaningful where this is small. Minimum image, a few frames."""
     import numpy as np
     z = np.load(npz); X = z["host"]; cell = np.asarray(z["cell"]) if "cell" in z.files else np.eye(3) * float(z["V"]) ** (1 / 3); inv = np.linalg.inv(cell); fr = []
     for f in np.linspace(0, len(X) - 1, min(nfr, len(X))).astype(int):
-        d = X[f][:, None, :] - X[f][None, :, :]; d -= np.round(d @ inv) @ cell; r = np.sqrt((d ** 2).sum(-1)); np.fill_diagonal(r, np.inf); fr.append(float((r.min(axis=1) < cut).mean()))
+        d = X[f][:, None, :] - X[f][None, :, :]; d -= np.round(d @ inv) @ cell; r = np.sqrt((d ** 2).sum(-1)); np.fill_diagonal(r, np.inf); rs = np.sort(r, axis=1)
+        fr.append(float(((rs[:, 0] < bond) & (rs[:, 1] > ratio * rs[:, 0])).mean()))
     return float(np.mean(fr))
 
 
@@ -88,7 +90,7 @@ def show(label, dirs):
             if ref.get("frames"): cand = cand or [ref["frames"]]
         except Exception: pass
         if cand:
-            try: m = mol_frac(cand[0]); mf = f"   pure H molecular fraction {m:.2f}" + ("  <-- molecular: single-H insertion / dg not meaningful" if m > 0.3 else ""); break
+            try: m = mol_frac(cand[0]); mf = f"   pure H molecular fraction {m:.2f}" + ("  <-- molecular: single-H insertion / dg not meaningful" if m > 0.5 else ""); break
             except Exception: pass
     say(f"  {label}   model {','.join(sorted(models))}   {len(runs)} run dir(s)" + (f", {errs} unreadable" if errs else "") + mf)
     for r in sorted(rws, key=lambda r: r["n"]): say(f"      {r['name']:9s} n {r['n']:.3f}   dg {r['dg']:+6.0f} +- {r['err']:4.0f}   {' '.join(r['flags'])}" + (f"   ({r['k']} runs, spread {r['spread']:.0f})" if r.get("k", 1) > 1 else "") + (f"   P_host-P {sum(dP[r['name']]) / len(dP[r['name']]):+.0f} GPa" + ("  <-- >15 GPa: EOS too crude" if abs(sum(dP[r['name']]) / len(dP[r['name']])) > 15 else "") if dP.get(r["name"]) else ""))
