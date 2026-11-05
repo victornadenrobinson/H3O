@@ -8,10 +8,13 @@
 # All of it is SEALED (valid-frac 1: not for training). Inputs are written from YOUR template into runs/dgcheck (never into the repo); pure H (250 atoms) is skipped by widom_frames (Gamma-only labels invalid).
 # FRAMES_EXTXYZ=<file> uses those geometries instead of widom_frames (e.g. the weighted trials of candidates_to_frames.py).
 # env: RUNS (run dirs, default the two 500 GPa / 5000 K runs), PROXY, FRAMES (3), SEL (2), DEL (3), NDEL (2), NODES (jobs, 6), MINUTES (per job, 700), OUTD (runs/dgcheck), PY
+# slurm: ACCT (m3349), QOS (regular), CPT (cpus-per-task, 1 = the header of perlmutter_dft_pwidom.sbatch, which is known to submit), SBATCH_EXTRA (more args)
+#   TEST=1 runs `sbatch --test-only` on each job file instead of submitting (shows a policy rejection without queueing anything)
 set -e; cd "$(dirname "$0")/.."; T=${TEMPLATE:?TEMPLATE=<your vasp template dir with INCAR KPOINTS POTCAR POSCAR>}; PY=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
 export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline
 RUNS=${RUNS:-"runs/pwidom_endmem_new_500GPa_5000K runs/pwidom_xh_seed11_500GPa_5000K"}; PROXY=${PROXY:-runs/pwidom_fit/proxy_ice.json}
 FRAMES=${FRAMES:-3}; SEL=${SEL:-2}; DEL=${DEL:-3}; NDEL=${NDEL:-2}; NODES=${NODES:-6}; MINUTES=${MINUTES:-700}; OUTD=${OUTD:-runs/dgcheck}; SUBMIT=${SUBMIT:-0}; mkdir -p "$OUTD"
+ACCT=${ACCT:-m3349}; QOS=${QOS:-regular}; CPT=${CPT:-1}; SBATCH_EXTRA=${SBATCH_EXTRA:-}; nsub=0; nfail=0
 if [ -n "${FRAMES_EXTXYZ:-}" ]; then cp "$FRAMES_EXTXYZ" "$OUTD/dgcheck_frames.extxyz"; echo "using the given geometries $FRAMES_EXTXYZ (no widom_frames step)"; else
 CACHES=(); for r in $RUNS; do for f in $r/pw_*_frames.npz; do case $f in *pureH*) ;; *) CACHES+=("$f");; esac; done; done
 [ "${#CACHES[@]}" -gt 0 ] || { echo "no *_frames.npz caches in: $RUNS"; exit 1; }
@@ -28,10 +31,16 @@ for ((j = 0; j < NODES; j++)); do
   else
     $PY mlp_pipeline/prepare_points.py "$OUTD/frames_$j.extxyz" --template "$T" --out "$OUTD/points_$j" --min-T 1000 | tail -n 1; echo "$fsha" > "$OUTD/points_$j/.frames_sha"
   fi
-  printf '%s\n' '#!/bin/bash' "#SBATCH -A m3349 -C cpu -q regular -N 1 --ntasks-per-node=128 --cpus-per-task=2 -t $WALL -J dgchk_$j" \
+  printf '%s\n' '#!/bin/bash -l' "#SBATCH --account=$ACCT" "#SBATCH --qos=$QOS" '#SBATCH --constraint=cpu' '#SBATCH --nodes=1' '#SBATCH --ntasks-per-node=128' \
+    "#SBATCH --cpus-per-task=$CPT" '#SBATCH --exclusive' '#SBATCH --mem=0' "#SBATCH --time=$WALL" "#SBATCH --job-name=dgchk_$j" "#SBATCH --output=$OUTD/slurm_dgchk_${j}_%j.out" \
     'set -e; cd ${SLURM_SUBMIT_DIR:-.}; export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline; export VASP_MODULE=${VASP_MODULE:-vasp/5.4.4-cpu}' \
     "bash mlp_pipeline/perlmutter_vasp_check.sh run $OUTD/points_$j --exe vasp_gam --ranks 32 --parallel 4 --minutes $MINUTES" > "$OUTD/job_$j.sbatch"
   echo "  job_$j: $(grep -c . "$OUTD/points_$j/dirs.txt") points -> $OUTD/job_$j.sbatch ($MINUTES min, 4 lanes x 32 ranks)"
-  if [ "$SUBMIT" = 1 ]; then sbatch "$OUTD/job_$j.sbatch"; fi
+  if [ "${TEST:-0}" = 1 ]; then echo "    test-only: $(sbatch --test-only $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1 | tail -n 1)"
+  elif [ "$SUBMIT" = 1 ]; then
+    if out=$(sbatch --parsable $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1); then echo "    submitted: $out"; ((nsub++)) || true
+    else echo "    SBATCH FAILED: $out"; nfail=$((nfail + 1)); fi
+  fi
 done
-if [ "$SUBMIT" != 1 ]; then echo "(not submitted: add SUBMIT=1)"; fi
+if [ "$SUBMIT" = 1 ]; then echo "submitted ${nsub:-0}, failed ${nfail:-0} (account $ACCT, qos $QOS, cpus-per-task $CPT)"; [ "${nfail:-0}" = 0 ] || exit 1
+elif [ "${TEST:-0}" != 1 ]; then echo "(not submitted: add SUBMIT=1, or TEST=1 for sbatch --test-only)"; fi

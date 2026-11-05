@@ -17,7 +17,7 @@ for spec in "k111 1 1 1 60" "k222 2 2 2 170" "k333 3 3 3 150"; do
   fi
   cat > $K/job_$m.sbatch <<EOF
 #!/bin/bash
-#SBATCH -A m3349 -C cpu -q regular -N 1 --ntasks-per-node=128 --cpus-per-task=2 -t $(printf "%d:%02d:00" $(( (mins + 10) / 60 )) $(( (mins + 10) % 60 ))) -J kpt_$m
+#SBATCH -A ${ACCT:-m3349} -C cpu -q ${QOS:-regular} -N 1 --ntasks-per-node=128 --cpus-per-task=${CPT:-1} --exclusive --mem=0 -t $(printf "%d:%02d:00" $(( (mins + 10) / 60 )) $(( (mins + 10) % 60 ))) -J kpt_$m
 set -e; cd \${SLURM_SUBMIT_DIR:-.}; export PYTHONPATH=\${PYTHONPATH:-}:\$PWD/mlp_pipeline; export VASP_MODULE=\${VASP_MODULE:-vasp/5.4.4-cpu}
 bash mlp_pipeline/perlmutter_vasp_check.sh run $p --exe vasp_std --ranks 32 --parallel 4 --minutes $((mins + 5))
 EOF
