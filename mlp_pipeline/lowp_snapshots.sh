@@ -24,9 +24,13 @@ vpas = lambda l: [float(x) for x in re.search(r"--vpa ((?:[0-9.]+ ?)+)", l).grou
 by = {}
 for l in lines:
     ph = get(l, "phase"); key = ("H", 0.0, get(l, "T")) if ph == "H" else ("fcc", float(get(l, "hper")), get(l, "T")); by[key] = l
+def near(kind, T):      # the line of this composition at T, else the nearest scanned T within 2500 K (volumes then approximate; relabelled to T)
+    c = sorted((abs(float(k[2]) - float(T)), k[2]) for k in by if k[:2] == kind)
+    if not c or c[0][0] > 2500: return None
+    l = by[kind + (c[0][1],)]; return re.sub(r"--T \S+", f"--T {T}", re.sub(r"_\d+K\b", f"_{T}K", l))
 res = []; Ts = sorted({k[2] for k in by}, key=float)
 for T in Ts:
-    w, h = by.get(("fcc", 2.0, T)), by.get(("H", 0.0, T))
+    w, h = near(("fcc", 2.0), T), near(("H", 0.0), T)
     for x in want:
         if x == "H":
             if h: res.append(h + f" --natoms {natoms}")
@@ -52,9 +56,9 @@ out, want, natoms, Tc = sys.argv[1], sys.argv[2].split(), int(sys.argv[3]), sys.
 get = lambda l, k: re.search(rf"--{k} (\S+)", l).group(1)
 vpas = lambda l: [float(x) for x in re.search(r"--vpa ((?:[0-9.]+ ?)+)", l).group(1).split()]
 if not lines: print("cold set: no base commands from eos_low_p.py"); open(f"{out}/cmds_cold.txt", "w").write(""); sys.exit(0)
-T0 = min({get(l, "T") for l in lines}, key=float); by = {}                          # volumes from the lowest scanned temperature
-for l in lines:
-    if get(l, "T") == T0: by[("H", 0.0) if get(l, "phase") == "H" else ("fcc", float(get(l, "hper")))] = l
+by = {}; T0 = min({get(l, "T") for l in lines}, key=float)                          # volumes of each composition from the LOWEST scanned temperature that has a line for it (the H2O lines may stop at higher T than pure H)
+for l in sorted(lines, key=lambda l: -float(get(l, "T"))):
+    by[("H", 0.0) if get(l, "phase") == "H" else ("fcc", float(get(l, "hper")))] = l
 w, h = by.get(("fcc", 2.0)), by.get(("H", 0.0)); res = []
 for x in want:
     if x == "H": base = (h + f" --natoms {natoms}") if h else None
@@ -62,10 +66,10 @@ for x in want:
         X = float(x); base = by.get(("fcc", X))
         if base is None and w is not None and h is not None:
             v = [(3 * a + (X - 2) * b) / (1 + X) for a, b in zip(vpas(w), vpas(h))]
-            base = re.sub(r"--hper \S+", f"--hper {X:g}", w); base = re.sub(r"--vpa (?:[0-9.]+ ?)+", "--vpa " + " ".join(f"{q:.4f}" for q in v) + " ", base); base = re.sub(r"--tag \S+", f"--tag lowP_fcc_h{X:g}_solid_{T0}K", base)
+            base = re.sub(r"--hper \S+", f"--hper {X:g}", w); base = re.sub(r"--vpa (?:[0-9.]+ ?)+", "--vpa " + " ".join(f"{q:.4f}" for q in v) + " ", base); base = re.sub(r"--tag \S+", f"--tag lowP_fcc_h{X:g}_solid_{T0}K", base); base = re.sub(r"--T \S+", f"--T {T0}", base)
         if base is not None: base = re.sub(r"--nrep \d+", "--nrep 2" if X >= 2.5 else "--nrep 3", base)
     if base is None: print(f"cold set: no line for {x}"); continue
-    for T in Tc: res.append(re.sub(r"--T \S+", f"--T {T}", re.sub(rf"_{T0}K\b", f"_{T}K", base)))
+    for T in Tc: res.append(re.sub(r"--T \S+", f"--T {T}", re.sub(r"_\d+K\b", f"_{T}K", base)))
 open(f"{out}/cmds_cold.txt", "w").write("\n".join(res) + "\n"); print(f"cold set: {len(res)} commands (compositions {' '.join(want)}, T {' '.join(Tc)} K, volumes from {T0} K)")
 PYEOF
     cat "$OUT/cmds_cold.txt" >> "$OUT/cmds_liquid.txt"
