@@ -36,7 +36,7 @@ def phases(sc, T):
 
 def lower_hull(pts):
     """pts: list of (c, G, phase, index). Monotone-chain lower hull, sorted by c then G."""
-    pts = sorted(pts, key=lambda p: (p[0], p[1])); h = []
+    pts = sorted(pts, key=lambda p: (p[0], p[1])); pts = [p for i, p in enumerate(pts) if i == 0 or p[0] != pts[i - 1][0]]; h = []   # same c: keep the lowest G only
     for p in pts:
         while len(h) >= 2 and (h[-1][0] - h[-2][0]) * (p[1] - h[-2][1]) - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0]) <= 0: h.pop()
         h.append(p)
@@ -63,8 +63,45 @@ TITLES = {"a": "(a) miscible fluid, no compound:\n    liquidus falls from Tm tow
           "e": "(e) fluid miscibility gap:\n    monotectic"}
 
 
+def hulls_figure(out, Ts=(6500.0, 5500.0, 4300.0, 3000.0)):
+    """rows = scenarios (a)-(e), columns = temperatures: G(c) of every phase and the lower convex hull; straight hull pieces = two-phase coexistence (common tangent)"""
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.size": 8.5, "axes.edgecolor": "#888", "xtick.color": "#555", "ytick.color": "#555"})
+    col = {"L": "#2a78d6", "SI-H2O": "#eb6834", "SI-H2O(H)": "#eb6834", "H3O": "#008300"}
+    xt = [3 * n / (n + 1) - 2 for n in (2, 3, 4, 6)] + [1.0]; xtl = ["H2O", "H3O", "H4O", "H6O", "H"]
+    cq = np.linspace(0.0015, 0.9985, 600)
+    fig, axs = plt.subplots(5, len(Ts), figsize=(4.1 * len(Ts), 17), constrained_layout=True)
+    for r, sc in enumerate("abcde"):
+        for k, T in enumerate(Ts):
+            ax = axs[r, k]; lab, h, ph = labels_at(sc, T, cq)
+            for n, cc, gg in ph:
+                if len(cc) > 1:
+                    m = gg < 400; ax.plot(cc[m], gg[m], color=col[n], lw=1.8, label="liquid" if n == "L" else n + " (solid solution)")
+                else: ax.plot(cc, gg, "o", color=col[n], ms=8, mec="white", mew=1.4, label=n, zorder=5)
+            hc = np.array([p[0] for p in h]); hg = np.array([p[1] for p in h])
+            for i in range(len(h) - 1):                       # two-phase pieces of the hull: thick grey; one-phase pieces lie on a curve
+                a_, b_ = h[i], h[i + 1]
+                if not (a_[2] == b_[2] and abs(a_[3] - b_[3]) == 1): ax.plot([a_[0], b_[0]], [a_[1], b_[1]], color="#222", lw=2.4, alpha=0.55, solid_capstyle="butt", zorder=4)
+            ax.plot(hc, hg, color="#222", lw=0.8, ls="--", zorder=4)
+            seg = []; prev = None                              # phase sequence along x, e.g. "SI-H2O + L | L"
+            for c, l in zip(cq, lab):
+                if l != prev: seg.append([l, c]); prev = l
+            txt = "   |   ".join(f"{l}" for l, _ in seg); bnd = ", ".join(f"{2 / 3 + c / 3:.3f}" for _, c in seg[1:])
+            ax.set_title(f"{T:.0f} K:  {txt}" + (f"\n    boundaries at x_H = {bnd}" if bnd else ""), loc="left", fontsize=8, color="#222")
+            lo = min(min(hg), min(g.min() for _, _, g in ph)) - 25; hi = max(30, max((g.max() for n, c, g in ph if len(c) == 1), default=0) + 30)
+            ax.set_ylim(lo, hi); ax.set_xlim(-0.03, 1.02); ax.set_xticks(xt); ax.set_xticklabels(xtl); ax.grid(True, color="#eee", lw=0.6)
+            if k == 0: ax.set_ylabel(TITLES[sc].split(":")[0] + "\nG per atom (meV, rel.)", fontsize=9)
+            if r == 0 and k == 0: ax.legend(frameon=False, fontsize=7.5, loc="lower left")
+            if r == 2 and k == 0: ax.legend(frameon=False, fontsize=7.5, loc="lower left")
+            if r == 3 and k == 0: ax.legend(frameon=False, fontsize=7.5, loc="lower left")
+    fig.suptitle("Convex hulls behind the schematic phase diagrams (fixed P; rows = scenarios a-e, columns = T). Thick grey = two-phase tie line (common tangent); x_H = H/(H+O) atom fraction.\n"
+                 "Illustrative model free energies, NOT results.", fontsize=10, color="#222")
+    fig.savefig(out, dpi=130); print("wrote", out)
+
+
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("-o", default="phase_diagram_scenarios.png"); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("-o", default="phase_diagram_scenarios.png"); ap.add_argument("--hulls", help="also write the G(x) hull panels (scenarios x temperatures) to this file"); a = ap.parse_args()
+    if a.hulls: hulls_figure(a.hulls)
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     plt.rcParams.update({"font.size": 9, "axes.edgecolor": "#888", "xtick.color": "#555", "ytick.color": "#555"})
     cq = np.linspace(0.0015, 0.9985, 500); Tq = np.linspace(2000, 7000, 260)
