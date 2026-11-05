@@ -71,11 +71,24 @@ PYEOF
     cat "$OUT/cmds_cold.txt" >> "$OUT/cmds_liquid.txt"
   else echo "cold set skipped: eos_low_p.py failed for the cold pressures (see $OUT/table.txt)"; fi
 fi
+# ---- HYDRATES (default on): the C2 (H4O) and C3 (H6O) filled-ice structures as Gamma-sized supercells, volume-scaled, positions RELAXED with the model at each volume (bonds adapt to the density), then rattled: two short GPU jobs at the head of the pool.
+# C2: 3x2x3 supercell of the 20-atom 10 GPa cell (360 atoms); C3: 2x2x2 (224 atoms). Needs docs/data/hydrates/c2_pnas_10GPa.vasp and c3_pnas.vasp (from the branch). Output: runs/hydrates/C2_relaxed.extxyz, C3_relaxed.extxyz. HYDRATES=0 skips.
+if [ "${HYDRATES:-1}" = 1 ]; then
+  mkdir -p runs/hydrates; : > "$OUT/cmds_hydrate.txt"
+  for sp in "c2_pnas_10GPa C2 320 400 0.86 0.90 0.95 1.0" "c3_pnas C3 150 250 0.88 0.94 1.0 1.06"; do
+    set -- $sp; f=docs/data/hydrates/$1.vasp
+    if [ -e "$f" ]; then echo "python mlp_pipeline/supercell_snapshots.py $f --name $2 --out runs/hydrates/$2_relaxed.extxyz --min-atoms $3 --max-atoms $4 --min-edge 8.0 --scales $5 $6 $7 $8 --rattle 0.0 0.03 0.06 --seeds 1 --T 1000 --relax $MODEL" >> "$OUT/cmds_hydrate.txt"
+    else echo "hydrates: $f missing (git show FETCH_HEAD:$f > $f): skipping $2"; fi
+  done
+  cat "$OUT/cmds_hydrate.txt" "$OUT/cmds_liquid.txt" > "$OUT/cmds_all.txt"; mv "$OUT/cmds_all.txt" "$OUT/cmds_liquid.txt"; echo "hydrates: $(grep -c . "$OUT/cmds_hydrate.txt") supercell jobs added (relaxed with the model)"
+fi
 $PY - "$OUT" "$NW" "$PYRUN" <<'PYEOF'
 import sys, re
 out, nw, py = sys.argv[1], int(sys.argv[2]), sys.argv[3]; cmds = []
 for l in open(f"{out}/cmds_liquid.txt"):
-    t = l.split(); i = t.index("--vpa"); j = next((k for k in range(i + 1, len(t)) if t[k].startswith("--")), len(t)); nv = j - i - 1
+    t = l.split()
+    if "--vpa" not in t: cmds.append(" ".join([py] + t[1:])); continue                      # a single command (the hydrate supercell jobs)
+    i = t.index("--vpa"); j = next((k for k in range(i + 1, len(t)) if t[k].startswith("--")), len(t)); nv = j - i - 1
     for k in range(nv): cmds.append(" ".join([py] + t[1:]) + f" --only {k}")
 work = [[] for _ in range(nw)]
 for n, c in enumerate(cmds): work[n % nw].append(c)
@@ -99,5 +112,14 @@ for f in sorted(glob.glob("runs/eos_lowp3/*_v*/thermo.csv")):
     except Exception: pass
 print("mean pressure of each volume (second half of the MD), GPa -- compare with the 10/25/50/100 targets (EOS extrapolated; molecular H2 volumes in particular can be far off):")
 for n, P in rows[:60]: print(f"   {P:8.1f}  {n}")
+PYEOF
+echo "hydrate relaxations (H2 ~0.74 A, O-H ~1.0 A expected):"; grep -h "relaxed at this volume\|WARNING" "$OUT"/worker_*.log 2>/dev/null | cut -c1-200 | head -12
+$PY - <<'PYEOF'
+import glob
+from ase.io import read
+n = 0
+for f in sorted(glob.glob("runs/hydrates/*_relaxed.extxyz")):
+    k = len(read(f, ":")); n += k; print(f"  {f}: {k} frames")
+m = len(glob.glob("runs/eos_lowp3/*_v*/traj.extxyz")); print(f"snapshot sources: {n} hydrate frames; {m} MD volume folders (about 30 frames each: take 2-3 per volume for DFT => ~{2 * m}-{3 * m} snapshots) => roughly {n + 2 * m}-{n + 3 * m} to label")
 PYEOF
 echo "finished. snapshots: $(ls -d runs/eos_lowp3/*_v* 2>/dev/null | wc -l) volume folders; failures: $(cat "$OUT/failed.txt" 2>/dev/null | wc -l) (see $OUT/failed.txt)"
