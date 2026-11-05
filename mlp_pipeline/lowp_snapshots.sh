@@ -5,7 +5,7 @@
 # Volumes come from eos_low_p.py (extrapolated below the measured range: the DFT labels do not care, the geometries only need to be liquid-like at roughly the right density; check P in each thermo.csv).
 # The liquid branch is forced (the O lattice is melted at 12000 K for 1 ps first, then cooled to T). Output: runs/eos_lowp3/<tag>_v<vpa>/{thermo.csv, traj.extxyz}; frames every 20 fs after equilibration.
 # NOTE: at these P, T pure H is MOLECULAR (H2): keep small pure-H cells (the 500-atom rule is for metallic H), expect extrapolated volumes to be off for H, and remember single-H insertion (PWidom) is not meaningful there (H2 insertion would be).
-# HPERS ("2 2.25 2.5 3 5 H"): compositions = H per O values, H = pure hydrogen with HATOMS atoms (686: even, see above); compositions without EOS-scan data get ideal-mixing volumes.
+# HPERS ("2 2.25 2.5 3 4 5 6 H": H2O, H2.25O, H2.5O, H3O, H4O, H5O, H6O, pure H; hper 6 is the most the fcc O cell can hold, one proton per O-O bond midpoint): compositions = H per O values, H = pure hydrogen with HATOMS atoms (686: even, see above); compositions without EOS-scan data get ideal-mixing volumes.
 # env: PS ("10 25 50 100" GPa), MODEL (best fine-tune), MDPS (0.6 ps sampling + 0.3 equil), TS (only these temperatures, e.g. "3000 5000"), PERGPU (3), CMDMIN (minutes allowed per MD, 12), OUT (runs/lowp3), PY, PYRUN, EOSLOWP
 cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; PYRUN=${PYRUN:-$PY}; PS=${PS:-"10 25 50 100"}; MODEL=${MODEL:-grace-ft:runs/grace/ft_mn_f_lr1e-2_e20/seed/1/final_model}; MDPS=${MDPS:-0.6}
 PERGPU=${PERGPU:-3}; CMDMIN=${CMDMIN:-12}; OUT=${OUT:-runs/lowp3}; EOSLOWP=${EOSLOWP:-mlp_pipeline/eos_low_p.py}; mkdir -p "$OUT" logs_pw
@@ -13,7 +13,7 @@ NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || NG=1; NW=$((NG * PER
 $PY $EOSLOWP runs/eos_scan runs/eos_lowp runs/eos_lowp2 --P $PS --model "$MODEL" --ps "$MDPS" > "$OUT/cmds_raw.txt" 2> "$OUT/table.txt" || { echo "eos_low_p.py failed: see $OUT/table.txt"; tail -5 "$OUT/table.txt"; exit 1; }
 grep '^python' "$OUT/cmds_raw.txt" | sed -E 's/--branch [a-z]+/--branch liquid/; s/_solid_/_liquid_/; s#--outdir [^ ]+#--outdir runs/eos_lowp3#' | sort -u > "$OUT/cmds_liquid.txt"
 if [ -n "${TS:-}" ]; then pat=$(echo $TS | sed 's/ /|/g'); grep -E -- "--T ($pat) " "$OUT/cmds_liquid.txt" > "$OUT/cmds_T.txt" || true; mv "$OUT/cmds_T.txt" "$OUT/cmds_liquid.txt"; fi
-$PY - "$OUT" "${HPERS:-2 2.25 2.5 3 5 H}" "${HATOMS:-686}" <<'PYEOF'
+$PY - "$OUT" "${HPERS:-2 2.25 2.5 3 4 5 6 H}" "${HATOMS:-686}" <<'PYEOF'
 # composition selection for the liquid hull: keep the requested H-per-O values (and 'H' = pure H); a composition with no line from eos_low_p.py (no MLP EOS scan data) gets its volumes by IDEAL MIXING of the H2O and pure-H volumes at the same
 # pressure (per O: 3 v_H2O + (hper-2) v_H over 1+hper atoms); cells: 108 O (nrep 3) up to H2.25O, 32 O (nrep 2) beyond; pure H = HATOMS atoms (default 686 = 2 x 7^3: an EVEN count, so molecular H2 has no unpaired atom; 729 is odd).
 import re, sys
