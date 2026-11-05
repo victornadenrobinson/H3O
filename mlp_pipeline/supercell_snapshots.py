@@ -2,7 +2,7 @@
 """Snapshots of an ORDERED crystal (e.g. the hydrogen-hydrate phases C2 / C3, H4O / H6O) for DFT labelling: a supercell large enough for Gamma-only sampling, volumes scaled to sample a pressure range, atoms rattled.
    python3 mlp_pipeline/supercell_snapshots.py STRUCT.cif [STRUCT2.vasp ...] --name C2 --out runs/hydrates/C2.extxyz [--min-atoms 200 --max-atoms 450 --min-edge 8.5] [--scales 0.80 0.86 0.92 1.0 1.06] [--rattle 0.03 0.08] [--seeds 2] [--T 300]
 The supercell is the DIAGONAL repeat (n1, n2, n3) whose atom count lies in [min-atoms, max-atoms] with the longest allowed shortest-cell-edge (>= --min-edge A); each frame = volume scale (linear, applied to the cell and positions) x rattle sigma (A) x seed.
-Frames carry info config_type=hydrate_<name>, T_K (the electronic temperature used by the DFT writer: its floor is 1000 K), scale and rattle. Molecules are NOT kept rigid by the rattle (a plain Gaussian displacement): keep sigma <= 0.08 A,
+Frames carry info config_type=hydrate_<name>, T_K (the electronic temperature used by the DFT writer: its floor is 1000 K), scale and rattle. The volume scaling keeps molecules rigid (centres of mass scale, bonds do not: --no-rigid for the plain scaling); the RATTLE is a plain Gaussian displacement of every atom, so keep sigma <= 0.08 A,
 or generate thermal frames with GRACE MD at the target volumes instead (17_eos_md.py style) and use this script for the static strained / rattled set.
 Check the structure first (ASE reads cif / POSCAR / extxyz); this script does NOT know the chemistry: the stoichiometry, density and bonds are whatever the input file has."""
 import argparse, itertools, os, sys
@@ -12,7 +12,35 @@ from ase.io import read, write
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--name", default="X"); ap.add_argument("--out", required=True)
 ap.add_argument("--min-atoms", type=int, default=200); ap.add_argument("--max-atoms", type=int, default=450); ap.add_argument("--min-edge", type=float, default=8.5)
-ap.add_argument("--scales", type=float, nargs="+", default=[0.80, 0.86, 0.92, 1.0, 1.06]); ap.add_argument("--rattle", type=float, nargs="+", default=[0.03, 0.08]); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--T", type=float, default=300.0); a = ap.parse_args()
+ap.add_argument("--scales", type=float, nargs="+", default=[0.80, 0.86, 0.92, 1.0, 1.06]); ap.add_argument("--rattle", type=float, nargs="+", default=[0.03, 0.08]); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--T", type=float, default=300.0); ap.add_argument("--min-hh", type=float, default=0.55); ap.add_argument("--min-oh", type=float, default=0.85); ap.add_argument("--no-rigid", dest="rigid", action="store_false", help="scale ALL positions with the cell (shrinks the molecules too); default: rigid molecules"); a = ap.parse_args()
+def scaled(at, s):
+    f = at.copy(); f.set_cell(at.cell.array * s, scale_atoms=True); return f
+
+
+def rigid_scale(at, s, oh=1.25, hh=0.95):
+    """volume scaling that keeps every MOLECULE rigid: molecules are the connected components of O-H < oh and H-H < hh bonds (H2O, H2); their centres of mass follow the cell (scaled by s), the internal geometry is unchanged.
+    A plain scaling of all positions would also shrink the bonds (0.74 A H2 -> 0.64 A at s = 0.86), which real molecules do not do."""
+    from ase.neighborlist import neighbor_list
+    from ase.geometry import find_mic
+    n = len(at); I, J, D = neighbor_list("ijd", at, max(oh, hh)); sym = at.numbers; ok = np.where((sym[I] != sym[J]) & (D < oh) | (sym[I] == 1) & (sym[J] == 1) & (D < hh), True, False); parent = list(range(n))
+    def find(x):
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for i, j in zip(I[ok], J[ok]): parent[find(i)] = find(j)
+    groups = {}
+    for i in range(n): groups.setdefault(find(i), []).append(i)
+    f = at.copy(); f.set_cell(at.cell.array * s, scale_atoms=False); pos = at.positions.copy(); m = at.get_masses(); new = pos.copy()
+    for g in groups.values():
+        rel, _ = find_mic(pos[g] - pos[g[0]], at.cell, True); P = pos[g[0]] + rel; com = (P * m[g][:, None]).sum(0) / m[g].sum(); new[g] = com * s + (P - com)      # centre scaled with the cell, internal vectors kept
+    f.set_positions(new); f.wrap(); return f
+
+
+def contacts_ok(at, min_hh, min_oh):
+    from ase.neighborlist import neighbor_list
+    I, J, D = neighbor_list("ijd", at, max(min_hh, min_oh)); sy = at.numbers
+    return not (((sy[I] == 1) & (sy[J] == 1) & (D < min_hh)) | ((sy[I] != sy[J]) & (D < min_oh))).any()
+
+
 def load(fn):
     """cif / POSCAR / extxyz via ASE; a POSCAR with element labels in the coordinate lines (some exporters) is read by hand; a .vesta file is expanded from its asymmetric unit + SYMOP list"""
     if fn.endswith(".vesta"):
@@ -49,7 +77,12 @@ for fn in a.files:
     for sc_ in a.scales:
         for sg in a.rattle:
             for s in range(a.seeds):
-                f = sc.copy(); f.set_cell(sc.cell.array * sc_, scale_atoms=True); rng = np.random.default_rng(1000 * s + int(100 * sc_) + int(1000 * sg))
-                f.positions += rng.normal(0, sg, f.positions.shape); f.wrap()
+                f = rigid_scale(sc, sc_) if a.rigid else scaled(sc, sc_); rng = np.random.default_rng(1000 * s + int(100 * sc_) + int(1000 * sg))
+                base = f.positions.copy()
+                for _try in range(100):                                       # redraw a rattle that squeezes any H-H or O-H below the limits (a rare Gaussian tail would otherwise make a 0.4 A H2 bond)
+                    f.positions = base + rng.normal(0, sg, base.shape)
+                    if sg == 0 or contacts_ok(f, a.min_hh, a.min_oh): break
+                else: print(f"WARNING: no rattle within the contact limits after 100 draws (scale {sc_}, sigma {sg})", file=sys.stderr)
+                f.wrap()
                 f.info.update(config_type=f"hydrate_{a.name}", T_K=a.T, scale=sc_, rattle=sg, source=fn, nH=int((f.numbers == 1).sum()), nO=int((f.numbers == 8).sum())); frames.append(f)
 import os; os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True); write(a.out, frames); print(f"{len(frames)} frames -> {a.out}", file=sys.stderr)
