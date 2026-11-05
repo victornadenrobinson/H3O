@@ -57,7 +57,7 @@ def cmd_label(a):
         out = os.path.join(a.o, source_name(f) + "_probes.npz")
         if os.path.exists(out) and not a.force:
             print(f"[{si + 1}/{len(srcs)}] {out} exists: skipped", flush=True); continue
-        pos, cell, nums, T = source_frames(f, a); isH = nums == 1; kT = KB * T; rng = np.random.default_rng(a.seed + si)
+        pos, cell, nums, T = source_frames(f, a); isH = nums == 1; kT = KB * T; rng = np.random.default_rng(a.seed + a.src.index(f))   # seed from the source's place in the FULL list, so --select / --shard give the same probes as one unsharded run
         keep = np.unique(np.linspace(0, len(pos) - 1, min(a.per_source, len(pos))).astype(int)); pos, cell = pos[keep], cell[keep]; F = len(pos)
         pts, fid, kind, phi0 = [], [], [], []
         for k in range(F):
