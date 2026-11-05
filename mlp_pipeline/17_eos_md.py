@@ -35,8 +35,10 @@ def build_layered_O(phase, vpa, nrep, hper):
     return Atoms("O" * nO, scaled_positions=sp, cell=[nx * a, ny * 3 ** .5 * a, 2 * 6 ** .5 * a], pbc=True), a
 
 
-def build(phase, vpa, nrep, seed=0, hper=2.0):
+def build(phase, vpa, nrep, seed=0, hper=2.0, natoms=0):
     if phase == "H":
+        if natoms:                                   # pure H with an explicit atom count (n^3 / 2n^3 / 4n^3: 729 = 9^3), as tdi/run_real.build_h_n
+            from importlib import import_module; return import_module("tdi.run_real").build_h_n(vpa, natoms)
         return build_h(vpa, nrep)
     if phase in LAYERED:
         O, a = build_layered_O(phase, vpa, nrep, hper); cut = 1.5 * a   # a = nearest-neighbour distance
@@ -166,7 +168,7 @@ def thermostat(atoms, T, dt, tau):
 
 
 def run_one(a, calc, vpa, tag):
-    at = build(a.phase, vpa, a.nrep, a.seed, a.hper); at.calc = calc
+    at = build(a.phase, vpa, a.nrep, a.seed, a.hper, getattr(a, "natoms", 0)); at.calc = calc
     V = at.get_volume(); N = len(at); nO = int((at.numbers == 8).sum())
     d = os.path.join(a.outdir, f"{tag}_v{vpa:.4f}"); os.makedirs(d, exist_ok=True)
     t0_hold = time.time()
@@ -251,6 +253,7 @@ if __name__ == "__main__":
     ap.add_argument("--min-runs", type=int, default=20, help="minimum number of DFT runs per 1000 K bin for the volume lookup")
     ap.add_argument("--only", type=int, default=None, help="run only volume index k (for a Slurm array)")
     ap.add_argument("--tag", default=None); ap.add_argument("--outdir", default=None); ap.add_argument("--device", default="cuda")
+    ap.add_argument("--natoms", type=int, default=0, help="phase H: pure-H cell with this many atoms (e.g. 729) instead of 2*nrep^3")
     a = ap.parse_args()
     a.nrep = a.nrep or (5 if a.phase == "H" else CELL[a.phase][2]); a.outdir = a.outdir or outp("eos_md"); os.makedirs(a.outdir, exist_ok=True)
     vols = volumes(a) if (a.vpa or a.from_dft) else None

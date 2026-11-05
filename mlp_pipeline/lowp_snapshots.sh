@@ -5,6 +5,7 @@
 # Volumes come from eos_low_p.py (extrapolated below the measured range: the DFT labels do not care, the geometries only need to be liquid-like at roughly the right density; check P in each thermo.csv).
 # The liquid branch is forced (the O lattice is melted at 12000 K for 1 ps first, then cooled to T). Output: runs/eos_lowp3/<tag>_v<vpa>/{thermo.csv, traj.extxyz}; frames every 20 fs after equilibration.
 # NOTE: at these P, T pure H is MOLECULAR (H2): keep small pure-H cells (the 500-atom rule is for metallic H), expect extrapolated volumes to be off for H, and remember single-H insertion (PWidom) is not meaningful there (H2 insertion would be).
+# HPERS ("2 2.25 2.5 3 5 H"): compositions = H per O values, H = pure hydrogen with 729 atoms; compositions without EOS-scan data get ideal-mixing volumes.
 # env: PS ("10 25 50 100" GPa), MODEL (best fine-tune), MDPS (0.6 ps sampling + 0.3 equil), TS (only these temperatures, e.g. "3000 5000"), PERGPU (3), CMDMIN (minutes allowed per MD, 12), OUT (runs/lowp3), PY, PYRUN, EOSLOWP
 cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; PYRUN=${PYRUN:-$PY}; PS=${PS:-"10 25 50 100"}; MODEL=${MODEL:-grace-ft:runs/grace/ft_mn_f_lr1e-2_e20/seed/1/final_model}; MDPS=${MDPS:-0.6}
 PERGPU=${PERGPU:-3}; CMDMIN=${CMDMIN:-12}; OUT=${OUT:-runs/lowp3}; EOSLOWP=${EOSLOWP:-mlp_pipeline/eos_low_p.py}; mkdir -p "$OUT" logs_pw
@@ -12,6 +13,32 @@ NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || NG=1; NW=$((NG * PER
 $PY $EOSLOWP runs/eos_scan runs/eos_lowp runs/eos_lowp2 --P $PS --model "$MODEL" --ps "$MDPS" > "$OUT/cmds_raw.txt" 2> "$OUT/table.txt" || { echo "eos_low_p.py failed: see $OUT/table.txt"; tail -5 "$OUT/table.txt"; exit 1; }
 grep '^python' "$OUT/cmds_raw.txt" | sed -E 's/--branch [a-z]+/--branch liquid/; s/_solid_/_liquid_/; s#--outdir [^ ]+#--outdir runs/eos_lowp3#' | sort -u > "$OUT/cmds_liquid.txt"
 if [ -n "${TS:-}" ]; then pat=$(echo $TS | sed 's/ /|/g'); grep -E -- "--T ($pat) " "$OUT/cmds_liquid.txt" > "$OUT/cmds_T.txt" || true; mv "$OUT/cmds_T.txt" "$OUT/cmds_liquid.txt"; fi
+$PY - "$OUT" "${HPERS:-2 2.25 2.5 3 5 H}" <<'PYEOF'
+# composition selection for the liquid hull: keep the requested H-per-O values (and 'H' = pure H, 729 atoms); a composition with no line from eos_low_p.py (no MLP EOS scan data) gets its volumes by IDEAL MIXING of the H2O and pure-H volumes at the same
+# pressure (per O: 3 v_H2O + (hper-2) v_H over 1+hper atoms); cells: 108 O (nrep 3) up to H2.25O, 32 O (nrep 2) beyond; pure H = 729 atoms.
+import re, sys
+out, want = sys.argv[1], sys.argv[2].split(); lines = [l.rstrip("\n") for l in open(f"{out}/cmds_liquid.txt") if l.strip()]
+get = lambda l, k: re.search(rf"--{k} (\S+)", l).group(1)
+vpas = lambda l: [float(x) for x in re.search(r"--vpa ((?:[0-9.]+ ?)+)", l).group(1).split()]
+by = {}
+for l in lines:
+    ph = get(l, "phase"); key = ("H", 0.0, get(l, "T")) if ph == "H" else ("fcc", float(get(l, "hper")), get(l, "T")); by[key] = l
+res = []; Ts = sorted({k[2] for k in by}, key=float)
+for T in Ts:
+    w, h = by.get(("fcc", 2.0, T)), by.get(("H", 0.0, T))
+    for x in want:
+        if x == "H":
+            if h: res.append(h + " --natoms 729")
+            continue
+        X = float(x); l = by.get(("fcc", X, T))
+        if l is None and w is not None and h is not None:
+            vw, vh = vpas(w), vpas(h); v = [(3 * a + (X - 2) * b) / (1 + X) for a, b in zip(vw, vh)]
+            l = re.sub(r"--hper \S+", f"--hper {X:g}", w); l = re.sub(r"--vpa (?:[0-9.]+ ?)+", "--vpa " + " ".join(f"{q:.4f}" for q in v) + " ", l); l = re.sub(r"--tag \S+", f"--tag lowP_fcc_h{X:g}_liquid_{T}K", l)
+        if l is None: print(f"  no line for H/O {x} at {T} K (and no H2O / H lines to mix)"); continue
+        res.append(re.sub(r"--nrep \d+", "--nrep 2" if X >= 2.5 else "--nrep 3", l))
+open(f"{out}/cmds_liquid.txt", "w").write("\n".join(res) + "\n")
+import collections; c = collections.Counter(("H" if "--phase H" in l else "H/O " + get(l, "hper")) for l in res); print("compositions: " + ", ".join(f"{k} x{v} T" for k, v in sorted(c.items())) + f";  {len(res)} commands")
+PYEOF
 $PY - "$OUT" "$NW" "$PYRUN" <<'PYEOF'
 import sys, re
 out, nw, py = sys.argv[1], int(sys.argv[2]), sys.argv[3]; cmds = []
