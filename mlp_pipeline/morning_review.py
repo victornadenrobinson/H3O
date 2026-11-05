@@ -41,12 +41,14 @@ q = sh("squeue -u $USER -h -o '%j|%T'").strip().splitlines(); qc = collections.C
 say("  queue now: " + (", ".join(f"{g} {s} {n}" for (g, s), n in sorted(qc.items())) if qc else "empty"))
 # ---- 2. DFT point jobs
 say("\n[2] DFT POINT JOBS (points finished / prepared; a point is done when it has DONE.json)")
-for d in ("runs/dgcheck", "runs/dgcheck2", "runs/reweight_dft"):
-    tot = done = 0
+sets = sorted({os.path.dirname(os.path.dirname(p)) for p in glob.glob("runs/*/points_*/dirs.txt")})      # every folder with prepared points, whatever its name
+for d in sets:
+    tot = done = 0; shas = set()
     for dl in glob.glob(f"{d}/points_*/dirs.txt"):
         for l in open(dl).read().split():
             tot += 1; done += os.path.exists(os.path.join(l, "DONE.json"))
-    say(f"  {d:22s} {done:5d} / {tot:5d} points" + (f"  ({100 * done / tot:.0f} %)" if tot else "  (not prepared)"))
+    jobs = len(glob.glob(f"{d}/job_*.sbatch"))
+    say(f"  {d:28s} {done:5d} / {tot:5d} points  ({100 * done / max(tot, 1):.0f} %)   {jobs} job scripts" + ("" if glob.glob(f"{d}/points_*/.frames_sha") else "   (no .frames_sha: prepared before the stale-input check)"))
 # ---- 3. PWidom results
 say("\n[3] PWIDOM RESULTS (dg meV per added H, statistical errors only; replicates of the same host pooled)")
 try:

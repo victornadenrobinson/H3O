@@ -22,7 +22,12 @@ $PY mlp_pipeline/split_frames.py "$OUTD/dgcheck_frames.extxyz" "$NODES" "$OUTD"
 WALL=$(printf "%d:%02d:00" $(( (MINUTES + 10) / 60 )) $(( (MINUTES + 10) % 60 )))
 for ((j = 0; j < NODES; j++)); do
   [ -e "$OUTD/frames_$j.extxyz" ] || continue
-  [ -d "$OUTD/points_$j" ] || $PY mlp_pipeline/prepare_points.py "$OUTD/frames_$j.extxyz" --template "$T" --out "$OUTD/points_$j" --min-T 1000 | tail -n 1
+  fsha=$(sha256sum "$OUTD/frames_$j.extxyz" | cut -d' ' -f1)
+  if [ -d "$OUTD/points_$j" ]; then      # never reuse inputs prepared from other geometries (a stale folder once silently labelled the wrong set)
+    [ "$(cat "$OUTD/points_$j/.frames_sha" 2>/dev/null)" = "$fsha" ] || { echo "ERROR: $OUTD/points_$j exists but was prepared from other geometries (or before this check). Use a fresh OUTD, or move that folder away." >&2; exit 1; }
+  else
+    $PY mlp_pipeline/prepare_points.py "$OUTD/frames_$j.extxyz" --template "$T" --out "$OUTD/points_$j" --min-T 1000 | tail -n 1; echo "$fsha" > "$OUTD/points_$j/.frames_sha"
+  fi
   printf '%s\n' '#!/bin/bash' "#SBATCH -A m3349 -C cpu -q regular -N 1 --ntasks-per-node=128 --cpus-per-task=2 -t $WALL -J dgchk_$j" \
     'set -e; cd ${SLURM_SUBMIT_DIR:-.}; export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline; export VASP_MODULE=${VASP_MODULE:-vasp/5.4.4-cpu}' \
     "bash mlp_pipeline/perlmutter_vasp_check.sh run $OUTD/points_$j --exe vasp_gam --ranks 32 --parallel 4 --minutes $MINUTES" > "$OUTD/job_$j.sbatch"
