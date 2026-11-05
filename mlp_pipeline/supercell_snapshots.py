@@ -12,7 +12,8 @@ from ase.io import read, write
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--name", default="X"); ap.add_argument("--out", required=True)
 ap.add_argument("--min-atoms", type=int, default=200); ap.add_argument("--max-atoms", type=int, default=450); ap.add_argument("--min-edge", type=float, default=8.5)
-ap.add_argument("--scales", type=float, nargs="+", default=[0.80, 0.86, 0.92, 1.0, 1.06]); ap.add_argument("--rattle", type=float, nargs="+", default=[0.03, 0.08]); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--T", type=float, default=300.0); ap.add_argument("--min-hh", type=float, default=0.55); ap.add_argument("--min-oh", type=float, default=0.85); ap.add_argument("--no-rigid", dest="rigid", action="store_false", help="scale ALL positions with the cell (shrinks the molecules too); default: rigid molecules"); a = ap.parse_args()
+ap.add_argument("--scales", type=float, nargs="+", default=[0.80, 0.86, 0.92, 1.0, 1.06]); ap.add_argument("--rattle", type=float, nargs="+", default=[0.03, 0.08]); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--T", type=float, default=300.0); ap.add_argument("--relax", default=None, help="relax the atomic positions at each scaled volume with this model before rattling (grace-ft:<dir>; needs a GPU node), e.g. grace-ft:runs/grace/ft_mn_f_lr1e-2_e20/seed/1/final_model"); ap.add_argument("--relax-fmax", type=float, default=0.1); ap.add_argument("--relax-steps", type=int, default=300); ap.add_argument("--device", default="cuda")
+ap.add_argument("--min-hh", type=float, default=0.55); ap.add_argument("--min-oh", type=float, default=0.85); ap.add_argument("--no-rigid", dest="rigid", action="store_false", help="scale ALL positions with the cell (shrinks the molecules too); default: rigid molecules"); a = ap.parse_args()
 def scaled(at, s):
     f = at.copy(); f.set_cell(at.cell.array * s, scale_atoms=True); return f
 
@@ -33,6 +34,20 @@ def rigid_scale(at, s, oh=1.25, hh=0.95):
     for g in groups.values():
         rel, _ = find_mic(pos[g] - pos[g[0]], at.cell, True); P = pos[g[0]] + rel; com = (P * m[g][:, None]).sum(0) / m[g].sum(); new[g] = com * s + (P - com)      # centre scaled with the cell, internal vectors kept
     f.set_positions(new); f.wrap(); return f
+
+
+def relax_positions(at, spec, fmax, steps, device):
+    """FIRE relaxation of the atomic positions at the fixed (scaled) cell with the model `spec` (grace-ft:<dir> | grace:<name> | emt for tests): the molecules rebuild their bonds for the new density"""
+    from ase.optimize import FIRE
+    f = at.copy()
+    if spec == "emt":
+        from ase.calculators.emt import EMT; f.calc = EMT()
+    else:
+        from importlib import import_module; f.calc = import_module("04_benchmark").get_calc_spec(spec, device)
+    f0 = max(np.linalg.norm(f.get_forces(), axis=1)); FIRE(f, logfile=None).run(fmax=fmax, steps=steps); f1 = max(np.linalg.norm(f.get_forces(), axis=1))
+    from ase.neighborlist import neighbor_list
+    I, J, D = neighbor_list("ijd", f, 1.3); sy = f.numbers; hh = D[(sy[I] == 1) & (sy[J] == 1)]; oh = D[(sy[I] == 8) & (sy[J] == 1)]
+    print(f"  relaxed at this volume: max force {f0:.2f} -> {f1:.2f} eV/A; shortest H-H {hh.min() if len(hh) else float('nan'):.2f} A, O-H {oh.min() if len(oh) else float('nan'):.2f} A (H2 ~0.74, O-H ~1.0: far from these = the model broke the molecules)", file=sys.stderr); f.calc = None; return f
 
 
 def contacts_ok(at, min_hh, min_oh):
@@ -75,9 +90,12 @@ for fn in a.files:
     _, n, N, edges = best; sc = u.repeat(n); comp = {s: int((sc.get_chemical_symbols().count(s))) for s in sorted(set(sc.get_chemical_symbols()))}
     print(f"{fn}: {n0} atoms -> supercell {n[0]}x{n[1]}x{n[2]} = {N} atoms {comp}, edges {edges.round(2)} A" + ("" if min(edges) >= a.min_edge else f"   WARNING: shortest edge below {a.min_edge} A"), file=sys.stderr)
     for sc_ in a.scales:
+        f0 = rigid_scale(sc, sc_) if a.rigid else scaled(sc, sc_)
+        if a.relax:                                                       # let the bonds / hydrogen bonds respond to the new density: positions only, cell fixed
+            f0 = relax_positions(f0, a.relax, a.relax_fmax, a.relax_steps, a.device)
         for sg in a.rattle:
             for s in range(a.seeds):
-                f = rigid_scale(sc, sc_) if a.rigid else scaled(sc, sc_); rng = np.random.default_rng(1000 * s + int(100 * sc_) + int(1000 * sg))
+                f = f0.copy(); rng = np.random.default_rng(1000 * s + int(100 * sc_) + int(1000 * sg))
                 base = f.positions.copy()
                 for _try in range(100):                                       # redraw a rattle that squeezes any H-H or O-H below the limits (a rare Gaussian tail would otherwise make a 0.4 A H2 bond)
                     f.positions = base + rng.normal(0, sg, base.shape)
