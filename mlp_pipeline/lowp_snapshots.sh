@@ -49,7 +49,7 @@ PYEOF
 if [ "${COLD:-1}" = 1 ]; then
   COLDP=${COLDP:-"10 30 50"}; COLDT=${COLDT:-"1000 2000"}; COLDHPERS=${COLDHPERS:-"2 4 6 H"}; COLDPS=${COLDPS:-0.4}
   if $PY $EOSLOWP runs/eos_scan runs/eos_lowp runs/eos_lowp2 --P $COLDP --model "$MODEL" --ps "$COLDPS" > "$OUT/cmds_raw_cold.txt" 2>> "$OUT/table.txt"; then
-    grep '^python' "$OUT/cmds_raw_cold.txt" | sed -E 's#--outdir [^ ]+#--outdir runs/eos_lowp3#' | sort -u > "$OUT/cmds_cold_base.txt"
+    grep '^python' "$OUT/cmds_raw_cold.txt" | sed -E "s/--dt [0-9.]+/--dt ${LIQ_DT:-0.5}/; s#--outdir [^ ]+#--outdir runs/eos_lowp3#" | sort -u > "$OUT/cmds_cold_base.txt"
     $PY - "$OUT" "$COLDHPERS" "${HATOMS:-686}" "$COLDT" <<'PYEOF'
 import re, sys
 out, want, natoms, Tc = sys.argv[1], sys.argv[2].split(), int(sys.argv[3]), sys.argv[4].split(); lines = [l.rstrip("\n") for l in open(f"{out}/cmds_cold_base.txt") if l.strip()]
