@@ -176,6 +176,8 @@ def run_one(a, calc, vpa, tag):
     if a.branch == "liquid":   # liquid branch: melt the O lattice at a high temperature first, then cool to T (the melting is checked afterwards: O_struct / D_O in the RESULT line)
         MaxwellBoltzmannDistribution(at, temperature_K=a.premelt_T, force_temp=True); Stationary(at)
         thermostat(at, a.premelt_T, a.dt, a.tau).run(int(a.premelt_ps * 1000 / a.dt))
+        Tchk = 2 * at.get_kinetic_energy() / (3 * (len(at) - 1) * units.kB)
+        if not Tchk < 3 * a.premelt_T: raise RuntimeError(f"{tag}: MD exploded during the {a.premelt_T:.0f} K premelt (T = {Tchk:.3g} K): use a smaller --dt, a lower --premelt-T, or check the starting volume")
         MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
     if a.hold_O_ps > 0 and nO > 0 and a.branch == "solid":   # H thermalises in the fixed O lattice first (O held on its sites, zero velocity), then O is released with Maxwell-Boltzmann velocities; not counted in equil / production
         from ase.constraints import FixAtoms
@@ -189,6 +191,7 @@ def run_one(a, calc, vpa, tag):
 
     def log():
         s = step[0]; ek = at.get_kinetic_energy(); T = 2 * ek / (3 * (N - 1) * units.kB)
+        if not T < 5 * max(a.T, a.premelt_T if a.branch == "liquid" else 0): raise RuntimeError(f"{tag}: MD exploded (T = {T:.3g} K at step {s}); thermo.csv so far is kept, the run is NOT valid")
         sig = at.get_stress(voigt=True)                       # eV/A^3, virial only (ASE sign: negative = compressed)
         P = -sig[:3].mean() * EV_A3_GPA + N * units.kB * T / V * EV_A3_GPA
         rows.append(dict(step=s, t_fs=s * a.dt, T=T, epot=at.get_potential_energy(), ekin=ek, P_GPa=P, **{f"s{k}": sig[k] * EV_A3_GPA for k in range(6)}))

@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; PYRUN=${PYRUN:
 PERGPU=${PERGPU:-3}; CMDMIN=${CMDMIN:-12}; OUT=${OUT:-runs/lowp3}; EOSLOWP=${EOSLOWP:-mlp_pipeline/eos_low_p.py}; mkdir -p "$OUT" logs_pw
 NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || NG=1; NW=$((NG * PERGPU))
 $PY $EOSLOWP runs/eos_scan runs/eos_lowp runs/eos_lowp2 --P $PS --model "$MODEL" --ps "$MDPS" > "$OUT/cmds_raw.txt" 2> "$OUT/table.txt" || { echo "eos_low_p.py failed: see $OUT/table.txt"; tail -5 "$OUT/table.txt"; exit 1; }
-grep '^python' "$OUT/cmds_raw.txt" | sed -E 's/--branch [a-z]+/--branch liquid/; s/_solid_/_liquid_/; s#--outdir [^ ]+#--outdir runs/eos_lowp3#' | sort -u > "$OUT/cmds_liquid.txt"
+grep '^python' "$OUT/cmds_raw.txt" | sed -E "/--phase H /! s/--branch [a-z]+/--branch liquid --premelt-T ${PREMELT_T:-6000} --premelt-ps ${PREMELT_PS:-0.5}/; /--phase H /! s/_solid_/_liquid_/; s/--dt [0-9.]+/--dt ${LIQ_DT:-0.5}/; s#--outdir [^ ]+#--outdir runs/eos_lowp3#" | sort -u > "$OUT/cmds_liquid.txt"   # pure H keeps its own branch (fluid: no melting step); liquid H2O-type cells: premelt 6000 K 0.5 ps, dt 0.5 fs (the 12000 K / 1 fs default exploded at low density)
 if [ -n "${TS:-}" ]; then pat=$(echo $TS | sed 's/ /|/g'); grep -E -- "--T ($pat) " "$OUT/cmds_liquid.txt" > "$OUT/cmds_T.txt" || true; mv "$OUT/cmds_T.txt" "$OUT/cmds_liquid.txt"; fi
 $PY - "$OUT" "${HPERS:-2 2.25 2.5 3 4 5 6 H}" "${HATOMS:-686}" <<'PYEOF'
 # composition selection for the liquid hull: keep the requested H-per-O values (and 'H' = pure H); a composition with no line from eos_low_p.py (no MLP EOS scan data) gets its volumes by IDEAL MIXING of the H2O and pure-H volumes at the same
