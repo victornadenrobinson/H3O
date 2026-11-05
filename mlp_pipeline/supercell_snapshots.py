@@ -5,16 +5,38 @@ The supercell is the DIAGONAL repeat (n1, n2, n3) whose atom count lies in [min-
 Frames carry info config_type=hydrate_<name>, T_K (the electronic temperature used by the DFT writer: its floor is 1000 K), scale and rattle. Molecules are NOT kept rigid by the rattle (a plain Gaussian displacement): keep sigma <= 0.08 A,
 or generate thermal frames with GRACE MD at the target volumes instead (17_eos_md.py style) and use this script for the static strained / rattled set.
 Check the structure first (ASE reads cif / POSCAR / extxyz); this script does NOT know the chemistry: the stoichiometry, density and bonds are whatever the input file has."""
-import argparse, itertools, sys
+import argparse, itertools, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 from ase.io import read, write
 
 ap = argparse.ArgumentParser(); ap.add_argument("files", nargs="+"); ap.add_argument("--name", default="X"); ap.add_argument("--out", required=True)
 ap.add_argument("--min-atoms", type=int, default=200); ap.add_argument("--max-atoms", type=int, default=450); ap.add_argument("--min-edge", type=float, default=8.5)
 ap.add_argument("--scales", type=float, nargs="+", default=[0.80, 0.86, 0.92, 1.0, 1.06]); ap.add_argument("--rattle", type=float, nargs="+", default=[0.03, 0.08]); ap.add_argument("--seeds", type=int, default=2); ap.add_argument("--T", type=float, default=300.0); a = ap.parse_args()
+def load(fn):
+    """cif / POSCAR / extxyz via ASE; a POSCAR with element labels in the coordinate lines (some exporters) is read by hand; a .vesta file is expanded from its asymmetric unit + SYMOP list"""
+    if fn.endswith(".vesta"):
+        from vesta_to_poscar import parse
+        from ase import Atoms
+        cell, ops, atoms = parse(fn); out = []
+        for el, x in atoms:
+            for t, R in ops:
+                y = (R @ x + t) % 1.0
+                if not any(e == el and np.linalg.norm(((y - z + 0.5) % 1.0) - 0.5) < 1e-3 for e, z in out): out.append((el, y))
+        return Atoms([e for e, _ in out], scaled_positions=[y for _, y in out], cell=cell, pbc=True)
+    try: return read(fn)
+    except Exception:
+        from ase import Atoms
+        L = [l.split() for l in open(fn).read().splitlines()]; scale = float(L[1][0]); cell = scale * np.array([[float(x) for x in L[i]] for i in (2, 3, 4)])
+        sy, cnt = L[5], [int(x) for x in L[6]]; k = 7 + (L[7][0][0] in "sS")             # optional 'Selective dynamics' line
+        cartesian = L[k][0][0] in "cCkK"; rows = [r for r in L[k + 1:k + 1 + sum(cnt)]]; pos = np.array([[float(x) for x in r[-3:]] if not r[0].replace('.', '').replace('-', '').isdigit() else [float(x) for x in r[:3]] for r in rows])
+        at = Atoms([s_ for s_, c in zip(sy, cnt) for _ in range(c)], cell=cell, pbc=True)
+        (at.set_positions(scale * pos) if cartesian else at.set_scaled_positions(pos)); return at
+
+
 frames = []
 for fn in a.files:
-    u = read(fn); cell = u.cell.array; lens = np.linalg.norm(cell, axis=1); n0 = len(u)
+    u = load(fn); cell = u.cell.array; lens = np.linalg.norm(cell, axis=1); n0 = len(u)
     best = None
     for n in itertools.product(range(1, 9), repeat=3):
         N = n0 * n[0] * n[1] * n[2]
