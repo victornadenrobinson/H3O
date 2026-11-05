@@ -55,5 +55,15 @@ case $round in
   rep) W=${2:-10 10 1}   # MORE REPLAY: the old tier l (1027 frames, adds 2000 K and 108-O hosts at 7000 K) instead of m (747). Needs: build_tier.py ... --tag nB --fmax 60 --valid-from --old-train runs/train_l.extxyz --old-valid runs/valid_l.extxyz ; grace_prep_pkl.sh mnB
        echo "bash mlp_pipeline/ft_one.sh mnB_f_lr1e-2_e20  mnB mnB $(upd 20 mnB 1) $W frozen 0.01 1"
        echo "bash mlp_pipeline/ft_one.sh mnB_f_lr1e-2_e5   mnB mnB $(upd 5 mnB 1) $W frozen 0.01 1";;
-  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap | hi | rep ..." >&2; exit 1;;
+  final) # FINAL round (2026-11-05), frozen, from the foundation model. Pair error c (sealed pairs, e5 lr 3e-3): F10 -254, F50 -136, F200 -83 meV/H; longer helps (lr 1e-2 F10: e5 -185, e20 -178, e50 -170; held-out sd(D) 1.24 / 1.04 / 0.91 eV/cell).
+       # tiers from build_tier.py: mfin = production (everything, sealed pairs PD trained on), mfinref = reference (PD and C3 hydrate held out: measures the pair error of the recipe). EPOCHS default 50.
+       # submit: TIME=48:00:00 bash mlp_pipeline/ft_submit.sh ft_final.sh
+       E=${EPOCHS:-50}
+       for t in mfin mfinref; do [ -e runs/grace/train_$t.pkl.gz ] || { echo "missing runs/grace/train_$t.pkl.gz (the update count needs it): bash mlp_pipeline/grace_prep_pkl.sh mfin mfinref" >&2; exit 1; }; done
+       echo "bash mlp_pipeline/ft_one.sh mfin_f_lr1e-2_e${E}_F200     mfin    mfin    $(upd $E mfin 1) 10 200 1 frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh mfin_f_lr3e-3_e${E}_F200     mfin    mfin    $(upd $E mfin 1) 10 200 1 frozen 0.003 1"
+       echo "bash mlp_pipeline/ft_one.sh mfin_f_lr1e-2_e${E}_F50      mfin    mfin    $(upd $E mfin 1) 10 50 1 frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh mfinref_f_lr1e-2_e${E}_F200  mfinref mfinref $(upd $E mfinref 1) 10 200 1 frozen 0.01 1"
+       echo "bash mlp_pipeline/ft_one.sh mfinref_f_lr3e-3_e${E}_F200  mfinref mfinref $(upd $E mfinref 1) 10 200 1 frozen 0.003 1";;
+  *) echo "usage: $0 r1 | r2 \"wE wF wS\" frozen|naive n|mn | len | lrA | lrB | lrC | lc | long | cap | hi | rep | final ..." >&2; exit 1;;
 esac
