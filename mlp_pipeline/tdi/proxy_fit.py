@@ -48,11 +48,15 @@ def source_frames(f, a):
 def cmd_label(a):
     from ase import Atoms
     from pwidom import Model, proxy_params, proxy_energy
+    srcs = [f for f in a.src if not a.select or any(x in f for x in a.select)]   # --select: keep sources whose path contains any of these (e.g. 500GPa_6000K)
+    if a.shard:
+        i, n = (int(x) for x in a.shard.split("/")); srcs = srcs[i::n]   # --shard i/n: this process takes every n-th source (independent processes, no coordination)
+    print(f"{len(srcs)} of {len(a.src)} sources" + (f" (shard {a.shard})" if a.shard else ""), flush=True)
     p = proxy_params(a.proxy); model = Model(a.model, a.device, a.batch); os.makedirs(a.o, exist_ok=True); t0 = time.time(); ndone = 0
-    for si, f in enumerate(a.src):
+    for si, f in enumerate(srcs):
         out = os.path.join(a.o, source_name(f) + "_probes.npz")
         if os.path.exists(out) and not a.force:
-            print(f"[{si + 1}/{len(a.src)}] {out} exists: skipped", flush=True); continue
+            print(f"[{si + 1}/{len(srcs)}] {out} exists: skipped", flush=True); continue
         pos, cell, nums, T = source_frames(f, a); isH = nums == 1; kT = KB * T; rng = np.random.default_rng(a.seed + si)
         keep = np.unique(np.linspace(0, len(pos) - 1, min(a.per_source, len(pos))).astype(int)); pos, cell = pos[keep], cell[keep]; F = len(pos)
         pts, fid, kind, phi0 = [], [], [], []
@@ -68,7 +72,7 @@ def cmd_label(a):
         E = model.energies(structs); dU = E[F:] - E[:F][fid]; ndone += len(structs)
         np.savez(out, pos=pos, cell=cell, numbers=nums, T=T, pts=pts, fid=fid, kind=np.array(kind), phi_start=np.array(phi0), dU=dU, E0=E[:F], proxy=str(a.proxy), temper=a.temper, source=os.path.abspath(f))
         sel = np.array(kind) == 1
-        print(f"[{si + 1}/{len(a.src)}] {os.path.basename(out)}: {F} frames of {len(nums)} atoms, {len(pts)} probes, T {T:g} K; selected-probe gap of the starting proxy "
+        print(f"[{si + 1}/{len(srcs)}] {os.path.basename(out)}: {F} frames of {len(nums)} atoms, {len(pts)} probes, T {T:g} K; selected-probe gap of the starting proxy "
               f"{np.std((dU - np.array(phi0))[sel]) / kT:.2f} kT; {ndone} single points, {(time.time() - t0) / 60:.1f} min", flush=True)
 
 
@@ -177,6 +181,7 @@ def cmd_fit(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0]); sub = ap.add_subparsers(dest="cmd", required=True)
     l = sub.add_parser("label"); l.add_argument("src", nargs="+", help="pwidom *_frames.npz (cubic host cells) and / or extxyz host frames; one probes file per source in -o")
+    l.add_argument("--select", nargs="*", default=[], help="only sources whose path contains any of these substrings"); l.add_argument("--shard", default=None, help="i/n: this process labels every n-th source (run n processes with i = 0 .. n-1, e.g. one per few CPU cores)")
     l.add_argument("--T", type=float, default=0.0, help="temperature of extxyz sources (npz files carry it)"); l.add_argument("--drop-last", type=int, default=0, help="extxyz: remove this many trailing atoms (e.g. an inserted ghost)")
     l.add_argument("--per-source", type=int, default=10, help="frames per source, evenly spaced in time (cost ~ per-source x (nsel + nuni + 1) single points per source)"); l.add_argument("--force", action="store_true", help="relabel existing probes files")
     l.add_argument("--seed", type=int, default=5); l.add_argument("--model", default="toyice"); l.add_argument("--device", default="cuda"); l.add_argument("--batch", type=int, default=16)
