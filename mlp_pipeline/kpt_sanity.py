@@ -7,7 +7,7 @@ the Slurm queue: which dgchk jobs run which folder (from each job's script path)
 import argparse, collections, csv, glob, json, os, re, subprocess, sys
 
 KB = 8.617333e-5
-ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="+"); ap.add_argument("--ref", default="runs/kpt222/frames.extxyz"); ap.add_argument("--old", default="runs/kpt222"); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("dirs", nargs="+"); ap.add_argument("--ref", default="runs/kpt222/frames.extxyz"); ap.add_argument("--old", default="runs/kpt222"); ap.add_argument("--expect-mesh", default="", help="e.g. Monkhorst: fail if a folder uses another mesh type"); a = ap.parse_args()
 bad = []
 
 
@@ -50,6 +50,7 @@ for D in a.dirs:
     print(f"\n{D}: {len(pts)} point folders, {n} points, {ndone} finished (DONE.json), {len(jobs)} job files")
     print(f"  KPOINTS : " + ", ".join(f"{k} x{v}" for k, v in meshes.items()))
     print(f"  INCAR   : KPAR {dict(kpars)}, NCORE {dict(ncores)}, ISYM {dict(isyms)}; SIGMA != kB*max(T_K,1000 K): {sig_bad}")
+    if a.expect_mesh and any(a.expect_mesh.lower() not in k.lower() for k in meshes): bad.append(f"{D}: k-mesh {dict(meshes)} is not the expected '{a.expect_mesh}'")
     if len(meshes) > 1: bad.append(f"{D}: more than one k-mesh in one folder: {dict(meshes)}")
     if any(k > 1 for k in kpars): bad.append(f"{D}: KPAR > 1 present ({dict(kpars)}); the plan was KPAR = 1")
     if sig_bad: bad.append(f"{D}: {sig_bad} points with SIGMA not matching their frame's T_K")
@@ -64,11 +65,11 @@ if miss: bad.append(f"{len(miss)} reference frames not prepared anywhere, e.g. {
 if a.old and os.path.isdir(a.old):
     od = glob.glob(os.path.join(a.old, "points_*", "p[0-9]*", "DONE.json")); print(f"\nold Gamma-centred run {a.old}: {len(od)} finished points kept (same-frame comparison with the MP labels)")
 try:
-    q = subprocess.run(["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i %j %T"], capture_output=True, text=True, timeout=20).stdout.split("\n")
+    q = subprocess.run(["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i %j %T"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=20).stdout.split("\n")   # python 3.6 safe (login nodes)
     rows = [l.split() for l in q if l.strip() and l.split()[1].startswith("dgchk")]
     per = collections.Counter()
     for jid, name, st in rows:
-        sc = subprocess.run(["scontrol", "show", "job", jid], capture_output=True, text=True, timeout=20).stdout
+        sc = subprocess.run(["scontrol", "show", "job", jid], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=20).stdout
         m = re.search(r"Command=(\S+)", sc); cmd = m.group(1) if m else "?"
         d = next((D for D in a.dirs + [a.old] if f"/{D.rstrip('/')}/job_" in "/" + os.path.relpath(cmd) or os.path.relpath(cmd).startswith(D.rstrip("/") + "/")), "OTHER: " + cmd)
         per[(d, st)] += 1

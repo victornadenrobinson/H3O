@@ -16,16 +16,25 @@ import numpy as np
 GPA = 160.21766
 
 
-def feats(nO, nH, V, T):
+def feats(nO, nH, V, T, mp=1.0):
+    """basis; mp = 1 for a shifted Monkhorst-Pack mesh label, 0 for a Gamma-centred one: the mesh offset terms (mp, mp x, mp h) let both meshes be fitted together; apply uses mp = 1"""
     N = nO + nH; x = nH / N; n = N / V; t = T / 1e4; h = 1.0 if nO == 0 else 0.0
-    return np.array([1, x, x * x, n, n * x, n * n, t, t * x, h, h * n, h * t]), x, n, t, h
+    return np.array([1, x, x * x, n, n * x, n * n, t, t * x, h, h * n, h * t, mp, mp * x, mp * h]), x, n, t, h
 
 
 def dfeat_dn(x, n, t, h):
-    return np.array([0, 0, 0, 1, x, 2 * n, 0, 0, 0, h, 0])
+    return np.array([0, 0, 0, 1, x, 2 * n, 0, 0, 0, h, 0, 0, 0, 0])
 
 
-NAMES = ["1", "x", "x^2", "n", "n x", "n^2", "t", "t x", "h", "h n", "h t"]
+NAMES = ["1", "x", "x^2", "n", "n x", "n^2", "t", "t x", "h", "h n", "h t", "mp", "mp x", "mp h"]
+
+
+def mesh_of(info):
+    """1.0 = Monkhorst-Pack, 0.0 = Gamma-centred, from the KPOINTS file of the label's point folder (points_collect stores point_dir); None if unknown"""
+    d = info.get("point_dir")
+    try: kp = open(os.path.join(str(d), "KPOINTS")).read().splitlines()[2].strip().lower()
+    except (OSError, IndexError, TypeError): return None
+    return 1.0 if kp.startswith("m") else 0.0 if kp.startswith("g") else None
 
 
 def group(info):
@@ -63,15 +72,19 @@ def cmd_fit(a):
         nO, nH = int((f.numbers == 8).sum()), int((f.numbers == 1).sum()); N = len(f); V = f.get_volume(); T = T_el(g.info)
         Eg = float(g.info.get("E_gamma_eV", g.get_potential_energy())); Ek = f.get_potential_energy()
         Pg = -np.trace(g.get_stress(voigt=False)) / 3 * GPA; Pk = -np.trace(f.get_stress(voigt=False)) / 3 * GPA
-        phi, x, n, t, h = feats(nO, nH, V, T)
-        rows.append(dict(src=src, grp=group(g.info), cls=comp_class(nO, nH), N=N, phi=phi, x=x, n=n, t=t, h=h, de=1000 * (Ek - Eg) / N, dP=Pk - Pg))
+        mp = mesh_of(f.info); mp = 1.0 if mp is None else mp
+        phi, x, n, t, h = feats(nO, nH, V, T, mp)
+        rows.append(dict(src=src, grp=group(g.info), cls=comp_class(nO, nH), N=N, phi=phi, x=x, n=n, t=t, h=h, mp=mp, de=1000 * (Ek - Eg) / N, dP=Pk - Pg))
     if len(rows) < 15: sys.exit(f"only {len(rows)} matched frames (k labels with a Gamma partner by kpt_src): check the two files")
     X = np.array([r["phi"] for r in rows]); y = np.array([r["de"] for r in rows]); w = np.array([1.0 for r in rows])
+    nmp = sum(r["mp"] for r in rows); print(f"meshes: {int(nmp)} Monkhorst-Pack, {len(rows) - int(nmp)} Gamma-centred labels" + ("" if 0 < nmp < len(rows) else " (one mesh only: the mesh terms are inert)"))
+    if not 0 < nmp < len(rows): X[:, -3:] = 0
     c = ridge(X, y, w); pred = X @ c; res = y - pred
     dPp = np.array([r["n"] ** 2 * (dfeat_dn(r["x"], r["n"], r["t"], r["h"]) @ c) / 1000 * GPA for r in rows])   # meV/atom * A^3 -> eV/A^3 -> GPa
     dPm = np.array([r["dP"] for r in rows])
     print(f"{len(rows)} matched frames; de = E_k - E_Gamma per atom: mean {y.mean():+.2f}, sd {y.std():.2f}, range {y.min():+.2f}..{y.max():+.2f} meV/atom")
     print("coefficients (meV/atom): " + ", ".join(f"{nm} {v:+.3g}" for nm, v in zip(NAMES, c)))
+    if 0 < nmp < len(rows): print(f"mesh offset (MP - Gamma-centred, from the fit): {c[-3] + c[-2] * 0.75:+.2f} meV/atom at x = 0.75 (water-like), {c[-3] + c[-2] + c[-1]:+.2f} for pure H  (k-point test: ~0.0 and +0.99)")
     print(f"fit residual: sd {res.std():.2f} meV/atom = {np.std(res * np.array([r['N'] for r in rows]) / 1000):.3f} eV/cell; R^2 {1 - res.var() / y.var():.3f}")
     def table(key):
         out = collections.defaultdict(list)
@@ -113,7 +126,7 @@ def cmd_apply(a):
         fr = read(p, index=":"); out = []; shift = collections.defaultdict(list); extrap = collections.Counter()
         for f in fr:
             nO, nH = int((f.numbers == 8).sum()), int((f.numbers == 1).sum()); N = len(f); V = f.get_volume(); T = T_el(f.info)
-            phi, x, n, t, h = feats(nO, nH, V, T); de = float(phi @ c); dP = n ** 2 * float(dfeat_dn(x, n, t, h) @ c) / 1000 * GPA
+            phi, x, n, t, h = feats(nO, nH, V, T, 1.0); de = float(phi @ c)   # corrected to the MP 2x2x2 level; dP = n ** 2 * float(dfeat_dn(x, n, t, h) @ c) / 1000 * GPA
             outside = not (rng["x"][0] - 0.02 <= x <= rng["x"][1] + 0.02 and rng["n"][0] * 0.97 <= n <= rng["n"][1] * 1.03 and rng["t"][0] - 0.05 <= t <= rng["t"][1] + 0.05)
             if h and rngH: outside = outside or not (rngH["n"][0] * 0.97 <= n <= rngH["n"][1] * 1.03)
             if outside: extrap[group(f.info)] += 1
