@@ -11,6 +11,7 @@ Common keys: `model=` (a run name like `mfin_f_lr1e-2_e50` or a full `grace-ft:.
 ### eos — liquid / fluid EOS scan with live dashboard (GPU, ~15-25 min per composition at 4 GPUs)
 `bash run.sh eos comp="h2o h3o h" T=7000`
 - keys: `comp` (h2o h2.25 h3o h5o h7o h; several = one job queue), `T` (7000), `nv` (16 volumes), `vmax` / `vmin` (A^3/atom; default per composition), `ps` (0.75; pure H 0.5), `eq` (0.25; pure H 0.2), `per_gpu` (4).
+- batch (login node): `bash run.sh eos comp="h2o h2.25 h3o h5o h7o h" T="1000 2000 3000 4000 5000 6000 7000 8000 9000" where=batch hours=3` = one 4-GPU regular-queue node job per T (all 6 compositions ~1-1.5 h per T; log logs_pw/eos_<model>_<T>K.*.out, dashboard every 10 min, no plot).
 - cells ~384 atoms (pure H 729); mixtures premelted at 9000 K for 0.25 ps; output `runs/eos_live/<model>_<comp>_<T>K_<N>at/`; finished volumes are skipped on rerun; flags FROZE / COLLAPSE / CLOSE-HH / T-off / P-drift; per volume `rdf.csv`, coordination, H2 fraction.
 
 ### eos_plot — all scans vs DFT (and French 2009 for H2O), P-T maps (login or GPU node, CPU only)

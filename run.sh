@@ -22,9 +22,19 @@ case "$TASK" in
 help|-h|--help)
   sed -n '/^## Tasks/,$p' docs/RECIPES.md | grep -E "^### |^\`bash run.sh" | sed 's/^### /\n/'; exit 0;;
 
-eos)     # liquid / fluid EOS scans with the live dashboard (mlp_pipeline/eos_live.sh)
-  gpu_here
-  run "MODEL=$MODEL COMP='$(g comp h2o)' T=$(g T 7000) NV=$(g nv 16) ${K[vmax]:+VMAX=${K[vmax]}} ${K[vmin]:+VMIN=${K[vmin]}} ${K[ps]:+PS=${K[ps]}} ${K[eq]:+EQ=${K[eq]}} PER_GPU=$(g per_gpu 4) PY=$PYP bash mlp_pipeline/eos_live.sh";;
+eos)     # liquid / fluid EOS scans with the live dashboard (mlp_pipeline/eos_live.sh); where=batch: one 4-GPU node job per temperature (T="1000 2000 ...")
+  EV="MODEL=$MODEL COMP='$(g comp h2o)' NV=$(g nv 16) ${K[vmax]:+VMAX=${K[vmax]}} ${K[vmin]:+VMIN=${K[vmin]}} ${K[ps]:+PS=${K[ps]}} ${K[eq]:+EQ=${K[eq]}} PER_GPU=$(g per_gpu 4) PY=$PYP"
+  if [ "$(g where here)" = batch ]; then
+    login_here; mkdir -p logs_pw runs/eos_jobs
+    for t in $(g T 7000); do
+      name="eos_$(basename ${MODEL#*:})_${t}K"; js=runs/eos_jobs/$name.sh
+      printf '%s\n' '#!/bin/bash' "cd $PWD" "env $EV T=$t REFRESH=600 PLOT=none bash mlp_pipeline/eos_live.sh" > $js
+      run "sbatch -A m3349_g -C gpu -q regular -N 1 -G 4 -c 128 -t $(g hours 3):00:00 -J $name -o logs_pw/$name.%j.out $js"
+    done
+    echo "afterwards: tail -n 80 logs_pw/eos_*K.*.out (final tables); per T: bash run.sh eos_plot T=<T>"
+  else
+    gpu_here; run "$EV T=$(g T 7000) bash mlp_pipeline/eos_live.sh"
+  fi;;
 
 eos_plot) # all EOS scans vs DFT (+ French 2009 for H2O) and the P-T maps
   run "$PYP mlp_pipeline/plot_eos_all.py --T $(g T 7000) --model $(basename ${MODEL#*:}) ${K[pmin]:+--pmin ${K[pmin]}} ${K[pmax]:+--pmax ${K[pmax]}} ${K[loglog]:+--loglog} --dft-frames $(g frames 'runs/train_mfin.extxyz runs/valid_mfin.extxyz')"
