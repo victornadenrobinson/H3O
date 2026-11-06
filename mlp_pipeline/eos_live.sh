@@ -2,6 +2,7 @@
 # Quick liquid EOS scan with a live dashboard: one 17_eos_md.py process per volume, PER_GPU processes per GPU, all at once. Interactive GPU node, repo root.
 #   bash mlp_pipeline/eos_live.sh                                  H2O liquid, 7000 K, 16 volumes 10 -> 1.75 A^3/atom (~10-1000 GPa), 384 atoms (bcc x4 = 128 H2O), 0.25 ps premelt + 0.25 equil + 0.75 ps
 #   MODEL=grace-ft:runs/grace/ft_<run> T=7000 NV=16 VMAX=10 VMIN=1.75 PS=0.75 EQ=0.25 PER_GPU=4 NREP=4 bash mlp_pipeline/eos_live.sh
+# COMP = h2o (default) | h2.25 | h3o | h5o | h7o | h  (the compositions of the DFT EOS file). Mixtures: liquid branch, H/O = 2, 2.25, 3, 5, 7, ~384 atoms; e.g. COMP=h3o T=7000 bash mlp_pipeline/eos_live.sh
 # COMP=h: pure-H fluid instead (729 atoms, no premelt, 8 -> 0.9 A^3/atom, equil 0.2 + prod 0.5 ps by default): COMP=h bash mlp_pipeline/eos_live.sh
 # Reference: the DFT H2O (or pure-H) EOS at the same T from data-h3o-convex-hull.csv (columns "P <T>K h2o", "V <T>K h2o norm" = V per H2O), shown as + in the live plot, interpolated in the final table.
 # Dashboard (refreshed in place every REFRESH s, no screen clear): per volume a progress bar, stage, running T and P (+- block error), ms/step, ETA; per GPU utilisation and memory;
@@ -13,11 +14,17 @@
 set -u; cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; export PYTHONPATH=$PWD/mlp_pipeline TF_FORCE_GPU_ALLOW_GROWTH=true TF_CPP_MIN_LOG_LEVEL=2
 if [ -z "${MODEL:-}" ]; then for r in mfin_f_lr1e-2_e50 mfin_f_lr1e-2_e50_F200; do [ -e runs/grace/ft_$r/seed/1/final_model/saved_model.pb ] && { MODEL=grace-ft:runs/grace/ft_$r; break; }; done; fi
 [ -n "${MODEL:-}" ] || { echo "set MODEL=grace-ft:runs/grace/ft_<run>"; exit 1; }
-COMP=${COMP:-h2o}; T=${T:-7000}; NV=${NV:-16}; PM_T=${PM_T:-9000}; NREP=${NREP:-4}
+COMP=${COMP:-h2o}; T=${T:-7000}; NV=${NV:-16}; PM_T=${PM_T:-9000}; NREP_SET=${NREP:-}; NREP=${NREP:-4}
+case "$COMP" in h) HPER=0;; h2o) HPER=2;; h2.25) HPER=2.25;; h3o) HPER=3;; h5o) HPER=5;; h7o) HPER=7;; *) echo "COMP must be one of h2o h2.25 h3o h5o h7o h (the compositions of data-h3o-convex-hull.csv)"; exit 1;; esac
 if [ "$COMP" = h ]; then VMAX=${VMAX:-8}; VMIN=${VMIN:-0.9}; PS=${PS:-0.5}; EQ=${EQ:-0.2}; PM_PS=0; NAT=${NATOMS:-729}; FU=1
   SYS="--phase H --branch fluid --natoms $NAT"; DESC="pure H fluid, $NAT atoms (bcc start that melts)"
-else VMAX=${VMAX:-10}; VMIN=${VMIN:-1.75}; PS=${PS:-0.75}; EQ=${EQ:-0.25}; PM_PS=${PM_PS:-0.25}; NAT=$((6 * NREP ** 3)); FU=3
-  SYS="--phase bcc --branch liquid --nrep $NREP --premelt-T $PM_T --premelt-ps $PM_PS"; DESC="H2O liquid, $NAT atoms (bcc x$NREP start, premelt $PM_T K ${PM_PS} ps)"; fi
+else
+  # cell: bcc x NREP (2 NREP^3 O); default NREP = 3 or 4, whichever gives closer to 384 atoms (H2O 384, H2.25O 416, H3O 512, H5O 324, H7O 432)
+  [ -n "${NREP_SET:-}" ] || NREP=$(python3 -c "h=$HPER; print(min((3, 4), key=lambda n: abs(2 * n**3 * (1 + h) - 384)))")
+  NAT=$(python3 -c "print(int(2 * $NREP**3 + round($HPER * 2 * $NREP**3)))"); FU=$(python3 -c "print(1 + $HPER)")
+  # default volume range: ideal per-atom mixing of the H2O range (10 -> 1.75 A^3/atom) and the pure-H range (8 -> 0.9)
+  VMAX=${VMAX:-$(python3 -c "h=$HPER; print(round((3 * 10 + (h - 2) * 8) / (1 + h), 3))")}; VMIN=${VMIN:-$(python3 -c "h=$HPER; print(round((3 * 1.75 + (h - 2) * 0.9) / (1 + h), 3))")}; PS=${PS:-0.75}; EQ=${EQ:-0.25}; PM_PS=${PM_PS:-0.25}
+  SYS="--phase bcc --branch liquid --hper $HPER --nrep $NREP --premelt-T $PM_T --premelt-ps $PM_PS"; DESC="$COMP liquid (H/O = $HPER), $NAT atoms (bcc x$NREP start, premelt $PM_T K ${PM_PS} ps)"; fi
 NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || { echo "no GPU visible"; exit 1; }; PER=${PER_GPU:-4}
 TAG=${TAG:-$(basename ${MODEL#*:})_${COMP}_${T}K_${NAT}at}; D=runs/eos_live/$TAG; mkdir -p $D
 VPA=$($PY -c "import numpy as np; print(' '.join(f'{v:.4f}' for v in np.geomspace($VMAX, $VMIN, $NV)))")
@@ -39,10 +46,11 @@ for v in $VPA; do
   [ $((slot % (NG * PER))) -eq 0 ] && [ $slot -lt $NV ] && echo "  (more volumes than GPU slots: the rest start now too, PER_GPU is a soft limit here)"
 done
 trap 'echo; echo "interrupted: killing the MD processes"; kill ${pids[*]} 2>/dev/null; exit 1' INT
-$PY - "$D" "$TAG" "${REFRESH:-10}" "$EQ" "$PS" "$PM_PS" "$NG" "$T" "$COMP" "$FU" ${pids[*]} <<'EOF'
+$PY - "$D" "$TAG" "${REFRESH:-10}" "$EQ" "$PS" "$PM_PS" "$NG" "$T" "$COMP" "$FU" "$HPER" ${pids[*]} <<'EOF'
 import ast, csv, math, os, re, subprocess, sys, time
-D, TAG, REF, EQ, PS, PM, NG, TT, COMP, FU = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), int(sys.argv[7]), int(float(sys.argv[8])), sys.argv[9], int(sys.argv[10]); pids = [int(x) for x in sys.argv[11:]]
-NAME = {"h2o": "H2O", "h": "H"}.get(COMP, COMP); MPA = {"h2o": 18.015 / 3, "h": 1.008}.get(COMP, 1.0)      # formula name, molar mass per atom
+D, TAG, REF, EQ, PS, PM, NG, TT, COMP, FU = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), int(sys.argv[7]), int(float(sys.argv[8])), sys.argv[9], float(sys.argv[10]), float(sys.argv[11]); pids = [int(x) for x in sys.argv[12:]]
+HPER = float(sys.argv[11]); NAME = {"h2o": "H2O", "h": "H", "h2.25": "H2.25O", "h3o": "H3O", "h5o": "H5O", "h7o": "H7O"}.get(COMP, COMP)
+MPA = 1.008 if COMP == "h" else (15.999 + 1.008 * HPER) / (1 + HPER)      # molar mass per atom (g/mol)
 def dft_eos(T):
     """(P GPa, V per formula unit A^3) of the DFT EOS of COMP at T from data-h3o-convex-hull.csv, sorted by P; [] if that T is not in the file"""
     try: rows = list(csv.reader(open("data-h3o-convex-hull.csv")))

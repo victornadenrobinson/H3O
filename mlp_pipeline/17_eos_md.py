@@ -55,9 +55,16 @@ def build(phase, vpa, nrep, seed=0, hper=2.0, natoms=0):
     mid = O.positions[i[keep]] + D[keep] / 2           # bond midpoints
     rng = np.random.default_rng(seed)
     nH = int(round(hper * len(O)))
-    if nH > len(mid):
-        raise SystemExit(f"only {len(mid)} bonds for {nH} protons")
-    H = Atoms("H" * nH, positions=mid[rng.choice(len(mid), nH, replace=False)])
+    if nH <= len(mid):
+        H = Atoms("H" * nH, positions=mid[rng.choice(len(mid), nH, replace=False)])
+    else:   # more protons than O-O bonds (H5O, H7O on bcc: 4 bonds per O): all bond midpoints plus random positions >= 0.75 A from every atom (meant for the liquid branch, which premelts)
+        pos = list(mid); cell = O.cell; from ase.geometry import get_distances
+        tries = 0
+        while len(pos) < nH:
+            p = cell.cartesian_positions(rng.random((1, 3)))[0]; tries += 1
+            if tries > 200000: raise SystemExit(f"could not place {nH} protons (placed {len(pos)}): volume too small for this composition")
+            if get_distances([p], np.vstack([O.positions, np.array(pos)]), cell=cell, pbc=True)[1].min() >= 0.75: pos.append(p)
+        H = Atoms("H" * nH, positions=np.array(pos))
     at = O + H
     at.cell, at.pbc = O.cell, True
     at.wrap()
