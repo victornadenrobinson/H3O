@@ -7,7 +7,9 @@ Prints the table behind it (per composition: points, P range, mean / max |dP| vs
 --dft-frames runs/train_mfin.extxyz runs/valid_mfin.extxyz (needs ase: run with $PY): also compares with the DFT-MD frames of the same composition within --dT of T:
   energy  E_DFT - E_model per atom, E_model = the model's mean potential energy of the EOS run interpolated to the frame's volume (the labels are TOTEN, which the model was trained on);
   pressure  P_DFT(frame, virial + N kB T/V) - P_model at the frame's volume (reaches below the 300 GPa where the hull EOS starts); both in a third panel and a table per composition.
-  Single frames scatter by a few meV/atom and GPa (thermal fluctuations); the per-state means (frames grouped by volume) are what matter."""
+  Single frames scatter by a few meV/atom and GPa (thermal fluctuations); the per-state means (frames grouped by volume) are what matter. Keep --dT small (default 50 K):
+  U changes by ~3 kB per atom per K (300 K ~ 40-80 meV/atom). A DFT frame in another phase than the model run (superionic solid vs liquid) differs by ~T*dS_melt ~ 200 meV/atom: see the
+  per-data-set breakdown (D_melt / E sets contain solids)."""
 import argparse, csv, glob, math, os
 import numpy as np
 
@@ -51,7 +53,7 @@ def frame_compare(a, data, cx):
             c = "h" if nO == 0 else {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(round(nH / nO, 2))
             if c is None: continue
             P = -float(np.trace(f.get_stress(voigt=False))) / 3 * 160.21766 + N * KB_GPA * float(T) / V
-            fr.append(dict(c=c, vpa=V / N, E=f.get_potential_energy() / N, P=P, T=float(T)))
+            fr.append(dict(c=c, vpa=V / N, E=f.get_potential_energy() / N, P=P, T=float(T), set=str(f.info.get("db_set", "old m tier")).replace("False", "F_toy")))
     print(f"\nDFT-MD frames within {a.dT:.0f} K of {a.T} K: {len(fr)}  (energies: TOTEN per atom; P = virial + N kB T/V)")
     print(f"{'comp':6s} {'frames':>6s} {'vpa range':>13s} {'P range GPa':>13s} {'<E_DFT - E_model> meV/at':>25s} {'sd':>6s} {'<P_DFT - P_model> GPa':>22s} {'sd':>6s}")
     for (c, h, lab), col in zip(COMPS, COL):
@@ -63,6 +65,9 @@ def frame_compare(a, data, cx):
         dE = np.array([1000 * (q["E"] - np.interp(q["vpa"], vv, EE)) for q in inside]); dP = np.array([q["P"] - math.exp(np.interp(q["vpa"], vv, np.log(np.maximum(PP, 1e-3)))) for q in inside])
         print(f"{c:6s} {len(inside):6d} {min(q['vpa'] for q in inside):6.3f}-{max(q['vpa'] for q in inside):<6.3f} {min(q['P'] for q in inside):6.0f}-{max(q['P'] for q in inside):<6.0f} "
               f"{dE.mean():+25.1f} {dE.std():6.1f} {dP.mean():+22.1f} {dP.std():6.1f}")
+        bys = {}
+        for q, e, d in zip(inside, dE, dP): bys.setdefault(q["set"], []).append((e, d))
+        print("        by data set: " + "; ".join(f"{k} {len(v)} fr: dE {np.mean([e for e, _ in v]):+.0f} (sd {np.std([e for e, _ in v]):.0f}) meV/at, dP {np.mean([d for _, d in v]):+.1f} GPa" for k, v in sorted(bys.items())))
         g = {}                                                             # per volume group (2 % bins): means, so thermal scatter of single frames averages out
         for q, e in zip(inside, dE): g.setdefault(round(math.log(q["vpa"]) / 0.02), []).append((q["P"], e))
         xs = [np.mean([p for p, _ in v]) for v in g.values()]; ys = [np.mean([e for _, e in v]) for v in g.values()]
@@ -74,7 +79,8 @@ def frame_compare(a, data, cx):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("root", nargs="?", default="runs/eos_live"); ap.add_argument("--T", type=int, default=7000); ap.add_argument("--model", default="")
     ap.add_argument("--pmin", type=float, default=None); ap.add_argument("--pmax", type=float, default=None); ap.add_argument("-o", default=None)
-    ap.add_argument("--dft-frames", nargs="*", default=[]); ap.add_argument("--dT", type=float, default=300.0); a = ap.parse_args()
+    ap.add_argument("--dft-frames", nargs="*", default=[]); ap.add_argument("--dT", type=float, default=50.0)
+    ap.add_argument("--all-runs", action="store_true", help="keep every run folder of a composition (default: only the run with the largest cell, e.g. not an old 162-atom test)"); a = ap.parse_args()
     data = {}
     for f in sorted(glob.glob(os.path.join(a.root, "*", "*.csv"))):
         if a.model and not os.path.basename(os.path.dirname(f)).startswith(a.model): continue
@@ -87,6 +93,11 @@ def main():
                                                    bad=bad, src=os.path.basename(os.path.dirname(f))))
             except (KeyError, ValueError): continue
     if not data: raise SystemExit(f"no EOS rows at {a.T} K under {a.root}")
+    if not a.all_runs:                                                       # one run per composition: the largest cell (atom count from the folder tag, else the row count)
+        for c, pts in data.items():
+            srcs = sorted({q["src"] for q in pts}, key=lambda s_: (int(m.group(1)) if (m := __import__("re").search(r"_(\d+)at$", s_)) else 0, sum(q["src"] == s_ for q in pts)))
+            if len(srcs) > 1: print(f"{c}: using {srcs[-1]}, ignoring {srcs[:-1]} (--all-runs keeps all)")
+            data[c] = [q for q in pts if q["src"] == srcs[-1]]
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     nrow = 3 if a.dft_frames else 2
     fig, axs = plt.subplots(nrow, 1, figsize=(6.4, 8 + 2.6 * (nrow - 2)), sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3] + [1.3] * (nrow - 2)), constrained_layout=True)
