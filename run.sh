@@ -35,7 +35,7 @@ tdi)     # full TDI free energy of one phase (mlp_pipeline/young_tdi_par.sh): la
   case "$Q" in gl*) QV="NODES=${Q#gl}";; gk*) n=${Q#gk}; QV="RULE=gk NGAUSS=$(( (n - 1) / 2 )) NODES=$n";; *) echo "quad = gl<N> (Gauss-Legendre, N lambda values) or gk<2n+1> (Gauss-Kronrod: n Gauss + n+1 added, e.g. gk17, gk21)"; exit 1;; esac
   [ -e inventory_binned.csv ] || { [ -e runs/inventory_binned.csv ] && ln -s runs/inventory_binned.csv inventory_binned.csv; }   # the DFT EOS the volumes come from
   ENVS="PY=$PYP MODEL=$MODEL P=$(g P 500) T=$(g T 5000) HPER=$(g hper 2) $QV POWER=$(g power 4) PS=$(g ps 4) PS1=$(g ps1 1.5) EQUIL=$(g equil 1) DT=0.5 NPAR=$(g npar 4)"   # npar 4: best throughput (tdi_bench_layout 2026-11-06: 2/4/6/8 per GPU = 12.3/23.8/22.2/22.4 steps/s per GPU, fcc 324 atoms)
-  ENVS="$ENVS ${K[natoms]:+NATOMS=${K[natoms]}} ${K[nghost]:+NGHOST=${K[nghost]}} ${K[hot]:+HOT=${K[hot]}} ${K[hott]:+HOTT=${K[hott]}} ${K[k]:+K=${K[k]}} ${K[tag]:+TAG=${K[tag]}} ${K[outdir]:+OUTDIR=${K[outdir]}} ${K[nrep]:+NREP=${K[nrep]}} ${K[prephold]:+PREPHOLD=${K[prephold]}}"
+  ENVS="$ENVS ${K[natoms]:+NATOMS=${K[natoms]}} ${K[nghost]:+NGHOST=${K[nghost]}} ${K[hot]:+HOT=${K[hot]}} ${K[hott]:+HOTT=${K[hott]}} ${K[k]:+K=${K[k]}} ${K[tag]:+TAG=${K[tag]}} ${K[outdir]:+OUTDIR=${K[outdir]}} ${K[nrep]:+NREP=${K[nrep]}} ${K[prephold]:+PREPHOLD=${K[prephold]}} ${K[chunk]:+CHUNK=${K[chunk]}}"
   [ "$PH" = liquid ] && [ -z "${K[hot]:-}" ] && ENVS="$ENVS HOT=0.5 HOTT=12000"
   [ "$PH" = H ] && [ -z "${K[natoms]:-}" ] && ENVS="$ENVS NATOMS=729"
   if [ "$(g where here)" = batch ]; then
