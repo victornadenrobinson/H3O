@@ -178,12 +178,22 @@ while True:
     time.sleep(REF)
 print(f"\nall {len(runs)} runs finished in {time.time() - t0:.0f} s\n")
 rows = sorted(res.values(), key=lambda r: -r["vpa"])
-print(f"{'vpa':>6s} {'V/fu':>6s} {'rho g/cc':>8s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP %':>6s} {'T K':>6s} {'D_O cm2/s':>10s} {'D_H cm2/s':>10s} {'O lattice':>10s} {'dL':>5s} {'ms/step':>7s}")
+def flags(r, T0):
+    f = []
+    if COMP != "h" and (r.get("D_O_cm2s") or 0) < 2e-6: f.append("FROZE")
+    if (r.get("dmin_HH") or 9) < 0.25: f.append("COLLAPSE(HH<0.25)")
+    elif (r.get("frac_HH_below_0p5") or 0) > 0.05: f.append("CLOSE-HH")
+    if abs(r["T_mean"] - T0) > 0.05 * T0: f.append("T-off")
+    if r.get("P_block_sd") and abs(r.get("P_drift_GPa") or 0) > 3 * r["P_block_sd"] and abs(r.get("P_drift_GPa") or 0) > 0.01 * abs(r["P_GPa"]): f.append("P-drift")
+    return ",".join(f) or "ok"
+print(f"{'vpa':>6s} {'V/fu':>6s} {'rho g/cc':>8s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP %':>6s} {'T K':>6s} {'D_O cm2/s':>10s} {'D_H cm2/s':>10s} {'O lattice':>10s} {'dL':>5s} {'dHH':>5s} {'dOH':>5s} {'ms/step':>7s}  flags")
 for r in rows:
     rho = MPA / r["vpa"] / 0.60221; pd_ = p_dft(FU * r["vpa"])
     print(f"{r['vpa']:6.3f} {FU * r['vpa']:6.2f} {rho:8.3f} {r['P_GPa']:8.1f} {r['P_sem']:5.1f} {pd_:7.1f} {100 * (r['P_GPa'] - pd_) / pd_:+6.1f} {r['T_mean']:6.0f} "
-          f"{r.get('D_O_cm2s') or float('nan'):10.2e} {r.get('D_H_cm2s') or float('nan'):10.2e} {str(r.get('O_struct', '')):>10s} {r.get('delta_L') or float('nan'):5.2f} {r['ms_per_step']:7.0f}")
+          f"{r.get('D_O_cm2s') or float('nan'):10.2e} {r.get('D_H_cm2s') or float('nan'):10.2e} {str(r.get('O_struct', '')):>10s} {r.get('delta_L') or float('nan'):5.2f} {r.get('dmin_HH') or float('nan'):5.2f} {r.get('dmin_OH') or float('nan'):5.2f} {r['ms_per_step']:7.0f}  {flags(r, TT)}")
 print(f"P_DFT: DFT {NAME} EOS at {TT} K (data-h3o-convex-hull.csv: {len(DFT)} points, {min(p for p, v in DFT):.0f}-{max(p for p, v in DFT):.0f} GPa) interpolated at the same V; nan outside its range" if DFT else f"(no DFT {NAME} EOS at {TT} K in data-h3o-convex-hull.csv)")
+print("flags: FROZE (D_O < 2e-6: O lattice survived, not a liquid point), COLLAPSE (an H-H pair fused < 0.25 A: GRACE short-range hole, point invalid), CLOSE-HH (>5 % of frames with H-H < 0.5 A),"
+      " T-off (mean T > 5 % from target: P biased), P-drift (last - first fifth of production > 3 block sd and > 1 %: not equilibrated); dHH/dOH = closest contacts over production (A)")
 if COMP != "h": print("D_O ~1e-5 cm2/s or more: liquid; D_O ~0 with a lattice label: the liquid froze into a solid (O_struct / dL Lindemann ratio) at this volume -> not a liquid EOS point")
 by = {}
 for k, r in res.items(): by.setdefault(runs[k]["gpu"], []).append(1000.0 / r["ms_per_step"])

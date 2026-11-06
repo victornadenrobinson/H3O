@@ -241,9 +241,20 @@ def run_one(a, calc, vpa, tag):
         O = P0[h:, iO] - P0[h:, iO].mean(1, keepdims=True); mean = O.mean(0)
         lab, c1, c2, d1 = import_module("09_label_phase").o_structure(mean, at.cell.array)
         struct = dict(O_struct=lab, CN1=c1, CN2=c2, delta_L=float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1))
+    contacts = {}
+    if len(pos) > 5:   # closest contacts per species pair over production (every 5th saved frame); < 0.25 A H-H = the known short-range collapse of GRACE (a fused pair)
+        sym = at.get_chemical_symbols(); mins = {"HH": 9.9, "OH": 9.9, "OO": 9.9}; ncl = 0; nfr = 0
+        for P_ in pos[::5]:
+            fr = at.copy(); fr.positions = P_; i_, j_, d_ = neighbor_list("ijd", fr, 1.6); nfr += 1
+            if len(d_):
+                if (d_[[sym[x] == "H" and sym[y] == "H" for x, y in zip(i_, j_)]] < 0.5).any(): ncl += 1
+                for x, y, dd in zip(i_, j_, d_):
+                    k_ = "".join(sorted(sym[x] + sym[y], reverse=True)); mins[k_] = min(mins.get(k_, 9.9), dd)
+        contacts = dict(dmin_HH=round(mins.get("HH", 9.9), 3), dmin_OH=round(mins.get("OH", 9.9), 3), dmin_OO=round(mins.get("OO", 9.9), 3), frac_HH_below_0p5=round(ncl / max(nfr, 1), 3))
+    drift = float(P_blocks[-1] - P_blocks[0]); drift_sig = float(np.std(P_blocks, ddof=1)) if len(P_blocks) > 1 else float("nan")
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                branch=a.branch, hper=a.hper, P_target=getattr(a, "p_target", float("nan")), T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
-               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
+               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, **contacts, P_drift_GPa=drift, P_block_sd=drift_sig, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
     print("RESULT", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
     return row
 
