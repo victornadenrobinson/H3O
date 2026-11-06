@@ -5,7 +5,8 @@
 # COMP=h: pure-H fluid instead (729 atoms, no premelt, 8 -> 0.9 A^3/atom, equil 0.2 + prod 0.5 ps by default): COMP=h bash mlp_pipeline/eos_live.sh
 # Reference: the DFT H2O (or pure-H) EOS at the same T from data-h3o-convex-hull.csv (columns "P <T>K h2o", "V <T>K h2o norm" = V per H2O), shown as + in the live plot, interpolated in the final table.
 # Dashboard (refreshed in place every REFRESH s, no screen clear): per volume a progress bar, stage, running T and P (+- block error), ms/step, ETA; per GPU utilisation and memory;
-# below it a plain-text V(P) plot (V per H2O vs log P) that fills in as the runs progress (* running average, o finished liquid, x finished but the O sublattice froze, + DFT).
+# P_DFT / dP% columns: the DFT pressure at the same volume (interpolated, inside the DFT range) and the running model deviation from it.
+# Below: a dense braille V(P) plot (termplot.py; PLOT=ascii for the plain-character version) or the plain-text V(P) plot (V per H2O vs log P) that fills in as the runs progress (* running average, o finished liquid, x finished but the O sublattice froze, + DFT).
 # At the end also <tag>.png (model vs DFT, matplotlib).
 # At the end: P(V) table with T, D_O / D_H (cm^2/s; D_O ~ 1e-5 = liquid, ~0 = O lattice survived), O-sublattice label, and the measured MD throughput per GPU.
 # Outputs: runs/eos_live/<tag>/  (logs, 17_eos_md folders, <tag>.csv). A volume that is already in <tag>.csv is not rerun.
@@ -98,6 +99,25 @@ def pv_plot(pts, W=72, H=20, plo=5.0, phi=2000.0):
         c = int(round((math.log10(t) - math.log10(plo)) / (math.log10(phi) - math.log10(plo)) * (W - 1))); lab[c:c + len(str(t))] = list(str(t))
     out.append(" " * 8 + "".join(lab) + " GPa")
     return out
+def braille_plot(pts, cols=72, rows=18):
+    """dense braille V(P) plot (termplot.Canvas): x = log10 P, y = V per formula unit; DFT as a grey line, model points as coloured blocks; None if termplot is unavailable"""
+    try:
+        import numpy as np
+        from termplot import Canvas, frame, fg, PAL
+    except Exception: return None
+    good = [(v, P, m) for v, P, m in pts if P is not None and P == P and P > 0]
+    if not good: return None
+    xs = [math.log10(P) for v, P, m in good]; ys = [v for v, P, m in good]
+    xlo, xhi = min(xs) - 0.05, max(xs) + 0.05; ylo, yhi = min(ys) * 0.97, max(ys) * 1.03
+    cv = Canvas(cols, rows); X = lambda x: (x - xlo) / (xhi - xlo) * (cv.w - 1); Y = lambda y: (1 - (y - ylo) / (yhi - ylo)) * (cv.h - 1)
+    col = {"+": 11, "o": 1, "*": 3, "x": 4}
+    d = sorted((math.log10(P), v) for v, P, m in good if m == "+")
+    for (x0, y0), (x1, y1) in zip(d, d[1:]): cv.line(X(x0), Y(y0), X(x1), Y(y1), col["+"])
+    for v, P, m in good:
+        if m == "+": continue
+        x, y = X(math.log10(P)), Y(v); dd = np.array([-1, 0, 1]); gx, gy = np.meshgrid(dd, dd); cv.dots(x + gx.ravel(), y + gy.ravel(), col[m])
+    leg = "  ".join(fg(PAL[col[m]], "● " + t) for m, t in (("+", "DFT"), ("o", "model done"), ("*", "model running"), ("x", "model, O froze")) if any(q[2] == m for q in good))
+    return frame(cv, (xlo, xhi), (ylo, yhi), "log10 P (GPa)   [1 = 10, 2 = 100, 3 = 1000 GPa]", f"V per {NAME} (A^3)", f"{NAME} EOS at {TT} K: model vs DFT", legend=leg).split("\n")
 def gpus():
     try:
         o = subprocess.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout
@@ -105,7 +125,7 @@ def gpus():
     except Exception: return "(nvidia-smi unavailable)"
 while True:
     out = [f"{TAG}   elapsed {time.time() - t0:5.0f} s   {gpus()}",
-           f"{'k':>2s} {'gpu':>3s} {'vpa':>6s}  {'progress':22s} {'stage':10s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'ms/st':>5s} {'ETA':>6s}"]
+           f"{'k':>2s} {'gpu':>3s} {'vpa':>6s}  {'progress':22s} {'stage':10s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'ms/st':>5s} {'ETA':>6s}"]
     done = 0; pts = [(V, P, "+") for P, V in DFT]
     for k in sorted(runs):
         st = state(k)
@@ -113,9 +133,12 @@ while True:
         elif st["P"]: pts.append((FU * runs[k]["vpa"], float(st["P"]), "*"))
         done += st["stage"] in ("DONE",) or st["stage"].startswith(("FAILED", "DIED"))
         bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
-        out.append(f"{k:2d} {runs[k]['gpu']:>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {st['ms']:>5s} {st['eta']:>6s}"
+        pd_ = p_dft(FU * runs[k]["vpa"]); pn = res[k]["P_GPa"] if k in res else (float(st["P"]) if st["P"] else float("nan"))
+        dps = f"{100 * (pn - pd_) / pd_:+6.1f}" if pd_ == pd_ and pn == pn else f"{'':>6s}"
+        out.append(f"{k:2d} {runs[k]['gpu']:>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
                    + (f"   {st['stage'][10:]}" if len(st["stage"]) > 10 else ""))
-    out += [""] + pv_plot(pts)
+    bp = braille_plot(pts) if os.environ.get("PLOT", "braille") == "braille" else None
+    out += [""] + (bp or pv_plot(pts))
     if lines_prev: sys.stdout.write(f"\x1b[{lines_prev}A")
     sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n"); sys.stdout.flush(); lines_prev = len(out)
     if done == len(runs): break
