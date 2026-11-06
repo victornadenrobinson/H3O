@@ -1,0 +1,22 @@
+# H2-H2O critical curve from the fitted coexistence model of Gupta, Stixrude, Schlichting, arXiv:2407.04685 (v1, 2024), Table 1 (median parameters) and Eqs. 3-10:
+#   G_mix = RT[y ln y + (1-y) ln(1-y)] + W y(1-y), y = x/(x + lambda(1-x)), x = N_H2/(N_H2+N_H2O) = (N_H - 2 N_O)/N_H; W = W_H - T W_S + P W_V; W_V = W_V1 + W_V2/(T/T0)^2; lambda = l1 + l2/(T/T0); T0 = 1000 K
+#   P_c = [2RT - (W_H - T W_S)] / W_V; x_c = lambda/(1+lambda). W_H -599.08 J/mol, W_S -16.08 J/mol/K, W_V1 -26.12 J/mol/GPa, W_V2 981.78 J/mol/GPa, l1 2.62, l2 -0.68.
+# DFT: PBEsol, Gamma point, 500 eV, 300-450-atom two-phase cells; model valid 750-6000 K, 0.25-2000 GPa. Below T_c(P): two fluids (H2O-rich + H-rich). x_c ~0.71 = H/O ~6.9.
+P_GPa,Tc_K,x_c_H2_molefrac,H_per_O_at_xc
+1,930,0.654,5.78
+3,1422,0.682,6.28
+10,2184,0.698,6.62
+30,3093,0.706,6.80
+50,3566,0.708,6.86
+100,4216,0.711,6.92
+150,4578,0.712,6.94
+200,4817,0.713,6.96
+300,5119,0.713,6.97
+400,5305,0.714,6.98
+500,5432,0.714,6.99
+600,5525,0.714,6.99
+700,5595,0.714,7.00
+800,5651,0.714,7.00
+1000,5734,0.714,7.00
+1500,5853,0.715,7.01
+2000,5917,0.715,7.01
