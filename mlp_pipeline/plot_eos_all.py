@@ -123,7 +123,16 @@ def fit_eos(V, P, Pe):
         if best is None: out[name] = dict(error="no fit"); continue
         res = 100 * (P - f(V, *best.x)) / P; k = int(np.argmax(np.abs(res)))
         out[name] = dict(V0=float(best.x[0]), K0=float(best.x[1]), K1=float(best.x[2]), rms_pct=float(np.sqrt((res ** 2).mean())), max_pct=float(res[k]), at_P=float(P[k]))
+    for deg in (2, 3, 4):                                                        # log-log polynomial: ln P = sum_k a_k (ln V)^k (no zero-pressure assumption; works with thermal pressure)
+        if len(V) > deg + 1:
+            cf = np.polyfit(np.log(V), np.log(P), deg); res = 100 * (P - np.exp(np.polyval(cf, np.log(V)))) / P; k = int(np.argmax(np.abs(res)))
+            out[f"loglog{deg}"] = dict(coef=[float(x) for x in cf], rms_pct=float(np.sqrt((res ** 2).mean())), max_pct=float(res[k]), at_P=float(P[k]))
     return out
+
+
+def eval_fit(F, form, V):
+    if form.startswith("loglog"): return np.exp(np.polyval(F[form]["coef"], np.log(V)))
+    d = F[form]; return (vinet if form == "vinet" else bm3)(V, d["V0"], d["K0"], d["K1"])
 
 
 def main():
@@ -196,6 +205,13 @@ def main():
         pts = sorted([q for q in data.get(c, []) if not q["bad"]], key=lambda q: q["V"])
         if len(pts) < 5: continue
         F = fit_eos([q["V"] for q in pts], [q["P"] for q in pts], [q["Pe"] for q in pts]); fits[c] = F
+        for form in ("loglog2", "loglog3", "loglog4"):
+            if form in F: d = F[form]; print(f"{c:6s} {len(pts):4d} {form:7s} {'ln P = poly(ln V)':>24s} {d['rms_pct']:6.2f} {d['max_pct']:+7.2f} {d['at_P']:7.0f}  {'ok' if abs(d['max_pct']) <= 3 else 'outlier > 3 %'}")
+        src_dir = os.path.join(a.root, pts[0]["src"]); Vd = np.array([q["V"] for q in pts]); Pd = np.array([q["P"] for q in pts])   # per-isotherm table in the run folder
+        forms = [f_ for f_ in ("loglog2", "loglog3", "loglog4", "vinet", "bm3") if f_ in F and "error" not in F[f_]]
+        with open(os.path.join(src_dir, f"eos_fits_{c}_{a.T}K.csv"), "w") as fh:
+            fh.write("V_per_fu_A3,P_model_GPa," + ",".join(f"P_{f_}_GPa,res_{f_}_pct" for f_ in forms) + "\n")
+            for v_, p_ in zip(Vd, Pd): fh.write(f"{v_:.4f},{p_:.3f}," + ",".join(f"{eval_fit(F, f_, np.array([v_]))[0]:.3f},{100 * (p_ - eval_fit(F, f_, np.array([v_]))[0]) / p_:.3f}" for f_ in forms) + "\n")
         for form in ("vinet", "bm3"):
             d = F[form]
             if "error" in d: print(f"{c:6s} {len(pts):4d} {form:6s}  fit failed: {d['error']}"); continue
@@ -203,8 +219,8 @@ def main():
             if abs(d["max_pct"]) > 3: chk.append(f"outlier > 3 %")
             if not (2 < d["K1"] < 10): chk.append("K1 unphysical")
             print(f"{c:6s} {len(pts):4d} {form:6s} {d['V0']:8.2f} {d['K0']:8.1f} {d['K1']:6.2f} {d['rms_pct']:6.2f} {d['max_pct']:+7.2f} {d['at_P']:7.0f}  {', '.join(chk) or 'ok'}")
-        if "error" not in F["vinet"]:
-            Vg = np.linspace(min(q["V"] for q in pts), max(q["V"] for q in pts), 200); ax.plot(vinet(Vg, F["vinet"]["V0"], F["vinet"]["K0"], F["vinet"]["K1"]), Vg, ":", color=col, lw=1)
+        if "loglog3" in F:
+            Vg = np.linspace(min(q["V"] for q in pts), max(q["V"] for q in pts), 200); ax.plot(eval_fit(F, "loglog3", Vg), Vg, ":", color=col, lw=1)
     if fits:
         with open(os.path.join(a.root, f"eos_fits_{a.T}K{('_' + a.model) if a.model else ''}.csv"), "w") as fh:
             fh.write("comp,form,V0_A3_per_fu,K0_GPa,K1,rms_pct,max_pct,at_P_GPa,monotonic\n")
@@ -212,7 +228,7 @@ def main():
                 for form in ("vinet", "bm3"):
                     d = F[form]
                     if "error" not in d: fh.write(f"{c},{form},{d['V0']:.4f},{d['K0']:.3f},{d['K1']:.4f},{d['rms_pct']:.3f},{d['max_pct']:.3f},{d['at_P']:.1f},{F['monotonic']}\n")
-        print(f"fit table: {os.path.join(a.root, f'eos_fits_{a.T}K' + (('_' + a.model) if a.model else '') + '.csv')}  (dotted lines in the plot: Vinet)")
+        print(f"fit table: {os.path.join(a.root, f'eos_fits_{a.T}K' + (('_' + a.model) if a.model else '') + '.csv')}  (dotted lines: log-log cubic; per-isotherm tables eos_fits_<comp>_<T>K.csv in each run folder)")
     if a.loglog: ax.set_xscale("log"); ax.set_yscale("log")
     else: ax.set_ylim(bottom=0)
     ax.set_ylabel("V (A$^3$ per formula unit)"); ax.grid(True, color="#eee"); ax.legend(fontsize=7, ncol=2, frameon=False); ax.set_title(f"{a.T} K: model (circles) vs DFT (squares)", loc="left")
