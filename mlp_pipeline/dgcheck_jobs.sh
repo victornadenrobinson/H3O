@@ -8,6 +8,7 @@
 # All of it is SEALED (valid-frac 1: not for training). Inputs are written from YOUR template into runs/dgcheck (never into the repo); pure H (250 atoms) is skipped by widom_frames (Gamma-only labels invalid).
 # FRAMES_EXTXYZ=<file> uses those geometries instead of widom_frames (e.g. the weighted trials of candidates_to_frames.py).
 # env: RUNS (run dirs, default the two 500 GPa / 5000 K runs), PROXY, FRAMES (3), SEL (2), DEL (3), NDEL (2), NODES (jobs, 6), MINUTES (per job, 700), OUTD (runs/dgcheck), PY
+# EXE (vasp_gam): VASP executable; vasp_std for k-point meshes (kpt_relabel.sh)
 # slurm: ACCT (m3349), QOS (regular), CPT (cpus-per-task, 1 = the header of perlmutter_dft_pwidom.sbatch, which is known to submit), SBATCH_EXTRA (more args)
 #   TEST=1 runs `sbatch --test-only` on each job file instead of submitting (shows a policy rejection without queueing anything)
 set -e; cd "$(dirname "$0")/.."; T=${TEMPLATE:?TEMPLATE=<your vasp template dir with INCAR KPOINTS POTCAR POSCAR>}; PY=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
@@ -34,7 +35,7 @@ for ((j = 0; j < NODES; j++)); do
   printf '%s\n' '#!/bin/bash -l' "#SBATCH --account=$ACCT" "#SBATCH --qos=$QOS" '#SBATCH --constraint=cpu' '#SBATCH --nodes=1' '#SBATCH --ntasks-per-node=128' \
     "#SBATCH --cpus-per-task=$CPT" '#SBATCH --exclusive' '#SBATCH --mem=0' "#SBATCH --time=$WALL" "#SBATCH --job-name=dgchk_$j" "#SBATCH --output=$OUTD/slurm_dgchk_${j}_%j.out" \
     'set -e; cd ${SLURM_SUBMIT_DIR:-.}; export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline; export VASP_MODULE=${VASP_MODULE:-vasp/5.4.4-cpu}' \
-    "bash mlp_pipeline/perlmutter_vasp_check.sh run $OUTD/points_$j --exe vasp_gam --ranks 32 --parallel 4 --minutes $MINUTES" > "$OUTD/job_$j.sbatch"
+    "bash mlp_pipeline/perlmutter_vasp_check.sh run $OUTD/points_$j --exe ${EXE:-vasp_gam} --ranks 32 --parallel 4 --minutes $MINUTES" > "$OUTD/job_$j.sbatch"
   echo "  job_$j: $(grep -c . "$OUTD/points_$j/dirs.txt") points -> $OUTD/job_$j.sbatch ($MINUTES min, 4 lanes x 32 ranks)"
   if [ "${TEST:-0}" = 1 ]; then echo "    test-only: $(sbatch --test-only $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1 | tail -n 1)"
   elif [ "$SUBMIT" = 1 ]; then
