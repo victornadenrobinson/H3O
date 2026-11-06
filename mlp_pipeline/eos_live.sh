@@ -22,10 +22,17 @@ NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || { echo "no GPU visib
 TAG=${TAG:-$(basename ${MODEL#*:})_${COMP}_${T}K_${NAT}at}; D=runs/eos_live/$TAG; mkdir -p $D
 VPA=$($PY -c "import numpy as np; print(' '.join(f'{v:.4f}' for v in np.geomspace($VMAX, $VMIN, $NV)))")
 echo "model $MODEL | $DESC | $T K | $NV volumes $VMAX -> $VMIN A^3/atom | equil $EQ ps, prod $PS ps, dt 0.5 fs | $NG GPU x $PER per GPU"
+# GPU per volume: cost ~ 1/vpa (neighbours per atom grow with density); most expensive first, each to the GPU with the least total cost so far (balances memory and finish time;
+# plain round-robin put the densest volume of every group of NG on the same GPU)
+GPUS=($($PY -c "
+v = [float(x) for x in '$VPA'.split()]; load = [0.0] * $NG; g = [0] * len(v)
+for i in sorted(range(len(v)), key=lambda i: v[i]):
+    j = min(range($NG), key=lambda j: load[j]); g[i] = j; load[j] += 1.0 / v[i]
+print(' '.join(map(str, g)))"))
 pids=(); k=0; slot=0
 for v in $VPA; do
   if [ -e $D/$TAG.csv ] && grep -q ",$v," $D/$TAG.csv 2>/dev/null; then echo "  vpa $v already done"; k=$((k + 1)); continue; fi
-  g=$((slot % NG)); slot=$((slot + 1))
+  g=${GPUS[$k]:-$((slot % NG))}; slot=$((slot + 1))
   CUDA_VISIBLE_DEVICES=$g nohup $PY mlp_pipeline/17_eos_md.py $MODEL $SYS --T $T --vpa $v \
       --equil-ps $EQ --ps $PS --report-fs 50 --tag $TAG --outdir $D > $D/log_$k.txt 2>&1 &
   pids+=($!); echo "$k $g $v $!" >> $D/runs.txt; k=$((k + 1))
