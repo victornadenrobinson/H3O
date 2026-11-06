@@ -48,7 +48,7 @@ done
 trap 'echo; echo "interrupted: killing the MD processes"; kill ${pids[*]} 2>/dev/null; exit 1' INT
 $PY - "$D" "$TAG" "${REFRESH:-10}" "$EQ" "$PS" "$PM_PS" "$NG" "$T" "$COMP" "$FU" "$HPER" ${pids[*]} <<'EOF'
 import ast, csv, math, os, re, subprocess, sys, time
-D, TAG, REF, EQ, PS, PM, NG, TT, COMP, FU = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), int(sys.argv[7]), int(float(sys.argv[8])), sys.argv[9], float(sys.argv[10]), float(sys.argv[11]); pids = [int(x) for x in sys.argv[12:]]
+D, TAG, REF, EQ, PS, PM, NG, TT, COMP, FU = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), int(sys.argv[7]), int(float(sys.argv[8])), sys.argv[9], float(sys.argv[10]); pids = [int(x) for x in sys.argv[12:]]
 HPER = float(sys.argv[11]); NAME = {"h2o": "H2O", "h": "H", "h2.25": "H2.25O", "h3o": "H3O", "h5o": "H5O", "h7o": "H7O"}.get(COMP, COMP)
 MPA = 1.008 if COMP == "h" else (15.999 + 1.008 * HPER) / (1 + HPER)      # molar mass per atom (g/mol)
 def dft_eos(T):
