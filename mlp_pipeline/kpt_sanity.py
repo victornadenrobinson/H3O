@@ -20,6 +20,21 @@ def incar(path):
     return d
 
 
+def outcar_timing(pd_):
+    """(elapsed s, natoms, nkpts, cores) of a finished point: OUTCAR via DONE.json's attempt (worker layout) or directly; None if missing"""
+    oc = os.path.join(pd_, "OUTCAR"); dj = os.path.join(pd_, "DONE.json")
+    if os.path.exists(dj):
+        att = json.load(open(dj)).get("attempt")
+        if att: oc = os.path.join(pd_, att, "OUTCAR")
+    if not os.path.exists(oc): return None
+    with open(oc, "rb") as fh:
+        head = fh.read(400000).decode("latin-1"); fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - 20000)); tail = fh.read().decode("latin-1")
+    el = re.search(r"Elapsed time \(sec\):\s*([\d.]+)", tail); na = re.search(r"NIONS =\s*(\d+)", head); nk = re.search(r"NKPTS =\s*(\d+)", head)
+    co = re.search(r"running\s+on\s+(\d+)\s+total cores", head) or re.search(r"running\s+(\d+)\s+mpi-ranks", head)
+    if not el: return None
+    return float(el.group(1)), int(na.group(1)) if na else 0, int(nk.group(1)) if nk else 0, int(co.group(1)) if co else 0
+
+
 def ref_ids(path):
     ids = []
     for l in open(path):
@@ -34,6 +49,7 @@ seen = collections.defaultdict(list)
 for D in a.dirs:
     pts = sorted(glob.glob(os.path.join(D, "points_*")))
     meshes, kpars, ncores, isyms, sig_bad, n, ndone = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter(), 0, 0, 0
+    times = []
     for p in pts:
         meta = {r["id"]: r for r in csv.DictReader(open(os.path.join(p, "frames_meta.csv")))} if os.path.exists(os.path.join(p, "frames_meta.csv")) else {}
         for pd_ in sorted(glob.glob(os.path.join(p, "p[0-9]*"))):
@@ -44,13 +60,21 @@ for D in a.dirs:
             if 32 % (kpar * nc): bad.append(f"{pd_}: NCORE {nc} x KPAR {kpar} does not divide 32 ranks")
             T = float(r.get("T_K", "nan")) if r.get("T_K") not in (None, "") else float("nan"); s = float(inc.get("SIGMA", "nan"))
             if T == T and abs(s - KB * max(T, 1000.0)) > 1e-4: sig_bad += 1
-            if os.path.exists(os.path.join(pd_, "DONE.json")): ndone += 1
+            if os.path.exists(os.path.join(pd_, "DONE.json")):
+                ndone += 1; tm = outcar_timing(pd_)
+                if tm: times.append(tm)
             if r.get("kpt_src"): seen[r["kpt_src"]].append(D)
     jobs = sorted(glob.glob(os.path.join(D, "job_*.sbatch")))
     print(f"\n{D}: {len(pts)} point folders, {n} points, {ndone} finished (DONE.json), {len(jobs)} job files")
     print(f"  KPOINTS : " + ", ".join(f"{k} x{v}" for k, v in meshes.items()))
     print(f"  INCAR   : KPAR {dict(kpars)}, NCORE {dict(ncores)}, ISYM {dict(isyms)}; SIGMA != kB*max(T_K,1000 K): {sig_bad}")
     if a.expect_mesh and any(a.expect_mesh.lower() not in k.lower() for k in meshes): bad.append(f"{D}: k-mesh {dict(meshes)} is not the expected '{a.expect_mesh}'")
+    if times:
+        bins = collections.defaultdict(list)
+        for el, na, nk, co in times: bins["<= 260" if na <= 260 else "261-450" if na <= 450 else "451-600" if na <= 600 else "> 600"].append((el, nk, co))
+        tot = sum(t[0] * (t[3] or 32) for t in times) / 3600 / 128
+        print("  timing  : " + "; ".join(f"{k} atoms: {len(v)} pts, mean {sum(x[0] for x in v) / len(v) / 60:.1f} min, median {sorted(x[0] for x in v)[len(v) // 2] / 60:.1f} min ({v[0][1]} k, {v[0][2]} ranks)"
+                                         for k, v in sorted(bins.items())) + f"; all {len(times)} pts: mean {sum(t[0] for t in times) / len(times) / 60:.1f} min/point, total {tot:.1f} CPU node-h")
     if len(meshes) > 1: bad.append(f"{D}: more than one k-mesh in one folder: {dict(meshes)}")
     if any(k > 1 for k in kpars): bad.append(f"{D}: KPAR > 1 present ({dict(kpars)}); the plan was KPAR = 1")
     if sig_bad: bad.append(f"{D}: {sig_bad} points with SIGMA not matching their frame's T_K")
