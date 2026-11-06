@@ -178,6 +178,8 @@ def run_one(a, calc, vpa, tag):
     at = build(a.phase, vpa, a.nrep, a.seed, a.hper, getattr(a, "natoms", 0)); at.calc = calc
     V = at.get_volume(); N = len(at); nO = int((at.numbers == 8).sum())
     d = os.path.join(a.outdir, f"{tag}_v{vpa:.4f}"); os.makedirs(d, exist_ok=True)
+    for stale in ("traj.extxyz", "thermo.csv", "final.extxyz"):              # a killed earlier run of this volume: start clean (traj.extxyz is appended to during the run)
+        if os.path.exists(os.path.join(d, stale)): os.remove(os.path.join(d, stale))
     t0_hold = time.time()
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
     if a.branch == "liquid":   # liquid branch: melt the O lattice at a high temperature first, then cool to T (the melting is checked afterwards: O_struct / D_O in the RESULT line)
