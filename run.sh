@@ -45,7 +45,7 @@ tdi)     # full TDI free energy of one phase (mlp_pipeline/young_tdi_par.sh): la
   else
     gpu_here; run "CUDA_VISIBLE_DEVICES=$(g gpu 0) $ENVS bash mlp_pipeline/young_tdi_par.sh $PH"
   fi
-  echo "afterwards: python3 mlp_pipeline/tdi/summarize.py runs/tdi   (G per atom; for gk runs the Kronrod - Gauss difference = quadrature error)";;
+  echo "afterwards: $PYP mlp_pipeline/tdi/summarize.py runs/tdi   (G per atom; for gk runs the Kronrod - Gauss difference = quadrature error)";;
 
 tdi_bench)  # TDI throughput: different numbers of lambda processes per GPU at the same time
   gpu_here; run "MODEL=$MODEL SYSTEM=$(g system h2o) LAYOUT='$(g layout '2 4 6 8')' STEPS=$(g steps 200) ${K[vpa]:+VPA=${K[vpa]}} PY=$PYP bash mlp_pipeline/tdi_bench_layout.sh";;

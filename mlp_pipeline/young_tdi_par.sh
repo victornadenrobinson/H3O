@@ -104,7 +104,7 @@ while kill -0 $XP 2>/dev/null; do
   echo "-- $(date +%H:%M) GPU $(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader 2>/dev/null)"
   python3 $CODE/tdi/eta.py $OUT $TAGNAME ${ONLYNODES:+--only "$ONLYNODES"} $ETAMODE --per-lambda 2>&1 | tail -n +2
   if [ "$ENGINE" = batch ]; then grep -h "batched engine" $OUT/${TAGNAME}_batch.log | tail -n1; fi
-  python3 $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
+  $PY $CODE/tdi/live.py $OUT $TAGNAME --brief 2>&1 | grep -v "^$"
 done
 # second pass: lambda values whose process died of GPU out-of-memory at start-up (too many TensorFlow contexts on one card) are rerun, 2 at a time
 OOM=$(for f in $OUT/${TAGNAME}_node*.log; do [ -f "$f" ] || continue; k=$(basename $f .log | sed "s/${TAGNAME}_node//"); case "$k" in *[!0-9]*|"") continue;; esac; tail -n 30 "$f" | grep -qiE "out of memory|ResourceExhausted" && echo $k; done | sort -n | tr '\n' ' ')
@@ -113,6 +113,6 @@ if [ -n "$OOM" ] && [ -z "$NO_OOM_RETRY" ]; then
   for k in $OOM; do echo "-- OOM retry $(date)" >> $OUT/${TAGNAME}_node$k.log; done
   echo $OOM | tr ' ' '\n' | grep -v "^$" | xargs -P 2 -I{} bash -c "$PY -u $CODE/tdi/run_real.py $COMMON --node {} >> $OUT/${TAGNAME}_node{}.log 2>&1"
 fi
-echo "== done $(date)"; python3 $CODE/tdi/collect.py $OUT $TAGNAME
+echo "== done $(date)"; $PY $CODE/tdi/collect.py $OUT $TAGNAME
 }
 main "$@"; exit $?   # on ONE line: bash reads a script as it runs, so after main returns it would read the next line at the old byte offset of a file that a `git pull` may have changed meanwhile
