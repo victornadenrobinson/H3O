@@ -76,9 +76,28 @@ def frame_compare(a, data, cx):
     cx.set_title(f"DFT-MD frames within {a.dT:.0f} K: energy vs the model's mean energy at the same volume", loc="left", fontsize=8)
 
 
+def french_isotherm(path, T):
+    """(P GPa, V per H2O A^3) of French et al. 2009 at T: the isotherm itself if tabulated, else linear in T between the bracketing isotherms at their common densities
+    (log P interpolated in density); fluid / superionic labels are not filtered (the table marks phases only at 1000-2000 K)"""
+    rows = [r for r in csv.DictReader(l for l in open(path) if not l.startswith("#")) if r["table"] != "VIII"]
+    iso = {}
+    for r in rows: iso.setdefault(int(r["T_K"]), []).append((float(r["rho_gcc"]), float(r["P_GPa"])))
+    Ts = sorted(iso)
+    if T in iso: pts = sorted(iso[T])
+    else:
+        lo = [t for t in Ts if t < T]; hi = [t for t in Ts if t > T]
+        if not lo or not hi: return np.empty((0, 2))
+        a_, b_ = sorted(iso[lo[-1]]), sorted(iso[hi[0]]); w = (T - lo[-1]) / (hi[0] - lo[-1]); pts = []
+        for rho, Pa in a_:
+            if b_[0][0] <= rho <= b_[-1][0]:
+                Pb = math.exp(np.interp(rho, [x for x, _ in b_], [math.log(y) for _, y in b_])); pts.append((rho, Pa + w * (Pb - Pa)))
+    return np.array([(P, 18.015 / (rho * 0.60221)) for rho, P in pts])
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("root", nargs="?", default="runs/eos_live"); ap.add_argument("--T", type=int, default=7000); ap.add_argument("--model", default="")
     ap.add_argument("--pmin", type=float, default=None); ap.add_argument("--pmax", type=float, default=None); ap.add_argument("-o", default=None)
+    ap.add_argument("--lit", default="docs/data/french2009_h2o_eos.csv", help="H2O literature EOS (French et al. 2009, PBE DFT-MD); '' to leave out; interpolated linearly in T between isotherms")
     ap.add_argument("--dft-frames", nargs="*", default=[]); ap.add_argument("--dT", type=float, default=50.0)
     ap.add_argument("--all-runs", action="store_true", help="keep every run folder of a composition (default: only the run with the largest cell, e.g. not an old 162-atom test)"); a = ap.parse_args()
     data = {}
@@ -122,6 +141,13 @@ def main():
         if dp: bx.plot([x for x, _ in dp], [y for _, y in dp], "o-", color=col, ms=4, lw=1)
         print(f"{c:6s} {len(pts):4d} {min(q['P'] for q in pts):6.0f}-{max(q['P'] for q in pts):<7.0f} "
               f"{(np.mean([y for _, y in dp]) if dp else float('nan')):+9.2f} {(max(abs(y) for _, y in dp) if dp else float('nan')):9.2f} {len(flag):8d}  {sorted({q['src'] for q in pts})}")
+    lit = french_isotherm(a.lit, a.T) if a.lit and os.path.exists(a.lit) else None
+    if lit is not None and len(lit):
+        ax.plot(lit[:, 0], lit[:, 1], "D", color="k", mfc="none", ms=6, mew=1.2, zorder=5, label=f"H$_2$O French 2009 (PBE) {a.T} K" + ("" if lit.dtype else ""))
+        if "h2o" in model_eos and len(model_eos["h2o"][0]) > 1:
+            Vm, Pm = model_eos["h2o"]; dl = [(P, 100 * (interp_logP(Vm, Pm, V) - P) / P) for P, V in lit]; dl = [x for x in dl if x[1] == x[1]]
+            if dl: bx.plot([x for x, _ in dl], [y for _, y in dl], "D--", color="k", mfc="none", ms=5, lw=0.8, label="H$_2$O model vs French 2009"); bx.legend(fontsize=7, frameon=False)
+            print(f"H2O model vs French 2009 at {a.T} K: " + ", ".join(f"{P:.0f} GPa {y:+.1f}%" for P, y in dl))
     if "h2o" in model_eos and "h" in model_eos:   # linear mix of the model's own end members at equal P
         (Vw, Pw), (Vh, Ph) = model_eos["h2o"], model_eos["h"]
         Pg = np.geomspace(max(Pw.min(), Ph.min()), min(Pw.max(), Ph.max()), 40)

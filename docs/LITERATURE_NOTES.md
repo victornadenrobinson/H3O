@@ -53,3 +53,9 @@ Direct DFT two-phase coexistence (PBEsol, gamma point, 500 eV, 300-450 atoms, 15
 
 ## Not obtained
 The text of Cheng et al., Nat. Phys. 17, 1228 (2021) itself (the free-energy method is described there: Einstein crystal for O + Uhlenbeck-Ford fluid for the protons, per an earlier search excerpt); only its data repository was read. Upload the PDF if the method details are needed.
+
+## EOS literature for the model checks (searched 2026-11-06)
+- **French, Mattsson, Nettelmann, Redmer, PRB 79, 054107 (2009)**: water DFT-MD (VASP, PBE, standard PAW H 1e / O 6e, 900 eV, 54 molecules, Gamma point), Tables V-VIII = p(T, rho) and u(T, rho) on isotherms 1000-24000 K (no 7000 K: 6000 and 8000 K bracket it). Extracted to `docs/data/french2009_h2o_eos.csv` (158 rows; one minus sign lost in the PDF text restored and flagged). Plotted by `plot_eos_all.py` (default `--lit`), linear in T between isotherms. First check against the hull DFT EOS (via a synthetic model = 0.99 x hull P): **French 2009 pressures are ~4-6 % LOWER than the hull DFT EOS at 7000 K, 290-620 GPa** (different PAW / cutoff / cell size; the T interpolation is a small part). So "model vs DFT" depends on which DFT: keep both references visible.
+- **Becker et al., ApJS 215, 21 (2014), H-REOS.3**: hydrogen DFT-MD EOS tables in the journal's supplemental material (DOI 10.1088/0067-0049/215/2/21), not on arXiv; not obtained.
+- **Soubiran & Militzer (arXiv:1510.07689)**: H2O-H2 mixtures (16:64 ... 40:16 molecules) DFT-MD, pressures and internal energies in figures, no table found; 2-70 GPa range mostly below ours.
+- **Gupta et al. (arXiv:2407.04685)**: no EOS data (see above; critical curve only).
