@@ -10,7 +10,8 @@
 # env: RUNS (run dirs, default the two 500 GPa / 5000 K runs), PROXY, FRAMES (3), SEL (2), DEL (3), NDEL (2), NODES (jobs, 6), MINUTES (per job, 700), OUTD (runs/dgcheck), PY
 # EXE (vasp_gam): VASP executable; vasp_std for k-point meshes (kpt_relabel.sh)
 # slurm: ACCT (m3349), QOS (regular), CPT (cpus-per-task, 1 = the header of perlmutter_dft_pwidom.sbatch, which is known to submit), SBATCH_EXTRA (more args)
-#   TEST=1 runs `sbatch --test-only` on each job file instead of submitting. CAUTION (Perlmutter, 2026-11-06): --test-only answered "Job request does not match any supported
+#   TEST=1 runs `sbatch --test-only` on each job file instead of submitting. CAUSE of "Job request does not match any supported policy" (found 2026-11-06): submitting
+#   these CPU jobs from INSIDE a GPU allocation (interactive GPU node, inherited Slurm environment). Submit from a login node. Earlier note: --test-only answered "Job request does not match any supported
 #   policy" for the same job header that submitted and ran fine with a plain sbatch (the dgchk_* jobs); so a test-only rejection is not conclusive: submit one job and check squeue.
 set -e; cd "$(dirname "$0")/.."; T=${TEMPLATE:?TEMPLATE=<your vasp template dir with INCAR KPOINTS POTCAR POSCAR>}; PY=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
 export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline
