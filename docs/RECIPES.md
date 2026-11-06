@@ -38,6 +38,10 @@ Common keys: `model=` (a run name like `mfin_f_lr1e-2_e50` or a full `grace-ft:.
 - keys: `name` (required), `train` (mfin), `valid` (= train), `epochs` (50) or `updates`, `wE` / `wF` / `wS` (10 / 10 / 1), `mode` (frozen | naive), `lr` (0.01), `batch` (1), `gpus` (2: the 4.3k-frame tier needs the host RAM of 2 shared GPUs), `time` (24:00:00).
 - always starts from the foundation model (ft_one.sh); output `runs/grace/ft_<name>/`; status `python3 mlp_pipeline/ft_status.py`.
 
+### continue a fine-tune on new labels (e.g. k-point corrected; login, batch)
+`echo "bash mlp_pipeline/ft_continue.sh mfinkc_cont mfin_f_lr1e-2_e50 mfinkc mfinkc 21450 0.001" > runs/ft_cont.cmd; GPUS=2 TIME=04:00:00 bash mlp_pipeline/ft_submit.sh runs/ft_cont.cmd`
+- loads the base run's architecture (`-p seed/1/model.yaml`) and weights (`-cn checkpoints/checkpoint.best_test_loss`), resets epoch/step, base input.yaml with new data / updates / lr (optional wE wF wS after lr). Check: the INITIAL test error in `runs/grace/ft_<name>/seed/1/log.txt` must be ~the base model's (not ~150 meV/atom).
+
 ### score — compare fine-tunes (GPU, minutes per model)
 `bash run.sh score only="mfin_f_lr1e-2_e50"`
 - held-out frames (`compare_D` table), DFT-MD composition test (`composition_check`), sealed pair test (pair c, pass |c| <= 50 meV/H; only reference models that did not train on the pairs are a real test).
