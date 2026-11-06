@@ -1,0 +1,10 @@
+# CPU-only packages for cloud / laptop sessions: unit tests (pytest tests), analysis and plotting scripts, and the synthetic checks of new tools.
+# NOT the cluster environment: GRACE (tensorpotential / TensorFlow), MACE, MatterSim and VASP live on Perlmutter / Young (see envs/README.md, RUNNING.md).
+numpy
+pandas
+ase
+matplotlib
+scipy
+pytest
+tqdm
+pyyaml
