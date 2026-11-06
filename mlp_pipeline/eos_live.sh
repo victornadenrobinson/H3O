@@ -137,7 +137,7 @@ def fit(line, w):
     return out + "\x1b[0m"
 
 CI = [1, 2, 3, 4, 5, 6]                                                    # termplot palette slots per composition; DFT lines grey (11)
-def plot():
+def plot(rows=18):
     try: from termplot import Canvas, frame, fg, PAL
     except Exception: return []
     pts = []
@@ -151,7 +151,7 @@ def plot():
             except ValueError: pass
     if not pts: return []
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; xlo, xhi = min(xs) - 0.05, max(xs) + 0.05; ylo, yhi = min(ys) * 0.95, max(ys) * 1.03
-    cv = Canvas(72, 18); X = lambda x: (x - xlo) / (xhi - xlo) * (cv.w - 1); Y = lambda y: (1 - (y - ylo) / (yhi - ylo)) * (cv.h - 1)
+    cv = Canvas(72, rows); X = lambda x: (x - xlo) / (xhi - xlo) * (cv.w - 1); Y = lambda y: (1 - (y - ylo) / (yhi - ylo)) * (cv.h - 1)
     for i in range(len(COMPS)):
         d = sorted((x, y) for x, y, ci, k in pts if ci == i and k == "dft")
         for (x0, y0), (x1, y1) in zip(d, d[1:]): cv.line(X(x0), Y(y0), X(x1), Y(y1), 11)
@@ -179,7 +179,9 @@ while True:
         dps = f"{100 * (pn - pd_) / pd_:+6.1f}" if pd_ == pd_ and pn == pn else f"{'':6s}"; bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
         out.append(f"{NAME[c]:7s} {j['vpa']:6.3f} {j['gpu']:>3d}  [{bar}] {st['stage'][:8]:8s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
                    + (f"  {st['stage']}" if st["stage"].startswith("FAILED") else ""))
-    if E("PLOT", "braille") == "braille": out += [""] + plot()
+    room = th - 2 - len(out) - 7                                           # rows left for the plot canvas (title, legend, axis label, x axis and its labels take ~7 lines)
+    if E("PLOT", "braille") == "braille" and room >= 6: out += [""] + plot(min(18, room))
+    elif E("PLOT", "braille") == "braille": out.append(f"(plot hidden: terminal too short by {6 - room} lines; enlarge the window or use NV / fewer compositions)")
     out = [fit(l, tw) for l in out][: max(10, th - 2)]                     # never wider or taller than the terminal
     if prev: sys.stdout.write(f"\x1b[{prev}A")
     sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n\x1b[J"); sys.stdout.flush(); prev = len(out)
