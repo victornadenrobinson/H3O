@@ -88,7 +88,8 @@ def main():
             try:
                 if abs(float(r["T_set"]) - a.T) > 1: continue
                 c = comp_of(r); fu = 1.0 if c == "h" else 1.0 + float(r["hper"])
-                bad = (c != "h" and float(r.get("D_O_cm2s") or 0) < 2e-6) or float(r.get("dmin_HH") or 9) < 0.25
+                dO = float(r["D_O_cm2s"]) if r.get("D_O_cm2s") not in (None, "", "nan") else float("nan")
+                bad = (c != "h" and (str(r.get("O_struct") or "") in ("bcc", "fcc", "hcp") or (dO == dO and dO < 2e-5))) or float(r.get("dmin_HH") or 9) < 0.25
                 data.setdefault(c, []).append(dict(P=float(r["P_GPa"]), Pe=float(r.get("P_sem") or 0), V=fu * float(r["vpa"]), vpa=float(r["vpa"]), E=float(r.get("epot_per_atom") or "nan"),
                                                    bad=bad, src=os.path.basename(os.path.dirname(f))))
             except (KeyError, ValueError): continue

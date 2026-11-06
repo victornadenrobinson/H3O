@@ -190,9 +190,12 @@ while True:
 
 # ---- final tables with flags, throughput
 print(f"\nall {len(jobs)} jobs finished in {time.time() - t0:.0f} s")
+def num(r, k):
+    """value or nan (None = nan in the RESULT line; 0.0 is a real value, not missing)"""
+    v = r.get(k); return float("nan") if v is None else float(v)
 def flags(r, comp):
     f = []
-    if comp != "h" and (r.get("D_O_cm2s") or 0) < 2e-6: f.append("FROZE")
+    if comp != "h" and (str(r.get("O_struct") or "") in ("bcc", "fcc", "hcp") or (num(r, "D_O_cm2s") == num(r, "D_O_cm2s") and num(r, "D_O_cm2s") < 2e-5)): f.append("FROZE")
     if (r.get("dmin_HH") or 9) < 0.25: f.append("COLLAPSE")
     elif (r.get("frac_HH_below_0p5") or 0) > 0.05: f.append("CLOSE-HH")
     if abs(r["T_mean"] - T) > 0.05 * T: f.append("T-off")
@@ -201,14 +204,14 @@ def flags(r, comp):
 for c in COMPS:
     rows = sorted([j for j in jobs if j["comp"] == c and j["res"]], key=lambda j: -j["vpa"]); fu = C[c]["fu"]
     print(f"\n{NAME[c]} at {T} K ({C[c]['nat']} atoms)   table: {os.path.join(C[c]['D'], C[c]['tag'] + '.csv')}")
-    print(f"{'vpa':>6s} {'V/fu':>6s} {'rho':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'T K':>6s} {'D_O':>9s} {'D_H':>9s} {'O latt':>8s} {'dHH':>5s} {'dOH':>5s} {'ms/st':>5s}  flags")
+    print(f"{'vpa':>6s} {'V/fu':>6s} {'rho':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'T K':>6s} {'D_O':>9s} {'D_H':>9s} {'O latt':>8s} {'dHH':>5s} {'dOH':>5s} {'HH<0.5':>6s} {'ms/st':>5s}  flags")
     for j in rows:
         r = j["res"]; pd_ = p_dft(c, fu * j["vpa"]); rho = C[c]["mpa"] / j["vpa"] / 0.60221
         print(f"{j['vpa']:6.3f} {fu * j['vpa']:6.2f} {rho:6.3f} {r['P_GPa']:8.1f} {r['P_sem']:5.1f} {pd_:7.1f} {100 * (r['P_GPa'] - pd_) / pd_:+6.1f} {r['T_mean']:6.0f} "
-              f"{r.get('D_O_cm2s') or float('nan'):9.1e} {r.get('D_H_cm2s') or float('nan'):9.1e} {str(r.get('O_struct') or ''):>8s} {r.get('dmin_HH') or float('nan'):5.2f} {r.get('dmin_OH') or float('nan'):5.2f} {r['ms_per_step']:5.0f}  {flags(r, c)}")
+              f"{num(r, 'D_O_cm2s'):9.1e} {num(r, 'D_H_cm2s'):9.1e} {str(r.get('O_struct') or ''):>8s} {num(r, 'dmin_HH'):5.2f} {num(r, 'dmin_OH'):5.2f} {100 * num(r, 'frac_HH_below_0p5'):5.1f}% {r['ms_per_step']:5.0f}  {flags(r, c)}")
     for j in [j for j in jobs if j["comp"] == c and j["state"] == "failed"]: print(f"  FAILED vpa {j['vpa']}: {j['st']['stage']}  (log {j['log']})")
-print("\nflags: FROZE (O lattice survived: not a liquid point), COLLAPSE (H-H pair < 0.25 A: GRACE short-range hole, invalid), CLOSE-HH (> 5 % of frames with H-H < 0.5 A),"
-      " T-off (mean T > 5 % off target), P-drift (not equilibrated); D in cm^2/s, contacts in A")
+print("\nflags: FROZE (O lattice label bcc/fcc/hcp or D_O < 2e-5 cm^2/s: not a liquid point; liquids here have D_O >= ~2e-4), COLLAPSE (H-H pair < 0.25 A: GRACE short-range hole, invalid), CLOSE-HH (> 5 % of frames with H-H < 0.5 A),"
+      " T-off (mean T > 5 % off target), P-drift (not equilibrated); D in cm^2/s, contacts in A, HH<0.5 = % of sampled frames with an H-H pair closer than 0.5 A")
 by = {}
 for j in jobs:
     if j["res"]: by.setdefault(j["gpu"], []).append(C[j["comp"]]["nat"] * 1000.0 / j["res"]["ms_per_step"])

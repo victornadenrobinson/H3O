@@ -257,7 +257,7 @@ def run_one(a, calc, vpa, tag):
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                branch=a.branch, hper=a.hper, P_target=getattr(a, "p_target", float("nan")), T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
                msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, **contacts, P_drift_GPa=drift, P_block_sd=drift_sig, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
-    print("RESULT", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in row.items()}, flush=True)
+    print("RESULT", {k: (float(f"{v:.5g}") if isinstance(v, float) else v) for k, v in row.items()}, flush=True)   # 5 significant digits (rounding to 4 decimals turned D ~1e-5 cm^2/s into 0)
     return row
 
 
