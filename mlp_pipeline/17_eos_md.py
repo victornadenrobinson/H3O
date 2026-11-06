@@ -175,8 +175,10 @@ def run_one(a, calc, vpa, tag):
     MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
     if a.branch == "liquid":   # liquid branch: melt the O lattice at a high temperature first, then cool to T (the melting is checked afterwards: O_struct / D_O in the RESULT line)
         MaxwellBoltzmannDistribution(at, temperature_K=a.premelt_T, force_temp=True); Stationary(at)
+        print(f"  {tag} vpa {vpa:.3f} premelt {a.premelt_T:.0f} K for {a.premelt_ps} ps ...", flush=True)
         thermostat(at, a.premelt_T, a.dt, a.tau).run(int(a.premelt_ps * 1000 / a.dt))
         Tchk = 2 * at.get_kinetic_energy() / (3 * (len(at) - 1) * units.kB)
+        print(f"  {tag} vpa {vpa:.3f} premelt done: T {Tchk:.0f} K ({time.time() - t0_hold:.0f} s)", flush=True)
         if not Tchk < 3 * a.premelt_T: raise RuntimeError(f"{tag}: MD exploded during the {a.premelt_T:.0f} K premelt (T = {Tchk:.3g} K): use a smaller --dt, a lower --premelt-T, or check the starting volume")
         MaxwellBoltzmannDistribution(at, temperature_K=a.T, force_temp=True); Stationary(at)
     if a.hold_O_ps > 0 and nO > 0 and a.branch == "solid":   # H thermalises in the fixed O lattice first (O held on its sites, zero velocity), then O is released with Maxwell-Boltzmann velocities; not counted in equil / production
@@ -197,9 +199,9 @@ def run_one(a, calc, vpa, tag):
         rows.append(dict(step=s, t_fs=s * a.dt, T=T, epot=at.get_potential_energy(), ekin=ek, P_GPa=P, **{f"s{k}": sig[k] * EV_A3_GPA for k in range(6)}))
         if s >= n_eq and s % int(10 / a.dt) == 0:
             pos.append(at.get_positions().copy()); tpos.append(s * a.dt)
-        if s % int(500 / a.dt) == 0 and s:
+        if s % max(a.log_every, int(round(a.report_fs / a.dt / a.log_every)) * a.log_every) == 0 and s:
             allr = pd.DataFrame(rows); prod = allr[allr.step >= n_eq]
-            allr.to_csv(os.path.join(d, "thermo.csv"), index=False)   # every 500 fs: a run killed at its time limit keeps its thermo series
+            allr.to_csv(os.path.join(d, "thermo.csv"), index=False)   # every --report-fs: a run killed at its time limit keeps its thermo series
             if len(prod) >= 10:
                 w, phase = prod, "prod avg"
             else:   # still equilibrating: average over the last 250 fs rather than one instantaneous value
@@ -249,6 +251,7 @@ if __name__ == "__main__":
     ap.add_argument("--ps", type=float, default=4.0); ap.add_argument("--equil-ps", type=float, default=1.0)
     ap.add_argument("--dt", type=float, default=0.5); ap.add_argument("--tau", type=float, default=100.0, help="thermostat time (fs)")
     ap.add_argument("--log-every", type=int, default=2); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--report-fs", type=float, default=500.0, help="progress line + thermo.csv save every this many fs of MD (default 500)")
     ap.add_argument("--branch", choices=["solid", "liquid", "fluid"], default="solid", help="solid: start from the lattice; liquid: melt the O lattice at --premelt-T for --premelt-ps first, then cool to T; fluid: pure H (no melting step)")
     ap.add_argument("--premelt-T", type=float, default=12000.0); ap.add_argument("--premelt-ps", type=float, default=1.0)
     ap.add_argument("--hper", type=float, default=2.0, help="H atoms per O of the crystal (2 = H2O; 2.25 = H2.25O with 27 added H in the 108 O fcc cell)")
