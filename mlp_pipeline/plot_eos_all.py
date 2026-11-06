@@ -3,7 +3,11 @@
 V per formula unit vs P, one colour per composition (H2O, H2.25O, H3O, H5O, H7O, H), DFT = squares + line, model = circles (x = flagged: O froze / H-H collapse), dashed = linear mix
 of the MODEL's own H2O and H EOS (V(HnO) = V(H2O) + (n - 2) V(H) at equal P). Lower panel: (P_model - P_DFT) / P_DFT at the model volumes.
   python3 mlp_pipeline/plot_eos_all.py [runs/eos_live] --T 7000 [--model ft_mfin_f_lr1e-2_e50] [--pmin 300 --pmax 1050] [-o runs/eos_live/eos_all_7000K.png]
-Prints the table behind it (per composition: points, P range, mean / max |dP| vs DFT, flags)."""
+Prints the table behind it (per composition: points, P range, mean / max |dP| vs DFT, flags).
+--dft-frames runs/train_mfin.extxyz runs/valid_mfin.extxyz (needs ase: run with $PY): also compares with the DFT-MD frames of the same composition within --dT of T:
+  energy  E_DFT - E_model per atom, E_model = the model's mean potential energy of the EOS run interpolated to the frame's volume (the labels are TOTEN, which the model was trained on);
+  pressure  P_DFT(frame, virial + N kB T/V) - P_model at the frame's volume (reaches below the 300 GPa where the hull EOS starts); both in a third panel and a table per composition.
+  Single frames scatter by a few meV/atom and GPa (thermal fluctuations); the per-state means (frames grouped by volume) are what matter."""
 import argparse, csv, glob, math, os
 import numpy as np
 
@@ -34,9 +38,43 @@ def interp_logP(V, P, v):
     return float(np.exp(np.interp(v, V, np.log(P))))
 
 
+def frame_compare(a, data, cx):
+    """DFT-MD frames of each composition within dT of T: E_DFT - E_model(V) per atom and P_DFT - P_model(V), per volume group; plotted against P in cx"""
+    from ase.io import read
+    KB_GPA = 8.617333e-5 * 160.21766
+    fr = []
+    for p in a.dft_frames:
+        for f in read(p, index=":"):
+            T = f.info.get("T_K", f.info.get("T_set"))
+            if T is None or abs(float(T) - a.T) > a.dT: continue
+            nO, nH = int((f.numbers == 8).sum()), int((f.numbers == 1).sum()); N = len(f); V = f.get_volume()
+            c = "h" if nO == 0 else {2.0: "h2o", 2.25: "h2.25", 3.0: "h3o", 5.0: "h5o", 7.0: "h7o"}.get(round(nH / nO, 2))
+            if c is None: continue
+            P = -float(np.trace(f.get_stress(voigt=False))) / 3 * 160.21766 + N * KB_GPA * float(T) / V
+            fr.append(dict(c=c, vpa=V / N, E=f.get_potential_energy() / N, P=P, T=float(T)))
+    print(f"\nDFT-MD frames within {a.dT:.0f} K of {a.T} K: {len(fr)}  (energies: TOTEN per atom; P = virial + N kB T/V)")
+    print(f"{'comp':6s} {'frames':>6s} {'vpa range':>13s} {'P range GPa':>13s} {'<E_DFT - E_model> meV/at':>25s} {'sd':>6s} {'<P_DFT - P_model> GPa':>22s} {'sd':>6s}")
+    for (c, h, lab), col in zip(COMPS, COL):
+        pts = [q for q in data.get(c, []) if not q["bad"] and q["E"] == q["E"]]; fs = [q for q in fr if q["c"] == c]
+        if len(pts) < 2 or not fs: continue
+        o = np.argsort([q["vpa"] for q in pts]); vv = np.array([pts[i]["vpa"] for i in o]); EE = np.array([pts[i]["E"] for i in o]); PP = np.array([pts[i]["P"] for i in o])
+        inside = [q for q in fs if vv[0] <= q["vpa"] <= vv[-1]]
+        if not inside: print(f"{c:6s} {len(fs):6d}  (no frame inside the model's volume range {vv[0]:.2f}-{vv[-1]:.2f})"); continue
+        dE = np.array([1000 * (q["E"] - np.interp(q["vpa"], vv, EE)) for q in inside]); dP = np.array([q["P"] - math.exp(np.interp(q["vpa"], vv, np.log(np.maximum(PP, 1e-3)))) for q in inside])
+        print(f"{c:6s} {len(inside):6d} {min(q['vpa'] for q in inside):6.3f}-{max(q['vpa'] for q in inside):<6.3f} {min(q['P'] for q in inside):6.0f}-{max(q['P'] for q in inside):<6.0f} "
+              f"{dE.mean():+25.1f} {dE.std():6.1f} {dP.mean():+22.1f} {dP.std():6.1f}")
+        g = {}                                                             # per volume group (2 % bins): means, so thermal scatter of single frames averages out
+        for q, e in zip(inside, dE): g.setdefault(round(math.log(q["vpa"]) / 0.02), []).append((q["P"], e))
+        xs = [np.mean([p for p, _ in v]) for v in g.values()]; ys = [np.mean([e for _, e in v]) for v in g.values()]
+        cx.plot(xs, ys, "o", color=col, ms=5, label=lab)
+    cx.axhline(0, color="gray", lw=0.8); cx.set_ylabel("E$_{DFT}$ - E$_{model}$ (meV/atom)"); cx.grid(True, color="#eee"); cx.set_xlabel("P (GPa)")
+    cx.set_title(f"DFT-MD frames within {a.dT:.0f} K: energy vs the model's mean energy at the same volume", loc="left", fontsize=8)
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("root", nargs="?", default="runs/eos_live"); ap.add_argument("--T", type=int, default=7000); ap.add_argument("--model", default="")
-    ap.add_argument("--pmin", type=float, default=None); ap.add_argument("--pmax", type=float, default=None); ap.add_argument("-o", default=None); a = ap.parse_args()
+    ap.add_argument("--pmin", type=float, default=None); ap.add_argument("--pmax", type=float, default=None); ap.add_argument("-o", default=None)
+    ap.add_argument("--dft-frames", nargs="*", default=[]); ap.add_argument("--dT", type=float, default=300.0); a = ap.parse_args()
     data = {}
     for f in sorted(glob.glob(os.path.join(a.root, "*", "*.csv"))):
         if a.model and not os.path.basename(os.path.dirname(f)).startswith(a.model): continue
@@ -45,11 +83,14 @@ def main():
                 if abs(float(r["T_set"]) - a.T) > 1: continue
                 c = comp_of(r); fu = 1.0 if c == "h" else 1.0 + float(r["hper"])
                 bad = (c != "h" and float(r.get("D_O_cm2s") or 0) < 2e-6) or float(r.get("dmin_HH") or 9) < 0.25
-                data.setdefault(c, []).append(dict(P=float(r["P_GPa"]), Pe=float(r.get("P_sem") or 0), V=fu * float(r["vpa"]), bad=bad, src=os.path.basename(os.path.dirname(f))))
+                data.setdefault(c, []).append(dict(P=float(r["P_GPa"]), Pe=float(r.get("P_sem") or 0), V=fu * float(r["vpa"]), vpa=float(r["vpa"]), E=float(r.get("epot_per_atom") or "nan"),
+                                                   bad=bad, src=os.path.basename(os.path.dirname(f))))
             except (KeyError, ValueError): continue
     if not data: raise SystemExit(f"no EOS rows at {a.T} K under {a.root}")
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    fig, (ax, bx) = plt.subplots(2, 1, figsize=(6.4, 8), sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3]), constrained_layout=True)
+    nrow = 3 if a.dft_frames else 2
+    fig, axs = plt.subplots(nrow, 1, figsize=(6.4, 8 + 2.6 * (nrow - 2)), sharex=True, gridspec_kw=dict(height_ratios=[3, 1.3] + [1.3] * (nrow - 2)), constrained_layout=True)
+    ax, bx = axs[0], axs[1]
     model_eos = {}
     print(f"{'comp':6s} {'pts':>4s} {'P range GPa':>14s} {'mean dP%':>9s} {'max|dP|%':>9s} {'flagged':>8s}  source")
     for (c, h, lab), col in zip(COMPS, COL):
@@ -79,6 +120,7 @@ def main():
     if a.pmin is not None or a.pmax is not None: ax.set_xlim(a.pmin, a.pmax)
     ax.set_ylim(bottom=0); ax.set_ylabel("V (A$^3$ per formula unit)"); ax.grid(True, color="#eee"); ax.legend(fontsize=7, ncol=2, frameon=False); ax.set_title(f"{a.T} K: model (circles) vs DFT (squares)", loc="left")
     bx.axhline(0, color="gray", lw=0.8); bx.set_ylabel("P$_{model}$ - P$_{DFT}$ (%)"); bx.set_xlabel("P (GPa)"); bx.grid(True, color="#eee")
+    if a.dft_frames: frame_compare(a, data, axs[2])
     out = a.o or os.path.join(a.root, f"eos_all_{a.T}K{('_' + a.model) if a.model else ''}.png")
     fig.savefig(out, dpi=150); print("figure:", out)
 
