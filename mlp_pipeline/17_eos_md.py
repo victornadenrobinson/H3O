@@ -244,9 +244,9 @@ def run_one(a, calc, vpa, tag):
         lab, c1, c2, d1 = import_module("09_label_phase").o_structure(mean, at.cell.array)
         struct = dict(O_struct=lab, CN1=c1, CN2=c2, delta_L=float(np.sqrt(((O - mean) ** 2).sum(-1).mean()) / d1))
     contacts = {}
-    if len(pos) > 5:   # closest contacts per species pair over production (every 5th saved frame); < 0.25 A H-H = the known short-range collapse of GRACE (a fused pair)
+    if len(pos) > 5:   # closest contacts per species pair over production (every saved frame, one per 10 fs); < 0.25 A H-H = the known short-range collapse of GRACE (a fused pair)
         sym = at.get_chemical_symbols(); mins = {"HH": 9.9, "OH": 9.9, "OO": 9.9}; ncl = 0; nfr = 0
-        for P_ in pos[::5]:
+        for P_ in pos:
             fr = at.copy(); fr.positions = P_; i_, j_, d_ = neighbor_list("ijd", fr, 1.6); nfr += 1
             if len(d_):
                 if (d_[[sym[x] == "H" and sym[y] == "H" for x, y in zip(i_, j_)]] < 0.5).any(): ncl += 1
