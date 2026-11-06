@@ -12,7 +12,7 @@ for kv in "$@"; do
 done
 g() { local v="${K[$1]:-}"; echo "${v:-${2:-}}"; }                                # g key default
 PYP=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
-BEST=grace-ft:runs/grace/ft_mfin_f_lr1e-2_e50
+BEST=grace-ft:runs/grace/ft_mfinkc_cont   # final model (k-point corrected, 2026-11-06); before: ft_mfin_f_lr1e-2_e50
 MODEL=$(g model "$BEST"); case "$MODEL" in grace*|lj*) ;; *) MODEL=grace-ft:runs/grace/ft_$MODEL;; esac   # model=mfin_f_lr1e-2_e50 is enough
 run() { echo "+ $*"; [ "$(g dry 0)" = 1 ] && return 0; eval "$@"; }
 gpu_here() { [ "$(g dry 0)" = 1 ] && return 0; nvidia-smi -L >/dev/null 2>&1 || { echo "no GPU visible: run this task inside an interactive GPU job (or where=batch from a login node)"; exit 1; }; }
