@@ -1,213 +1,215 @@
 #!/bin/bash
-# Quick liquid EOS scan with a live dashboard: one 17_eos_md.py process per volume, PER_GPU processes per GPU, all at once. Interactive GPU node, repo root.
-#   bash mlp_pipeline/eos_live.sh                                  H2O liquid, 7000 K, 16 volumes 10 -> 1.75 A^3/atom (~10-1000 GPa), 384 atoms (bcc x4 = 128 H2O), 0.25 ps premelt + 0.25 equil + 0.75 ps
-#   MODEL=grace-ft:runs/grace/ft_<run> T=7000 NV=16 VMAX=10 VMIN=1.75 PS=0.75 EQ=0.25 PER_GPU=4 NREP=4 bash mlp_pipeline/eos_live.sh
-# COMP = h2o (default) | h2.25 | h3o | h5o | h7o | h  (the compositions of the DFT EOS file). Mixtures: liquid branch, H/O = 2, 2.25, 3, 5, 7, ~384 atoms; e.g. COMP=h3o T=7000 bash mlp_pipeline/eos_live.sh
-# COMP=h: pure-H fluid instead (729 atoms, no premelt, 8 -> 0.9 A^3/atom, equil 0.2 + prod 0.5 ps by default): COMP=h bash mlp_pipeline/eos_live.sh
-# Reference: the DFT H2O (or pure-H) EOS at the same T from data-h3o-convex-hull.csv (columns "P <T>K h2o", "V <T>K h2o norm" = V per H2O), shown as + in the live plot, interpolated in the final table.
-# Dashboard (refreshed in place every REFRESH s, no screen clear): per volume a progress bar, stage, running T and P (+- block error), ms/step, ETA; per GPU utilisation and memory;
-# P_DFT / dP% columns: the DFT pressure at the same volume (interpolated, inside the DFT range) and the running model deviation from it.
-# Below: a dense braille V(P) plot (termplot.py; PLOT=ascii for the plain-character version) or the plain-text V(P) plot (V per H2O vs log P) that fills in as the runs progress (* running average, o finished liquid, x finished but the O sublattice froze, + DFT).
-# At the end also <tag>.png (model vs DFT, matplotlib).
-# At the end: P(V) table with T, D_O / D_H (cm^2/s; D_O ~ 1e-5 = liquid, ~0 = O lattice survived), O-sublattice label, and the measured MD throughput per GPU.
-# Outputs: runs/eos_live/<tag>/  (logs, 17_eos_md folders, <tag>.csv). A volume that is already in <tag>.csv is not rerun.
+# EOS scans with a live dashboard and a job queue: every (composition, volume) is one 17_eos_md.py process; up to PER_GPU processes per GPU run at once and a new one starts as soon as
+# a slot frees (most expensive first, on the least-loaded GPU), so several compositions fill the GPUs together and the slow high-pressure volumes start first. Interactive GPU node, repo root.
+#   bash mlp_pipeline/eos_live.sh                                   H2O liquid, 7000 K, 16 volumes (~10-1000 GPa)
+#   COMP="h2o h3o h" T=7000 bash mlp_pipeline/eos_live.sh             several compositions in one queue
+#   COMP = h2o | h2.25 | h3o | h5o | h7o | h  (the compositions of data-h3o-convex-hull.csv; DFT EOS at 5000/7000/9000 K)
+# env: MODEL (grace-ft:runs/grace/ft_<run>; default the F10 control, else F200), T (7000), NV (16 volumes per composition), VMAX / VMIN (A^3/atom; default per composition),
+#      PS / EQ (production / equilibration ps; 0.75 / 0.25, pure H 0.5 / 0.2), PM_T / PM_PS (premelt 9000 K / 0.25 ps, mixtures), NREP (bcc x3 or x4, default the one closest to 384 atoms),
+#      NATOMS (pure H, 729), PER_GPU (4), REFRESH (10 s), PLOT (braille | none).
+# Cells: H2O 384, H2.25O 416, H3O 512, H5O 324, H7O 432 atoms (liquid branch: bcc start, premelt); pure H 729 (bcc start that melts). Default volume range per composition: ideal per-atom
+# mixing of the H2O range (10 -> 1.75 A^3/atom) and the pure-H range (8 -> 0.9).
+# Dashboard (in place, every REFRESH s): per composition done / running / queued; one row per running job (progress, T, P +- error, P_DFT at the same volume, dP %, ms/step, ETA, GPU);
+# a dense braille V(P) plot of every composition against its DFT EOS. At the end, per composition: table (P, P_DFT, dP %, T, D_O, D_H, O lattice, closest contacts, flags FROZE / COLLAPSE /
+# CLOSE-HH / T-off / P-drift); all compositions on one figure: python3 mlp_pipeline/plot_eos_all.py --T <T>.
+# Outputs: runs/eos_live/<model>_<comp>_<T>K_<N>at/ (logs, 17_eos_md folders, <tag>.csv). Volumes already in <tag>.csv are skipped. Ctrl-C kills the running MD processes.
 set -u; cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; export PYTHONPATH=$PWD/mlp_pipeline TF_FORCE_GPU_ALLOW_GROWTH=true TF_CPP_MIN_LOG_LEVEL=2
 if [ -z "${MODEL:-}" ]; then for r in mfin_f_lr1e-2_e50 mfin_f_lr1e-2_e50_F200; do [ -e runs/grace/ft_$r/seed/1/final_model/saved_model.pb ] && { MODEL=grace-ft:runs/grace/ft_$r; break; }; done; fi
 [ -n "${MODEL:-}" ] || { echo "set MODEL=grace-ft:runs/grace/ft_<run>"; exit 1; }
-COMP=${COMP:-h2o}; T=${T:-7000}; NV=${NV:-16}; PM_T=${PM_T:-9000}; NREP_SET=${NREP:-}; NREP=${NREP:-4}
-case "$COMP" in h) HPER=0;; h2o) HPER=2;; h2.25) HPER=2.25;; h3o) HPER=3;; h5o) HPER=5;; h7o) HPER=7;; *) echo "COMP must be one of h2o h2.25 h3o h5o h7o h (the compositions of data-h3o-convex-hull.csv)"; exit 1;; esac
-if [ "$COMP" = h ]; then VMAX=${VMAX:-8}; VMIN=${VMIN:-0.9}; PS=${PS:-0.5}; EQ=${EQ:-0.2}; PM_PS=0; NAT=${NATOMS:-729}; FU=1
-  SYS="--phase H --branch fluid --natoms $NAT"; DESC="pure H fluid, $NAT atoms (bcc start that melts)"
-else
-  # cell: bcc x NREP (2 NREP^3 O); default NREP = 3 or 4, whichever gives closer to 384 atoms (H2O 384, H2.25O 416, H3O 512, H5O 324, H7O 432)
-  [ -n "${NREP_SET:-}" ] || NREP=$(python3 -c "h=$HPER; print(min((3, 4), key=lambda n: abs(2 * n**3 * (1 + h) - 384)))")
-  NAT=$(python3 -c "print(int(2 * $NREP**3 + round($HPER * 2 * $NREP**3)))"); FU=$(python3 -c "print(1 + $HPER)")
-  # default volume range: ideal per-atom mixing of the H2O range (10 -> 1.75 A^3/atom) and the pure-H range (8 -> 0.9)
-  VMAX=${VMAX:-$(python3 -c "h=$HPER; print(round((3 * 10 + (h - 2) * 8) / (1 + h), 3))")}; VMIN=${VMIN:-$(python3 -c "h=$HPER; print(round((3 * 1.75 + (h - 2) * 0.9) / (1 + h), 3))")}; PS=${PS:-0.75}; EQ=${EQ:-0.25}; PM_PS=${PM_PS:-0.25}
-  SYS="--phase bcc --branch liquid --hper $HPER --nrep $NREP --premelt-T $PM_T --premelt-ps $PM_PS"; DESC="$COMP liquid (H/O = $HPER), $NAT atoms (bcc x$NREP start, premelt $PM_T K ${PM_PS} ps)"; fi
-NG=$(nvidia-smi -L 2>/dev/null | wc -l); [ "$NG" -ge 1 ] || { echo "no GPU visible"; exit 1; }; PER=${PER_GPU:-4}
-TAG=${TAG:-$(basename ${MODEL#*:})_${COMP}_${T}K_${NAT}at}; D=runs/eos_live/$TAG; mkdir -p $D
-VPA=$($PY -c "import numpy as np; print(' '.join(f'{v:.4f}' for v in np.geomspace($VMAX, $VMIN, $NV)))")
-echo "model $MODEL | $DESC | $T K | $NV volumes $VMAX -> $VMIN A^3/atom | equil $EQ ps, prod $PS ps, dt 0.5 fs | $NG GPU x $PER per GPU"
-# GPU per volume: cost ~ 1/vpa (neighbours per atom grow with density); most expensive first, each to the GPU with the least total cost so far (balances memory and finish time;
-# plain round-robin put the densest volume of every group of NG on the same GPU)
-GPUS=($($PY -c "
-v = [float(x) for x in '$VPA'.split()]; load = [0.0] * $NG; g = [0] * len(v)
-for i in sorted(range(len(v)), key=lambda i: v[i]):
-    j = min(range($NG), key=lambda j: load[j]); g[i] = j; load[j] += 1.0 / v[i]
-print(' '.join(map(str, g)))"))
-pids=(); k=0; slot=0
-for v in $VPA; do
-  if [ -e $D/$TAG.csv ] && grep -q ",$v," $D/$TAG.csv 2>/dev/null; then echo "  vpa $v already done"; k=$((k + 1)); continue; fi
-  g=${GPUS[$k]:-$((slot % NG))}; slot=$((slot + 1))
-  CUDA_VISIBLE_DEVICES=$g nohup $PY mlp_pipeline/17_eos_md.py $MODEL $SYS --T $T --vpa $v \
-      --equil-ps $EQ --ps $PS --report-fs 50 --tag $TAG --outdir $D > $D/log_$k.txt 2>&1 &
-  pids+=($!); echo "$k $g $v $!" >> $D/runs.txt; k=$((k + 1))
-  [ $((slot % (NG * PER))) -eq 0 ] && [ $slot -lt $NV ] && echo "  (more volumes than GPU slots: the rest start now too, PER_GPU is a soft limit here)"
-done
-trap 'echo; echo "interrupted: killing the MD processes"; kill ${pids[*]} 2>/dev/null; exit 1' INT
-$PY - "$D" "$TAG" "${REFRESH:-10}" "$EQ" "$PS" "$PM_PS" "$NG" "$T" "$COMP" "$FU" "$HPER" ${pids[*]} <<'EOF'
-import ast, csv, math, os, re, subprocess, sys, time
-D, TAG, REF, EQ, PS, PM, NG, TT, COMP, FU = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6]), int(sys.argv[7]), int(float(sys.argv[8])), sys.argv[9], float(sys.argv[10]); pids = [int(x) for x in sys.argv[12:]]
-HPER = float(sys.argv[11]); NAME = {"h2o": "H2O", "h": "H", "h2.25": "H2.25O", "h3o": "H3O", "h5o": "H5O", "h7o": "H7O"}.get(COMP, COMP)
-MPA = 1.008 if COMP == "h" else (15.999 + 1.008 * HPER) / (1 + HPER)      # molar mass per atom (g/mol)
-def dft_eos(T):
-    """(P GPa, V per formula unit A^3) of the DFT EOS of COMP at T from data-h3o-convex-hull.csv, sorted by P; [] if that T is not in the file"""
+NG=${NGPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}; [ "$NG" -ge 1 ] || { echo "no GPU visible"; exit 1; }
+exec $PY - "$MODEL" "$NG" <<'EOF'
+import ast, csv, math, os, re, shutil, signal, subprocess, sys, time
+import numpy as np
+MODEL, NG = sys.argv[1], int(sys.argv[2]); E = os.environ.get
+T = int(float(E("T", "7000"))); NV = int(E("NV", "16")); PER = int(E("PER_GPU", "4")); REF = float(E("REFRESH", "10")); PM_T = E("PM_T", "9000")
+COMPS = E("COMP", "h2o").split(); HPER = {"h": 0.0, "h2o": 2.0, "h2.25": 2.25, "h3o": 3.0, "h5o": 5.0, "h7o": 7.0}
+NAME = {"h2o": "H2O", "h": "H", "h2.25": "H2.25O", "h3o": "H3O", "h5o": "H5O", "h7o": "H7O"}
+bad = [c for c in COMPS if c not in HPER]
+if bad: sys.exit(f"COMP must be among {list(HPER)}; got {bad}")
+mname = os.path.basename(MODEL.split(":", 1)[-1].rstrip("/"))
+
+def dft_eos(comp):
     try: rows = list(csv.reader(open("data-h3o-convex-hull.csv")))
     except OSError: return []
     h = rows[0]
-    try: iP, iV = h.index(f"P {T}K {COMP}"), h.index(f"V {T}K {COMP} norm")
+    try: iP, iV = h.index(f"P {T}K {comp}"), h.index(f"V {T}K {comp} norm")
     except ValueError: return []
     out = []
     for r in rows[1:]:
         try: out.append((float(r[iP]), float(r[iV])))
         except (ValueError, IndexError): pass
     return sorted(out)
-DFT = dft_eos(TT)
-def p_dft(vfu):
-    """DFT pressure at V per formula unit by linear interpolation of log P in V (inside the DFT range only)"""
-    pts = sorted(DFT, key=lambda x: x[1])
+
+def p_dft(comp, vfu):
+    pts = sorted(DFT[comp], key=lambda x: x[1])
     for (P1, V1), (P2, V2) in zip(pts, pts[1:]):
         if V1 <= vfu <= V2 and V2 > V1: return math.exp(math.log(P1) + (math.log(P2) - math.log(P1)) * (vfu - V1) / (V2 - V1))
     return float("nan")
-runs = [l.split() for l in open(os.path.join(D, "runs.txt")) if l.strip()]
-runs = {int(r[0]): dict(gpu=r[1], vpa=float(r[2]), pid=int(r[3])) for r in runs if int(r[3]) in pids}
+
+# ---- composition settings and the job list
+C, jobs, DFT = {}, [], {}
+for c in COMPS:
+    h = HPER[c]; DFT[c] = dft_eos(c)
+    if c == "h":
+        nat = int(E("NATOMS", "729")); fu = 1.0; vmax, vmin = float(E("VMAX", "8")), float(E("VMIN", "0.9")); ps, eq, pm = float(E("PS", "0.5")), float(E("EQ", "0.2")), 0.0
+        sysargs = ["--phase", "H", "--branch", "fluid", "--natoms", str(nat)]; desc = f"pure H fluid, {nat} atoms"
+    else:
+        nrep = int(E("NREP")) if E("NREP") else min((3, 4), key=lambda n: abs(2 * n ** 3 * (1 + h) - 384))
+        nat = int(2 * nrep ** 3 + round(h * 2 * nrep ** 3)); fu = 1.0 + h
+        vmax = float(E("VMAX")) if E("VMAX") else round((3 * 10 + (h - 2) * 8) / (1 + h), 3); vmin = float(E("VMIN")) if E("VMIN") else round((3 * 1.75 + (h - 2) * 0.9) / (1 + h), 3)
+        ps, eq, pm = float(E("PS", "0.75")), float(E("EQ", "0.25")), float(E("PM_PS", "0.25"))
+        sysargs = ["--phase", "bcc", "--branch", "liquid", "--hper", f"{h:g}", "--nrep", str(nrep), "--premelt-T", PM_T, "--premelt-ps", str(pm)]; desc = f"{NAME[c]} liquid, {nat} atoms (premelt {PM_T} K {pm} ps)"
+    tag = f"{mname}_{c}_{T}K_{nat}at"; D = os.path.join("runs", "eos_live", tag); os.makedirs(D, exist_ok=True)
+    C[c] = dict(fu=fu, nat=nat, ps=ps, eq=eq, pm=pm, tag=tag, D=D, mpa=1.008 if c == "h" else (15.999 + 1.008 * h) / (1 + h))
+    done_v = set()
+    if os.path.exists(os.path.join(D, tag + ".csv")):
+        for r in csv.DictReader(open(os.path.join(D, tag + ".csv"))):
+            try: done_v.add(round(float(r["vpa"]), 4))
+            except (KeyError, ValueError): pass
+    print(f"{NAME[c]:7s} {desc} | {NV} volumes {vmax} -> {vmin} A^3/atom | equil {eq} + prod {ps} ps | DFT EOS {len(DFT[c])} points | {len(done_v)} volumes already done -> {D}")
+    for k, v in enumerate(np.geomspace(vmax, vmin, NV)):
+        v = round(float(v), 4)
+        if v in done_v: continue
+        steps = (pm + eq + ps) * 2000
+        jobs.append(dict(comp=c, k=k, vpa=v, log=os.path.join(D, f"log_{k}.txt"), cost=nat * steps * (0.5 + 4.0 / v), state="queued", pid=None, gpu=None, res=None,
+                         cmd=[sys.executable, "mlp_pipeline/17_eos_md.py", MODEL] + sysargs + ["--T", str(T), "--vpa", f"{v}", "--equil-ps", str(eq), "--ps", str(ps), "--report-fs", "50", "--tag", tag, "--outdir", D]))
+if not jobs: sys.exit("nothing to run (all volumes done)")
+jobs.sort(key=lambda j: -j["cost"])
+print(f"{len(jobs)} jobs queued on {NG} GPU x {PER} slots, most expensive first; model {MODEL}", flush=True)
+procs = {}
+
+def stop(*_):
+    for p in procs.values():
+        try: p.kill()
+        except Exception: pass
+    print("\ninterrupted: MD processes killed"); sys.exit(1)
+signal.signal(signal.SIGINT, stop); signal.signal(signal.SIGTERM, stop)
+
+def launch():
+    load = [0.0] * NG; cnt = [0] * NG
+    for j in jobs:
+        if j["state"] == "running": load[j["gpu"]] += j["cost"]; cnt[j["gpu"]] += 1
+    for j in jobs:
+        if j["state"] != "queued": continue
+        free = [g for g in range(NG) if cnt[g] < PER]
+        if not free: break
+        g = min(free, key=lambda g: (load[g], cnt[g]))
+        p = subprocess.Popen(j["cmd"], stdout=open(j["log"], "w"), stderr=subprocess.STDOUT, env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(g)))
+        procs[p.pid] = p; j.update(state="running", pid=p.pid, gpu=g); load[g] += j["cost"]; cnt[g] += 1
+
 STEP = re.compile(r"step (\d+)/(\d+)\s+\[(.*?), (\d+) pts\]\s+T (\d+) K\s+P ([-\d.]+) \+- ([-\w.]+) GPa\s+\(now T (\d+) P ([-\d.]+)\)\s+(\d+) ms/step")
-t0 = time.time(); lines_prev = 0; res = {}
-def alive(p):
-    try: os.kill(p, 0); return True
-    except OSError: return False
-def state(k):
-    f = os.path.join(D, f"log_{k}.txt"); txt = open(f, errors="ignore").read() if os.path.exists(f) else ""
-    st = dict(stage="loading", frac=0.0, T="", P="", Pe="", ms="", eta="")
+def update(j):
+    """parse the job's log: stage, progress fraction, T, P, error, ms/step, ETA; result dict and final state when the process has ended"""
+    c = C[j["comp"]]; txt = open(j["log"], errors="ignore").read() if os.path.exists(j["log"]) else ""
+    st = dict(stage="loading", frac=0.0, T="", P="", Pe="", ms="", eta=""); tot = c["pm"] + c["eq"] + c["ps"]
     if "premelt" in txt: st["stage"] = "premelt"
-    if "premelt done" in txt: st["stage"] = "equil"; st["frac"] = PM / (PM + EQ + PS)
+    if "premelt done" in txt: st.update(stage="equil", frac=c["pm"] / tot)
     m = STEP.findall(txt)
     if m:
-        s, n, ph, npts, T, P, Pe, Tn, Pn, ms = m[-1]; s, n = int(s), int(n)
-        st.update(stage="prod" if ph.startswith("prod") else "equil", frac=(PM + (EQ + PS) * s / n) / (PM + EQ + PS), T=T, P=P, Pe=Pe, ms=ms,
-                  eta=f"{(n - s) * int(ms) / 1000:.0f}s")
+        s, n, ph, npts, Tt, P, Pe, Tn, Pn, ms = m[-1]; s, n = int(s), int(n)
+        st.update(stage="prod" if ph.startswith("prod") else "equil", frac=(c["pm"] + (c["eq"] + c["ps"]) * s / n) / tot, T=Tt, P=P, Pe=Pe, ms=ms, eta=f"{(n - s) * int(ms) / 1000:.0f}s")
+    p = procs.get(j["pid"]); ended = p is not None and p.poll() is not None
     if "RESULT" in txt:
-        st["stage"] = "DONE"; st["frac"] = 1.0
-        r = txt.split("RESULT", 1)[1].strip().splitlines()[0]
-        r = re.sub(r"np\.\w+\(([^()]*)\)", r"\1", r)            # numpy 2 prints np.float64(0.1)
-        try: res[k] = ast.literal_eval(re.sub(r"\bnan\b", "None", r))
+        r = re.sub(r"np\.\w+\(([^()]*)\)", r"\1", txt.split("RESULT", 1)[1].strip().splitlines()[0])   # numpy 2 prints np.float64(...)
+        try: j["res"] = ast.literal_eval(re.sub(r"\bnan\b", "None", r))
         except Exception: pass
-    elif ("Traceback" in txt or "Error" in txt) and not alive(runs[k]["pid"]): st["stage"] = "FAILED: " + [l for l in txt.splitlines() if "Error" in l][-1][:60]
-    elif not alive(runs[k]["pid"]) and "RESULT" not in txt: st["stage"] = "DIED (see log)"
-    return st
-def pv_plot(pts, W=72, H=20, plo=5.0, phi=2000.0):
-    """plain-text V(P) plot: x = P (log, plo..phi GPa), y = V per H2O (linear); pts = (V_fu, P, mark): o finished liquid, x finished but frozen, * running, + DFT"""
-    allv = [v for v, P, m in pts] + [FU * r["vpa"] for r in runs.values()]; ylo, yhi = min(allv) * 0.95, max(allv) * 1.02
-    g = [[" "] * W for _ in range(H)]
-    for v, P, m in sorted(pts, key=lambda q: q[2] != "+"):          # DFT first, model marks drawn over it
-        if P is None or P != P: continue
-        c = int(round((math.log10(min(max(P, plo), phi)) - math.log10(plo)) / (math.log10(phi) - math.log10(plo)) * (W - 1)))
-        r = H - 1 - int(round((v - ylo) / (yhi - ylo) * (H - 1)))
-        if 0 <= r < H and 0 <= c < W: g[r][c] = m
-    out = [f"V per {NAME} (A^3) vs P (GPa, log):  o model liquid   x model, O froze   * model running   + DFT (data-h3o-convex-hull.csv, same T)"]
-    for r in range(H):
-        yv = yhi - (yhi - ylo) * r / (H - 1); out.append(f"{yv:6.1f} |" + "".join(g[r]) if r % 4 == 0 else "       |" + "".join(g[r]))
-    out.append(" " * 7 + "+" + "-" * W)
-    lab = [" "] * (W + 6)
-    for t in (10, 30, 100, 300, 1000):
-        c = int(round((math.log10(t) - math.log10(plo)) / (math.log10(phi) - math.log10(plo)) * (W - 1))); lab[c:c + len(str(t))] = list(str(t))
-    out.append(" " * 8 + "".join(lab) + " GPa")
-    return out
-def braille_plot(pts, cols=72, rows=18):
-    """dense braille V(P) plot (termplot.Canvas): x = log10 P, y = V per formula unit; DFT as a grey line, model points as coloured blocks; None if termplot is unavailable"""
-    try:
-        import numpy as np
-        from termplot import Canvas, frame, fg, PAL
-    except Exception: return None
-    good = [(v, P, m) for v, P, m in pts if P is not None and P == P and P > 0]
-    if not good: return None
-    xs = [math.log10(P) for v, P, m in good]; ys = [v for v, P, m in good]
-    xlo, xhi = min(xs) - 0.05, max(xs) + 0.05; ylo, yhi = min(ys) * 0.97, max(ys) * 1.03
-    cv = Canvas(cols, rows); X = lambda x: (x - xlo) / (xhi - xlo) * (cv.w - 1); Y = lambda y: (1 - (y - ylo) / (yhi - ylo)) * (cv.h - 1)
-    col = {"+": 11, "o": 1, "*": 3, "x": 4}
-    d = sorted((math.log10(P), v) for v, P, m in good if m == "+")
-    for (x0, y0), (x1, y1) in zip(d, d[1:]): cv.line(X(x0), Y(y0), X(x1), Y(y1), col["+"])
-    for v, P, m in good:
-        if m == "+": continue
-        x, y = X(math.log10(P)), Y(v); dd = np.array([-1, 0, 1]); gx, gy = np.meshgrid(dd, dd); cv.dots(x + gx.ravel(), y + gy.ravel(), col[m])
-    leg = "  ".join(fg(PAL[col[m]], "● " + t) for m, t in (("+", "DFT"), ("o", "model done"), ("*", "model running"), ("x", "model, O froze")) if any(q[2] == m for q in good))
-    return frame(cv, (xlo, xhi), (ylo, yhi), "log10 P (GPa)   [1 = 10, 2 = 100, 3 = 1000 GPa]", f"V per {NAME} (A^3)", f"{NAME} EOS at {TT} K: model vs DFT", legend=leg).split("\n")
-def proc_gpus():
-    """{pid: GPU index} from nvidia-smi (the GPU each MD process really runs on), {} if unavailable"""
-    try:
-        idx = {b.strip(): a.strip() for a, b in (l.split(",") for l in subprocess.run(["nvidia-smi", "--query-gpu=index,gpu_bus_id", "--format=csv,noheader"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines())}
-        apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_bus_id", "--format=csv,noheader"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
-        return {int(a): idx.get(b.strip(), "?") for a, b in (l.split(",") for l in apps if l.strip())}
-    except Exception: return {}
-VIS = re.compile(r"\x1b\[[0-9;]*m")
-def fit(line, w):
-    """cut a line to w visible characters (ANSI colour codes do not count) so the terminal never wraps it (wrapping breaks the in-place refresh)"""
-    if len(VIS.sub("", line)) <= w: return line
-    out, n, i = "", 0, 0
-    while i < len(line) and n < w:
-        m = VIS.match(line, i)
-        if m: out += m.group(0); i = m.end(); continue
-        out += line[i]; n += 1; i += 1
-    return out + "\x1b[0m"
+        st.update(stage="DONE", frac=1.0)
+        if ended: j["state"] = "done"
+    elif ended:
+        err = [l for l in txt.splitlines() if "Error" in l]; j["state"] = "failed"; st["stage"] = "FAILED: " + (err[-1][:70] if err else f"exit {p.returncode} (see {j['log']})")
+    j["st"] = st
+
 def gpus():
     try:
         o = subprocess.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout
-        return "  ".join(f"GPU{a.strip()} {b.strip():>3s}% {int(c) / 1024:.1f}/{int(d) / 1024:.0f}G" for a, b, c, d in (l.split(",") for l in o.strip().splitlines()))
+        return "  ".join(f"GPU{a.strip()} {b.strip():>3s}% {int(cc) / 1024:.0f}/{int(d) / 1024:.0f}G" for a, b, cc, d in (l.split(",") for l in o.strip().splitlines()))
     except Exception: return "(nvidia-smi unavailable)"
+
+VIS = re.compile(r"\x1b\[[0-9;]*m")
+def fit(line, w):
+    """cut to w visible characters (colour codes do not count): a wrapped line breaks the in-place refresh"""
+    if len(VIS.sub("", line)) <= w: return line
+    out, n, i = "", 0, 0
+    while i < len(line) and n < w:
+        mm = VIS.match(line, i)
+        if mm: out += mm.group(0); i = mm.end(); continue
+        out += line[i]; n += 1; i += 1
+    return out + "\x1b[0m"
+
+CI = [1, 2, 3, 4, 5, 6]                                                    # termplot palette slots per composition; DFT lines grey (11)
+def plot():
+    try: from termplot import Canvas, frame, fg, PAL
+    except Exception: return []
+    pts = []
+    for i, c in enumerate(COMPS):
+        for P, V in DFT[c]: pts.append((math.log10(P), V, i, "dft"))
+    for j in jobs:
+        ci = COMPS.index(j["comp"]); fu = C[j["comp"]]["fu"]
+        if j["res"]: pts.append((math.log10(max(j["res"]["P_GPa"], 1e-3)), fu * j["vpa"], ci, "done"))
+        elif j.get("st", {}).get("P"):
+            try: pts.append((math.log10(max(float(j["st"]["P"]), 1e-3)), fu * j["vpa"], ci, "run"))
+            except ValueError: pass
+    if not pts: return []
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; xlo, xhi = min(xs) - 0.05, max(xs) + 0.05; ylo, yhi = min(ys) * 0.95, max(ys) * 1.03
+    cv = Canvas(72, 18); X = lambda x: (x - xlo) / (xhi - xlo) * (cv.w - 1); Y = lambda y: (1 - (y - ylo) / (yhi - ylo)) * (cv.h - 1)
+    for i in range(len(COMPS)):
+        d = sorted((x, y) for x, y, ci, k in pts if ci == i and k == "dft")
+        for (x0, y0), (x1, y1) in zip(d, d[1:]): cv.line(X(x0), Y(y0), X(x1), Y(y1), 11)
+    for x, y, ci, k in pts:
+        if k == "dft": continue
+        dd = np.array([-1, 0, 1]) if k == "done" else np.array([0]); gx, gy = np.meshgrid(dd, dd); cv.dots(X(x) + gx.ravel(), Y(y) + gy.ravel(), CI[ci % 6])
+    leg = "  ".join(fg(PAL[CI[i % 6]], "● " + NAME[c]) for i, c in enumerate(COMPS)) + "  " + fg(PAL[11], "— DFT") + "   (block = done, dot = running)"
+    return frame(cv, (xlo, xhi), (ylo, yhi), "log10 P (GPa)   [1 = 10, 2 = 100, 3 = 1000 GPa]", "V per formula unit (A^3)", f"EOS at {T} K: model vs DFT", legend=leg).split("\n")
+
+t0 = time.time(); prev = 0
 while True:
-    out = [f"{TAG}   elapsed {time.time() - t0:5.0f} s   {gpus()}",
-           f"{'k':>2s} {'gpu':>3s} {'vpa':>6s}  {'progress':22s} {'stage':10s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'ms/st':>5s} {'ETA':>6s}"]
-    done = 0; pts = [(V, P, "+") for P, V in DFT]; pg = proc_gpus()
-    for k in sorted(runs):
-        st = state(k)
-        if k in res: r = res[k]; pts.append((FU * r["vpa"], r["P_GPa"], "x" if COMP != "h" and (r.get("D_O_cm2s") or 0) < 2e-6 else "o"))
-        elif st["P"]: pts.append((FU * runs[k]["vpa"], float(st["P"]), "*"))
-        done += st["stage"] in ("DONE",) or st["stage"].startswith(("FAILED", "DIED"))
-        bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
-        pd_ = p_dft(FU * runs[k]["vpa"]); pn = res[k]["P_GPa"] if k in res else (float(st["P"]) if st["P"] else float("nan"))
-        dps = f"{100 * (pn - pd_) / pd_:+6.1f}" if pd_ == pd_ and pn == pn else f"{'':>6s}"
-        out.append(f"{k:2d} {pg.get(runs[k]['pid'], runs[k]['gpu'] + '?' if pg else runs[k]['gpu']):>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
-                   + (f"   {st['stage'][10:]}" if st["stage"].startswith(("FAILED", "DIED")) else ""))
-    bp = braille_plot(pts) if os.environ.get("PLOT", "braille") == "braille" else None
-    out += [""] + (bp or pv_plot(pts))
-    import shutil; tw = max(40, shutil.get_terminal_size((160, 50)).columns - 1); out = [fit(l, tw) for l in out]
-    if lines_prev: sys.stdout.write(f"\x1b[{lines_prev}A")
-    sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n"); sys.stdout.flush(); lines_prev = len(out)
-    if done == len(runs): break
+    launch()
+    for j in jobs:
+        if j["state"] == "running": update(j)                              # update() also sets done / failed when the process has ended
+    sz = shutil.get_terminal_size((160, 50)); tw, th = max(40, sz.columns - 1), sz.lines
+    out = [f"elapsed {time.time() - t0:5.0f} s   {gpus()}"]
+    for c in COMPS:
+        js = [j for j in jobs if j["comp"] == c]; n = lambda s: sum(1 for j in js if j["state"] == s)
+        out.append(f"  {NAME[c]:7s} done {n('done'):2d}  running {n('running'):2d}  queued {n('queued'):2d}  failed {n('failed'):2d}   -> {C[c]['D']}")
+    out.append(f"{'comp':7s} {'vpa':>6s} {'gpu':>3s}  {'progress':22s} {'stage':8s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'ms/st':>5s} {'ETA':>6s}")
+    for j in [j for j in jobs if j["state"] == "running"] + [j for j in jobs if j["state"] == "failed"]:
+        st = j.get("st") or dict(stage="loading", frac=0, T="", P="", Pe="", ms="", eta=""); c = j["comp"]; pd_ = p_dft(c, C[c]["fu"] * j["vpa"])
+        try: pn = float(st["P"])
+        except ValueError: pn = float("nan")
+        dps = f"{100 * (pn - pd_) / pd_:+6.1f}" if pd_ == pd_ and pn == pn else f"{'':6s}"; bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
+        out.append(f"{NAME[c]:7s} {j['vpa']:6.3f} {j['gpu']:>3d}  [{bar}] {st['stage'][:8]:8s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
+                   + (f"  {st['stage']}" if st["stage"].startswith("FAILED") else ""))
+    if E("PLOT", "braille") == "braille": out += [""] + plot()
+    out = [fit(l, tw) for l in out][: max(10, th - 2)]                     # never wider or taller than the terminal
+    if prev: sys.stdout.write(f"\x1b[{prev}A")
+    sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n\x1b[J"); sys.stdout.flush(); prev = len(out)
+    if all(j["state"] in ("done", "failed") for j in jobs): break
     time.sleep(REF)
-print(f"\nall {len(runs)} runs finished in {time.time() - t0:.0f} s\n")
-rows = sorted(res.values(), key=lambda r: -r["vpa"])
-def flags(r, T0):
+
+# ---- final tables with flags, throughput
+print(f"\nall {len(jobs)} jobs finished in {time.time() - t0:.0f} s")
+def flags(r, comp):
     f = []
-    if COMP != "h" and (r.get("D_O_cm2s") or 0) < 2e-6: f.append("FROZE")
-    if (r.get("dmin_HH") or 9) < 0.25: f.append("COLLAPSE(HH<0.25)")
+    if comp != "h" and (r.get("D_O_cm2s") or 0) < 2e-6: f.append("FROZE")
+    if (r.get("dmin_HH") or 9) < 0.25: f.append("COLLAPSE")
     elif (r.get("frac_HH_below_0p5") or 0) > 0.05: f.append("CLOSE-HH")
-    if abs(r["T_mean"] - T0) > 0.05 * T0: f.append("T-off")
+    if abs(r["T_mean"] - T) > 0.05 * T: f.append("T-off")
     if r.get("P_block_sd") and abs(r.get("P_drift_GPa") or 0) > 3 * r["P_block_sd"] and abs(r.get("P_drift_GPa") or 0) > 0.01 * abs(r["P_GPa"]): f.append("P-drift")
     return ",".join(f) or "ok"
-print(f"{'vpa':>6s} {'V/fu':>6s} {'rho g/cc':>8s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP %':>6s} {'T K':>6s} {'D_O cm2/s':>10s} {'D_H cm2/s':>10s} {'O lattice':>10s} {'dL':>5s} {'dHH':>5s} {'dOH':>5s} {'ms/step':>7s}  flags")
-for r in rows:
-    rho = MPA / r["vpa"] / 0.60221; pd_ = p_dft(FU * r["vpa"])
-    print(f"{r['vpa']:6.3f} {FU * r['vpa']:6.2f} {rho:8.3f} {r['P_GPa']:8.1f} {r['P_sem']:5.1f} {pd_:7.1f} {100 * (r['P_GPa'] - pd_) / pd_:+6.1f} {r['T_mean']:6.0f} "
-          f"{r.get('D_O_cm2s') or float('nan'):10.2e} {r.get('D_H_cm2s') or float('nan'):10.2e} {str(r.get('O_struct', '')):>10s} {r.get('delta_L') or float('nan'):5.2f} {r.get('dmin_HH') or float('nan'):5.2f} {r.get('dmin_OH') or float('nan'):5.2f} {r['ms_per_step']:7.0f}  {flags(r, TT)}")
-print(f"P_DFT: DFT {NAME} EOS at {TT} K (data-h3o-convex-hull.csv: {len(DFT)} points, {min(p for p, v in DFT):.0f}-{max(p for p, v in DFT):.0f} GPa) interpolated at the same V; nan outside its range" if DFT else f"(no DFT {NAME} EOS at {TT} K in data-h3o-convex-hull.csv)")
-print("flags: FROZE (D_O < 2e-6: O lattice survived, not a liquid point), COLLAPSE (an H-H pair fused < 0.25 A: GRACE short-range hole, point invalid), CLOSE-HH (>5 % of frames with H-H < 0.5 A),"
-      " T-off (mean T > 5 % from target: P biased), P-drift (last - first fifth of production > 3 block sd and > 1 %: not equilibrated); dHH/dOH = closest contacts over production (A)")
-if COMP != "h": print("D_O ~1e-5 cm2/s or more: liquid; D_O ~0 with a lattice label: the liquid froze into a solid (O_struct / dL Lindemann ratio) at this volume -> not a liquid EOS point")
+for c in COMPS:
+    rows = sorted([j for j in jobs if j["comp"] == c and j["res"]], key=lambda j: -j["vpa"]); fu = C[c]["fu"]
+    print(f"\n{NAME[c]} at {T} K ({C[c]['nat']} atoms)   table: {os.path.join(C[c]['D'], C[c]['tag'] + '.csv')}")
+    print(f"{'vpa':>6s} {'V/fu':>6s} {'rho':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'T K':>6s} {'D_O':>9s} {'D_H':>9s} {'O latt':>8s} {'dHH':>5s} {'dOH':>5s} {'ms/st':>5s}  flags")
+    for j in rows:
+        r = j["res"]; pd_ = p_dft(c, fu * j["vpa"]); rho = C[c]["mpa"] / j["vpa"] / 0.60221
+        print(f"{j['vpa']:6.3f} {fu * j['vpa']:6.2f} {rho:6.3f} {r['P_GPa']:8.1f} {r['P_sem']:5.1f} {pd_:7.1f} {100 * (r['P_GPa'] - pd_) / pd_:+6.1f} {r['T_mean']:6.0f} "
+              f"{r.get('D_O_cm2s') or float('nan'):9.1e} {r.get('D_H_cm2s') or float('nan'):9.1e} {str(r.get('O_struct') or ''):>8s} {r.get('dmin_HH') or float('nan'):5.2f} {r.get('dmin_OH') or float('nan'):5.2f} {r['ms_per_step']:5.0f}  {flags(r, c)}")
+    for j in [j for j in jobs if j["comp"] == c and j["state"] == "failed"]: print(f"  FAILED vpa {j['vpa']}: {j['st']['stage']}  (log {j['log']})")
+print("\nflags: FROZE (O lattice survived: not a liquid point), COLLAPSE (H-H pair < 0.25 A: GRACE short-range hole, invalid), CLOSE-HH (> 5 % of frames with H-H < 0.5 A),"
+      " T-off (mean T > 5 % off target), P-drift (not equilibrated); D in cm^2/s, contacts in A")
 by = {}
-for k, r in res.items(): by.setdefault(runs[k]["gpu"], []).append(1000.0 / r["ms_per_step"])
-print("MD throughput (steps/s, sum over the processes that shared a GPU): " + ", ".join(f"GPU{g}: {sum(v):.1f} ({len(v)} procs, {sum(v) / len(v):.1f} each)" for g, v in sorted(by.items())))
-print("for comparison (2026-10-31, 324 atoms, ft_m2): 1/2/4/8 procs per GPU = 5.8/11.5/21/20 steps/s per GPU")
-try:
-    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    if DFT: ax.plot([p for p, v in DFT], [v for p, v in DFT], "s", color="#e34948", mec="k", label=f"DFT {NAME} {TT} K")
-    liq = [r for r in rows if COMP == "h" or (r.get("D_O_cm2s") or 0) >= 2e-6]; fro = [r for r in rows if COMP != "h" and (r.get("D_O_cm2s") or 0) < 2e-6]
-    ax.errorbar([r["P_GPa"] for r in liq], [FU * r["vpa"] for r in liq], xerr=[r["P_sem"] for r in liq], fmt="o-", color="#2a78d6", label=f"{TAG.split('_h2o')[0]} (liquid)")
-    if fro: ax.plot([r["P_GPa"] for r in fro], [FU * r["vpa"] for r in fro], "x", color="#2a78d6", ms=9, label="model, O froze")
-    ax.set_xscale("log"); ax.set_xlabel("P (GPa)"); ax.set_ylabel(f"V per {NAME} (A^3)"); ax.set_title(f"{NAME} fluid EOS at {TT} K", loc="left"); ax.grid(True, color="#eee"); ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout(); fig.savefig(os.path.join(D, TAG + ".png"), dpi=140); print("figure:", os.path.join(D, TAG + ".png"))
-except Exception as e: print("(no figure:", e, ")")
-print(f"table: {os.path.join(D, TAG + '.csv')}   per-volume logs: {D}/log_<k>.txt")
+for j in jobs:
+    if j["res"]: by.setdefault(j["gpu"], []).append(C[j["comp"]]["nat"] * 1000.0 / j["res"]["ms_per_step"])
+print("MD speed per run (atom-steps/s, mean over the runs on each GPU, with PER_GPU sharing it): " + ", ".join(f"GPU{g}: {sum(v) / len(v) / 1000:.1f}k x {PER}" for g, v in sorted(by.items())))
+print(f"all compositions on one figure: python3 mlp_pipeline/plot_eos_all.py --T {T} --model {mname}")
 EOF
