@@ -76,6 +76,7 @@ A short continued fine-tune of the best model (F10 control, or F200 if the contr
 - 10 other branches fully merged; deleting them was offered, not done.
 
 ## 8. New / changed scripts this session (all on the branch)
+**Entry point for running things: `bash run.sh <task> key=value` (tasks eos, eos_plot, tdi, tdi_bench, finetune, score, dft, kpt), documented with examples in docs/RECIPES.md.** TDI throughput benchmark: `tdi_bench_layout.sh`. Literature EOS: `docs/data/french2009_h2o_eos.csv` (in plot_eos_all), Gupta critical curve `docs/data/gupta2024_critical_curve.csv`.
 `final_db_check.sh` (inventory), `points_collect.py` (SCF-convergence skip + health table), `build_tier.py` (unchanged; used with --fmax 60), `plot_training_data.py`, `ft_series_cmds.sh final`, `ft_submit.sh` (`GPUS=2`, `MEM`), `phase_diagram_examples.py` (+ `--hulls`), `kpoint_check.py` (forces/stress + timing, `--time-ref`), `kpt_bench.sh`, `kpt_select.py`, `kpt_relabel.sh` (`MESH=mp222`, `KPAR`), `kpt_sanity.py`, `dgcheck_jobs.sh` (`EXE`, full test-only reply, policy-error note), `17_eos_md.py` (`--report-fs`, premelt progress, H/O > 4 builder, contacts + drift in the result row), `eos_live.sh` (job queue), `plot_eos_all.py` (+ `--dft-frames`). Also: `CLAUDE.md` (permanent rules), `requirements-cloud.txt`; a personal cloud environment "widom-calculator" (setup script installs requirements-cloud.txt; PyPI + GitHub reachable) was created 2026-11-06 for future sessions on this repo; `main` still lacks these files until it is fast-forwarded.
 
 ## 9. Next steps (priority order)

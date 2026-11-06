@@ -1,6 +1,6 @@
 # widom-calculator: working rules (loaded automatically in every Claude Code session)
 
-Current state, open items and next steps: **docs/HANDOFF.md** (read it first). This file holds only the rules that do not change from task to task.
+Current state, open items and next steps: **docs/HANDOFF.md** (read it first). How to run each calculation: **docs/RECIPES.md** (entry point `bash run.sh <task> key=value ...`; when the user asks for a calculation in key=value form, answer with the matching `run.sh` line, and keep RECIPES.md / run.sh up to date when a script's interface changes). This file holds only the rules that do not change from task to task.
 
 ## Who runs what
 - The user runs everything on **NERSC Perlmutter** (checkout `~/work/H3O` = `/pscratch/sd/v/victornr/H3O`, user `victornr`, python `PY=/pscratch/sd/v/victornr/grace-env/bin/python`, accounts `m3349` CPU / `m3349_g` GPU; interactive 4x A100 nodes up to ~2 h; VASP 5.4.4 CPU via `VASP_MODULE=vasp/5.4.4-cpu`).
