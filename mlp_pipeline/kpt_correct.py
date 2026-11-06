@@ -55,6 +55,26 @@ def T_el(info):
     return max(T, 1000.0) if T == T else 5000.0
 
 
+def force_change(g, f):
+    """rms of F_k - F_Gamma over atoms (eV/A) and the rms Gamma force, atoms matched by species + minimum-image position (VASP reorders species); (nan, nan) if no match"""
+    from ase.geometry import get_distances
+    idx = np.full(len(f), -1)
+    for z in set(f.numbers):
+        a_, b_ = np.nonzero(f.numbers == z)[0], np.nonzero(g.numbers == z)[0]
+        if len(a_) != len(b_): return float("nan"), float("nan")
+        D = get_distances(f.positions[a_], g.positions[b_], cell=g.cell, pbc=True)[1]; j = D.argmin(axis=1)
+        if D[np.arange(len(a_)), j].max() > 2e-3: return float("nan"), float("nan")
+        idx[a_] = b_[j]
+    try: Fg = g.get_forces()[idx]; Fk = f.get_forces()
+    except Exception: return float("nan"), float("nan")
+    return float(np.sqrt(((Fk - Fg) ** 2).mean())), float(np.sqrt((Fg ** 2).mean()))
+
+
+def per_added_H(c, nO, nH, V, T):
+    """shift of the energy of one added H implied by the fit (meV per H): N de at (nO, nH + 1, V) minus at (nO, nH, V), MP level"""
+    e1 = (nO + nH + 1) * float(feats(nO, nH + 1, V, T, 1.0)[0] @ c); e0 = (nO + nH) * float(feats(nO, nH, V, T, 1.0)[0] @ c); return e1 - e0
+
+
 def ridge(X, y, w, lam=1e-6):
     W = np.sqrt(w)[:, None]; A = X * W; b = y * W[:, 0]
     return np.linalg.solve(A.T @ A + lam * np.eye(X.shape[1]), A.T @ b)
@@ -74,7 +94,9 @@ def cmd_fit(a):
         Pg = -np.trace(g.get_stress(voigt=False)) / 3 * GPA; Pk = -np.trace(f.get_stress(voigt=False)) / 3 * GPA
         mp = mesh_of(f.info); mp = 1.0 if mp is None else mp
         phi, x, n, t, h = feats(nO, nH, V, T, mp)
-        rows.append(dict(src=src, grp=group(g.info), cls=comp_class(nO, nH), N=N, phi=phi, x=x, n=n, t=t, h=h, mp=mp, de=1000 * (Ek - Eg) / N, dP=Pk - Pg))
+        dF, Frms = force_change(g, f)
+        # shift per added H implied by the fit is evaluated after the fit (needs the coefficients): keep the state
+        rows.append(dict(src=src, grp=group(g.info), cls=comp_class(nO, nH), N=N, nO=nO, nH=nH, V=V, T=T, P=Pg, phi=phi, x=x, n=n, t=t, h=h, mp=mp, de=1000 * (Ek - Eg) / N, dP=Pk - Pg, dF=dF, Frms=Frms))
     if len(rows) < 15: sys.exit(f"only {len(rows)} matched frames (k labels with a Gamma partner by kpt_src): check the two files")
     X = np.array([r["phi"] for r in rows]); y = np.array([r["de"] for r in rows]); w = np.array([1.0 for r in rows])
     nmp = sum(r["mp"] for r in rows); print(f"meshes: {int(nmp)} Monkhorst-Pack, {len(rows) - int(nmp)} Gamma-centred labels" + ("" if 0 < nmp < len(rows) else " (one mesh only: the mesh terms are inert)"))
@@ -99,6 +121,22 @@ def cmd_fit(a):
         if tr.sum() < 15 or (~tr).sum() < 2: continue
         cg = ridge(X[tr], y[tr], w[tr]); e = y[~tr] - X[~tr] @ cg
         print(f"  {gname:16s} n {int((~tr).sum()):3d}: mean {e.mean():+6.2f}  sd {e.std():5.2f}  max |e| {np.abs(e).max():5.2f}")
+    for r in rows:
+        r["cH"] = per_added_H(c, r["nO"], r["nH"], r["V"], r["T"])
+        r["cHref"] = r["cH"] - float(feats(0, 729, 729 / r["n"], r["T"], 1.0)[0] @ c)     # minus the per-atom shift of pure H at the same density and T (the insertion reference; rough: pure H at the same P is denser)
+    print("\nshift per added H implied by the fit (meV/H, sign E_k - E_Gamma), raw and relative to pure H at the same density and T (the k-point test: c_bias = -53 meV/H for H2O -> H2.25O at 500 GPa,"
+          " 5000 K, defined Gamma - mesh relative to the pure-H reservoir, i.e. about +53 in this sign):")
+    byc = collections.defaultdict(list)
+    byr = collections.defaultdict(list)
+    for r in rows:
+        if r["nO"]: byc[r["cls"]].append(r["cH"]); byr[r["cls"]].append(r["cHref"])
+    for k_, v in sorted(byc.items()): print(f"  {k_:16s} n {len(v):3d}: raw mean {np.mean(v):+7.1f} (range {min(v):+.1f}..{max(v):+.1f}); relative to pure H {np.mean(byr[k_]):+7.1f} (range {min(byr[k_]):+.1f}..{max(byr[k_]):+.1f})")
+    fd = [r for r in rows if r["dF"] == r["dF"]]
+    if fd:
+        print("force change F_k - F_Gamma (rms over atoms; the correction leaves forces at Gamma level):")
+        byf = collections.defaultdict(list)
+        for r in fd: byf[r["cls"]].append((r["dF"], r["dF"] / max(r["Frms"], 1e-9)))
+        for k_, v in sorted(byf.items()): v = np.array(v); print(f"  {k_:16s} n {len(v):3d}: {v[:, 0].mean():.3f} eV/A ({100 * v[:, 1].mean():.1f} % of the rms force), max {v[:, 0].max():.3f}")
     rng = {k: [float(min(r[k] for r in rows)), float(max(r[k] for r in rows))] for k in ("x", "n", "t")}
     rngH = {k: [float(min(r[k] for r in rows if r["h"])), float(max(r[k] for r in rows if r["h"]))] for k in ("n", "t")} if any(r["h"] for r in rows) else None
     print(f"\ncovered: x {rng['x'][0]:.3f}-{rng['x'][1]:.3f}, n {rng['n'][0]:.3f}-{rng['n'][1]:.3f} atoms/A^3, T_el {1e4 * rng['t'][0]:.0f}-{1e4 * rng['t'][1]:.0f} K" + (f"; pure H n {rngH['n'][0]:.3f}-{rngH['n'][1]:.3f}" if rngH else ""))
@@ -114,6 +152,25 @@ def cmd_fit(a):
         ax[1].axhline(0, color="k", lw=0.6); ax[1].set_xlabel("H atom fraction x"); ax[1].set_ylabel("residual (meV/atom)")
         lp = [min(dPm.min(), dPp.min()), max(dPm.max(), dPp.max())]; ax[2].plot(lp, lp, "k-", lw=0.6); ax[2].set_xlabel("measured P_k - P_Gamma (GPa)"); ax[2].set_ylabel("dP = n^2 d(de)/dn from the energy fit (GPa)")
         fig.savefig(out + ".png", dpi=130); print("figure:", out + ".png")
+        # maps: the correction in P, T and composition space, the fitted surface, the shift per added H, the force change
+        fig, ax = plt.subplots(2, 3, figsize=(15, 8.5), constrained_layout=True)
+        P_ = np.array([max(r["P"], 1.0) for r in rows]); T_ = np.array([r["T"] for r in rows]); x_ = np.array([r["x"] for r in rows])
+        sc = ax[0, 0].scatter(P_, y, c=x_, cmap="viridis", s=18, edgecolor="k", lw=0.2); ax[0, 0].set_xscale("log"); ax[0, 0].set_xlabel("P (GPa, DFT Gamma label)"); ax[0, 0].set_ylabel("E_k - E_Gamma (meV/atom)"); fig.colorbar(sc, ax=ax[0, 0], label="H atom fraction")
+        sc = ax[0, 1].scatter(P_, T_, c=y, cmap="RdBu_r", s=26, edgecolor="k", lw=0.2, vmin=-max(abs(y)), vmax=max(abs(y))); ax[0, 1].set_xscale("log"); ax[0, 1].set_xlabel("P (GPa)"); ax[0, 1].set_ylabel("T_el (K)"); fig.colorbar(sc, ax=ax[0, 1], label="E_k - E_Gamma (meV/atom)")
+        sc = ax[0, 2].scatter(x_, y, c=np.log10(P_), cmap="plasma", s=18, edgecolor="k", lw=0.2); ax[0, 2].set_xlabel("H atom fraction (2/3 = H2O, 1 = pure H)"); ax[0, 2].set_ylabel("E_k - E_Gamma (meV/atom)"); fig.colorbar(sc, ax=ax[0, 2], label="log10 P")
+        xs = np.linspace(2 / 3, 0.9, 60); ns = np.linspace(rng["n"][0], rng["n"][1], 60); XX, NN = np.meshgrid(xs, ns)
+        ZZ = np.array([[float(np.array([1, xx, xx * xx, nn, nn * xx, nn * nn, 0.6, 0.6 * xx, 0, 0, 0, 1, xx, 0]) @ c) for xx in xs] for nn in ns])
+        cs = ax[1, 0].contourf(XX, NN, ZZ, 20, cmap="RdBu_r"); fig.colorbar(cs, ax=ax[1, 0], label="fitted de at 6000 K (meV/atom)"); ax[1, 0].scatter([r["x"] for r in rows if not r["h"]], [r["n"] for r in rows if not r["h"]], s=8, color="k")
+        ax[1, 0].set_xlabel("H atom fraction"); ax[1, 0].set_ylabel("n (atoms/A^3)"); ax[1, 0].set_title("fitted surface (mixtures, T_el 6000 K) + the 300 frames", fontsize=8, loc="left")
+        for k_, col in zip(sorted(byc), ["#2a78d6", "#1baf7a", "#eb6834", "#6250d6"]):
+            rr = [r for r in rows if r["cls"] == k_]; ax[1, 1].scatter([max(r["P"], 1) for r in rr], [r["cHref"] for r in rr], s=16, color=col, label=k_)
+        ax[1, 1].axhline(53, color="gray", ls="--", lw=0.8); ax[1, 1].text(0.02, 0.04, "k-point test: c_bias 53 meV/H in this sign (500 GPa, 5000 K)", transform=ax[1, 1].transAxes, fontsize=7, color="gray")
+        ax[1, 1].set_xscale("log"); ax[1, 1].set_xlabel("P (GPa)"); ax[1, 1].set_ylabel("shift per added H rel. to pure H (meV/H)"); ax[1, 1].legend(fontsize=7, frameon=False)
+        if fd:
+            for k_, col in zip(sorted({r["cls"] for r in fd}), ["#2a78d6", "#1baf7a", "#eb6834", "#6250d6", "#8a5a2b"]):
+                rr = [r for r in fd if r["cls"] == k_]; ax[1, 2].scatter([max(r["P"], 1) for r in rr], [100 * r["dF"] / max(r["Frms"], 1e-9) for r in rr], s=16, color=col, label=k_)
+            ax[1, 2].set_xscale("log"); ax[1, 2].set_xlabel("P (GPa)"); ax[1, 2].set_ylabel("rms |F_k - F_Gamma| / rms F (%)"); ax[1, 2].legend(fontsize=7, frameon=False)
+        fig.savefig(out + "_maps.png", dpi=130); print("figure:", out + "_maps.png")
     except Exception as e: print("(no figure:", e, ")")
     print("model:", out + ".json")
 

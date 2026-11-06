@@ -47,6 +47,15 @@ Common keys: `model=` (a run name like `mfin_f_lr1e-2_e50` or a full `grace-ft:.
 - keys: `frames`, `outd` (required), `template` (vasp_inputs; a k-mesh template for k-point labels), `exe` (vasp_gam; vasp_std for k-meshes), `nodes` (8 jobs), `minutes` (170), `submit` (0 = prepare only).
 - 4 lanes x 32 ranks per node; a resubmission resumes unfinished points; collect with `points_collect.py` (skips unconverged SCF, prints a health table).
 
+### VASP cost per snapshot (measured 2026-11-06, 32 MPI ranks per point, 4 points per CPU node)
+| cell | Gamma-only label (vasp_gam) | 2x2x2 Gamma-centred (8 k, vasp_std) | 2x2x2 Monkhorst-Pack (4 k, vasp_std) |
+|---|---|---|---|
+| <= 260 atoms | ~1 min | 9 min | 3 min |
+| 261-450 atoms | ~1.5 min (87 s for 324-352) | 24 min (median 22) | 12 min (median 11.5) |
+| 451-600 atoms | ~3 min (est.) | 33 min | 14.5 min |
+| > 600 atoms (pure H 686-729) | ~3-4 min | 35 min | 13-30 min (3 points) |
+The 300-frame relabel cost 28.5 CPU node-hours (225 Gamma-centred + 75 MP points). A full MP 2x2x2 relabel of the 5143 training + validation frames: ~290 node-hours (scaled ~atoms^2).
+
 ### kpt — k-point relabelling of a stratified frame selection (login)
 `bash run.sh kpt n=300 outd=runs/kpt222mp submit=1`
 - MP 2x2x2 (4 k-points, 1.8x faster than Gamma-centred, as accurate), KPAR 1; keys `mesh` (mp222 | g222), `kpar`, `n`, `outd`, `nodes` (20), `minutes` (120), `submit`.
