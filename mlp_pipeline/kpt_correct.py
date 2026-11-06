@@ -183,7 +183,8 @@ def cmd_apply(a):
         fr = read(p, index=":"); out = []; shift = collections.defaultdict(list); extrap = collections.Counter()
         for f in fr:
             nO, nH = int((f.numbers == 8).sum()), int((f.numbers == 1).sum()); N = len(f); V = f.get_volume(); T = T_el(f.info)
-            phi, x, n, t, h = feats(nO, nH, V, T, 1.0); de = float(phi @ c)   # corrected to the MP 2x2x2 level; dP = n ** 2 * float(dfeat_dn(x, n, t, h) @ c) / 1000 * GPA
+            phi, x, n, t, h = feats(nO, nH, V, T, 1.0); de = float(phi @ c)   # corrected to the MP 2x2x2 level
+            dP = n ** 2 * float(dfeat_dn(x, n, t, h) @ c) / 1000 * GPA
             outside = not (rng["x"][0] - 0.02 <= x <= rng["x"][1] + 0.02 and rng["n"][0] * 0.97 <= n <= rng["n"][1] * 1.03 and rng["t"][0] - 0.05 <= t <= rng["t"][1] + 0.05)
             if h and rngH: outside = outside or not (rngH["n"][0] * 0.97 <= n <= rngH["n"][1] * 1.03)
             if outside: extrap[group(f.info)] += 1
