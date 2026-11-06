@@ -11,7 +11,7 @@
 # EXE (vasp_gam): VASP executable; vasp_std for k-point meshes (kpt_relabel.sh)
 # slurm: ACCT (m3349), QOS (regular), CPT (cpus-per-task, 1 = the header of perlmutter_dft_pwidom.sbatch, which is known to submit), SBATCH_EXTRA (more args)
 #   TEST=1 runs `sbatch --test-only` on each job file instead of submitting. CAUTION (Perlmutter, 2026-11-06): --test-only answered "Job request does not match any supported
-#   policy" for job files that submit and run fine with a plain sbatch (dgchk_*, kpt222); so a test-only rejection is not conclusive: submit one job and check squeue.
+#   policy" for the same job header that submitted and ran fine with a plain sbatch (the dgchk_* jobs); so a test-only rejection is not conclusive: submit one job and check squeue.
 set -e; cd "$(dirname "$0")/.."; T=${TEMPLATE:?TEMPLATE=<your vasp template dir with INCAR KPOINTS POTCAR POSCAR>}; PY=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
 export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline
 RUNS=${RUNS:-"runs/pwidom_endmem_new_500GPa_5000K runs/pwidom_xh_seed11_500GPa_5000K"}; PROXY=${PROXY:-runs/pwidom_fit/proxy_ice.json}
