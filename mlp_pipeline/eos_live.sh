@@ -2,7 +2,8 @@
 # Quick liquid EOS scan with a live dashboard: one 17_eos_md.py process per volume, PER_GPU processes per GPU, all at once. Interactive GPU node, repo root.
 #   bash mlp_pipeline/eos_live.sh                                  H2O liquid, 7000 K, 16 volumes 6.0 -> 1.75 A^3/atom (~10-1000 GPa), 162 atoms, 0.25 ps premelt + 0.25 equil + 0.75 ps
 #   MODEL=grace-ft:runs/grace/ft_<run> T=7000 NV=16 VMAX=6.0 VMIN=1.75 PS=0.75 EQ=0.25 PER_GPU=4 NREP=3 bash mlp_pipeline/eos_live.sh
-# Dashboard (refreshed in place every REFRESH s, no screen clear): per volume a progress bar, stage, running T and P (+- block error), ms/step, ETA; per GPU utilisation and memory.
+# Dashboard (refreshed in place every REFRESH s, no screen clear): per volume a progress bar, stage, running T and P (+- block error), ms/step, ETA; per GPU utilisation and memory;
+# below it a plain-text P(V) plot (log P) that fills in as the runs progress (* running average, o finished liquid, x finished but the O sublattice froze).
 # At the end: P(V) table with T, D_O / D_H (cm^2/s; D_O ~ 1e-5 = liquid, ~0 = O lattice survived), O-sublattice label, and the measured MD throughput per GPU.
 # Outputs: runs/eos_live/<tag>/  (logs, 17_eos_md folders, <tag>.csv). A volume that is already in <tag>.csv is not rerun.
 set -u; cd "$(dirname "$0")/.."; PY=${PY:-$SCRATCH/grace-env/bin/python}; export PYTHONPATH=$PWD/mlp_pipeline TF_FORCE_GPU_ALLOW_GROWTH=true TF_CPP_MIN_LOG_LEVEL=2
@@ -51,6 +52,26 @@ def state(k):
     elif ("Traceback" in txt or "Error" in txt) and not alive(runs[k]["pid"]): st["stage"] = "FAILED: " + [l for l in txt.splitlines() if "Error" in l][-1][:60]
     elif not alive(runs[k]["pid"]) and "RESULT" not in txt: st["stage"] = "DIED (see log)"
     return st
+def pv_plot(pts, W=64, H=16, plo=5.0, phi=2000.0):
+    """plain-text P(V) plot: x = V/atom (linear), y = P (log, plo..phi GPa); pts = (vpa, P, mark): o finished liquid, x finished but frozen (D_O ~ 0), * running (current average)"""
+    vs = [r["vpa"] for r in runs.values()]; xlo, xhi = min(vs) - 0.1, max(vs) + 0.1; import math
+    g = [[" "] * W for _ in range(H)]
+    for v, P, m in pts:
+        c = int(round((v - xlo) / (xhi - xlo) * (W - 1)))
+        if P is None or P != P: continue
+        y = (math.log10(max(P, plo)) - math.log10(plo)) / (math.log10(phi) - math.log10(plo)); r = H - 1 - int(round(min(max(y, 0), 1) * (H - 1)))
+        if P < plo: m = "v"
+        if 0 <= c < W and (g[r][c] == " " or m in "ox"): g[r][c] = m
+    ticks = {H - 1 - int(round((math.log10(t) - math.log10(plo)) / (math.log10(phi) - math.log10(plo)) * (H - 1))): t for t in (10, 30, 100, 300, 1000)}
+    out = ["P (GPa, log) vs V/atom:  o done (liquid)   x done but O froze   * running (current mean)   v below 5 GPa"]
+    for r in range(H): out.append(f"{ticks.get(r, ''):>6} |" + "".join(g[r]))
+    out.append(" " * 7 + "+" + "-" * W)
+    lab = [" "] * (W + 3)
+    for v in (2, 3, 4, 5, 6):
+        c = int(round((v - xlo) / (xhi - xlo) * (W - 1)))
+        if 0 <= c < W: lab[c:c + 3] = list(f"{v:<3}")
+    out.append(" " * 8 + "".join(lab) + "  A^3/atom")
+    return out
 def gpus():
     try:
         o = subprocess.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout
@@ -59,12 +80,16 @@ def gpus():
 while True:
     out = [f"{TAG}   elapsed {time.time() - t0:5.0f} s   {gpus()}",
            f"{'k':>2s} {'gpu':>3s} {'vpa':>6s}  {'progress':22s} {'stage':10s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'ms/st':>5s} {'ETA':>6s}"]
-    done = 0
+    done = 0; pts = []
     for k in sorted(runs):
-        st = state(k); done += st["stage"] in ("DONE",) or st["stage"].startswith(("FAILED", "DIED"))
+        st = state(k)
+        if k in res: r = res[k]; pts.append((r["vpa"], r["P_GPa"], "x" if (r.get("D_O_cm2s") or 0) < 2e-6 else "o"))
+        elif st["P"]: pts.append((runs[k]["vpa"], float(st["P"]), "*"))
+        done += st["stage"] in ("DONE",) or st["stage"].startswith(("FAILED", "DIED"))
         bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
         out.append(f"{k:2d} {runs[k]['gpu']:>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {st['ms']:>5s} {st['eta']:>6s}"
                    + (f"   {st['stage'][10:]}" if len(st["stage"]) > 10 else ""))
+    out += [""] + pv_plot(pts)
     if lines_prev: sys.stdout.write(f"\x1b[{lines_prev}A")
     sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n"); sys.stdout.flush(); lines_prev = len(out)
     if done == len(runs): break
