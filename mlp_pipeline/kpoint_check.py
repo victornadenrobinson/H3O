@@ -10,7 +10,25 @@ Error bars: bootstrap over frames (few frames: indicative). Decision rule: |c_bi
 import argparse, collections, csv, glob, json, os
 import numpy as np
 ap = argparse.ArgumentParser(); ap.add_argument("--collect", action="store_true"); ap.add_argument("--dir", default="runs/kpt"); ap.add_argument("--boot", type=int, default=2000)
-ap.add_argument("--gamma-src", default="runs/dft_md_500.extxyz", help="DFT-MD frames the k-point geometries came from (Gamma forces / stress)"); ap.add_argument("--set", default="M500"); a = ap.parse_args()
+ap.add_argument("--gamma-src", default="runs/dft_md_500.extxyz", help="DFT-MD frames the k-point geometries came from (Gamma forces / stress)"); ap.add_argument("--set", default="M500")
+ap.add_argument("--time-ref", nargs="*", default=[], help="point directories of ordinary Gamma (vasp_gam) labels to time for comparison, e.g. runs/reweight_dft/points_0 (first 20 OUTCARs each)"); a = ap.parse_args()
+import re
+
+
+def timing(oc):
+    """elapsed s, SCF steps, irreducible k-points, total cores, atoms from an OUTCAR (None where not found)"""
+    t = dict(elapsed=None, scf=0, nkpts=None, cores=None, natoms=None)
+    try:
+        with open(oc, errors="ignore") as fh:
+            for l in fh:
+                if "Iteration" in l and "(" in l: t["scf"] += 1
+                elif "NKPTS =" in l and t["nkpts"] is None: m = re.search(r"NKPTS =\s*(\d+)", l); t["nkpts"] = int(m.group(1)) if m else None
+                elif "NIONS =" in l and t["natoms"] is None: m = re.search(r"NIONS =\s*(\d+)", l); t["natoms"] = int(m.group(1)) if m else None
+                elif t["cores"] is None and ("total cores" in l or "mpi-ranks" in l):         # VASP 5: "running on N total cores"; VASP 6: "running N mpi-ranks"
+                    m = re.search(r"running\s+on\s+(\d+)\s+total cores", l) or re.search(r"running\s+(\d+)\s+mpi-ranks", l); t["cores"] = int(m.group(1)) if m else None
+                elif "Elapsed time (sec):" in l: t["elapsed"] = float(l.split(":")[1])
+    except OSError: pass
+    return t
 GPA = 160.21766
 
 
@@ -47,9 +65,11 @@ if a.collect:
                     dF = fm - fg; frows.append(dict(mesh=mesh, key=r["kpt_key"], system=r["kpt_sys"], natoms=r["natoms"], dF_rms=float(np.sqrt((dF ** 2).mean())), F_rms=float(np.sqrt((fg ** 2).mean())),
                                                     dF_max=float(np.abs(dF).max()), dP_GPa=float(-(np.trace(sm) - np.trace(sg)) / 3 * GPA), dS_max_GPa=float(np.abs(sm - sg).max() * GPA)))
                 else: print(f"  {d}: atoms do not match the Gamma frame {i} of {a.gamma_src}: forces skipped")
-            rows.append(dict(mesh=mesh, key=r["kpt_key"], system=r["kpt_sys"], natoms=r["natoms"], E_mesh=E, E_gamma=float(r["E_gamma_eV"]), T_K=r.get("T_K", "")))
+            tm = timing(oc)
+            rows.append(dict(mesh=mesh, key=r["kpt_key"], system=r["kpt_sys"], natoms=r["natoms"], E_mesh=E, E_gamma=float(r["E_gamma_eV"]), T_K=r.get("T_K", ""),
+                             elapsed_s=tm["elapsed"], scf_steps=tm["scf"], nkpts=tm["nkpts"], cores=tm["cores"]))
     with open(fn, "w", newline="") as fh:                                  # closed (flushed) before the tables below read it back
-        w = csv.DictWriter(fh, fieldnames=["mesh", "key", "system", "natoms", "E_mesh", "E_gamma", "T_K"]); w.writeheader(); w.writerows(rows)
+        w = csv.DictWriter(fh, fieldnames=["mesh", "key", "system", "natoms", "E_mesh", "E_gamma", "T_K", "elapsed_s", "scf_steps", "nkpts", "cores"]); w.writeheader(); w.writerows(rows)
     print(f"{len(rows)} finished points -> {fn}")
     if frows:
         with open(os.path.join(a.dir, "forces.csv"), "w", newline="") as fh:
@@ -85,3 +105,23 @@ if os.path.exists(ff):
     for (m, s_), v in sorted(g.items()):
         f = lambda k: np.mean([float(x[k]) for x in v])
         print(f"  {m:5s} {s_:8s} {len(v):2d} {f('dF_rms'):12.3f} {100 * f('dF_rms') / f('F_rms'):8.1f}% {f('dF_max'):7.2f} {f('dP_GPa'):+8.2f} {f('dS_max_GPa'):14.2f}")
+tr = [r for r in rows if r.get("elapsed_s") not in (None, "", "None")]
+if tr:
+    print("timing per point (from the OUTCARs; core-s = elapsed x cores; per SCF step removes the effect of different SCF counts)")
+    print(f"  {'mesh':5s} {'system':8s} {'n':>2s} {'atoms':>5s} {'nkpts':>5s} {'cores':>5s} {'elapsed s':>10s} {'SCF':>5s} {'s/SCF':>7s}")
+    tg = collections.defaultdict(list)
+    for r in tr: tg[(r["mesh"], r["system"])].append(r)
+    per = {}
+    for (m, s_), v in sorted(tg.items()):
+        f = lambda k: np.mean([float(x[k]) for x in v if x.get(k) not in (None, "", "None")])
+        el, sc = f("elapsed_s"), f("scf_steps"); per[(m, s_)] = (el, el / sc if sc else float("nan"))
+        print(f"  {m:5s} {s_:8s} {len(v):2d} {v[0]['natoms']:>5s} {f('nkpts'):5.0f} {f('cores'):5.0f} {el:10.0f} {sc:5.0f} {el / sc if sc else float('nan'):7.1f}")
+    for s_ in ("H2O", "H2p25O", "pureH"):
+        if ("k111", s_) in per and ("k222", s_) in per:
+            print(f"  k222 / k111 (both vasp_std) {s_:8s}: elapsed x{per[('k222', s_)][0] / per[('k111', s_)][0]:.1f}, per SCF step x{per[('k222', s_)][1] / per[('k111', s_)][1]:.1f}")
+for d in a.time_ref:                                    # ordinary production Gamma labels (vasp_gam), for scale
+    ocs = sorted(glob.glob(os.path.join(d, "*", "OUTCAR")) + glob.glob(os.path.join(d, "*", "attempts", "*", "OUTCAR")))[:20]
+    ts = [timing(o) for o in ocs]; ts = [t for t in ts if t["elapsed"]]
+    if ts: print(f"  reference {d}: {len(ts)} OUTCARs, atoms {min(t['natoms'] or 0 for t in ts)}-{max(t['natoms'] or 0 for t in ts)}, cores {ts[0]['cores']}, nkpts {ts[0]['nkpts']}, "
+                 f"elapsed {np.mean([t['elapsed'] for t in ts]):.0f} s (median {np.median([t['elapsed'] for t in ts]):.0f}), SCF {np.mean([t['scf'] for t in ts]):.0f}, s/SCF {np.mean([t['elapsed'] / t['scf'] for t in ts if t['scf']]):.1f}")
+    else: print(f"  reference {d}: no finished OUTCARs with timing")
