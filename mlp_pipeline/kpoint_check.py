@@ -107,7 +107,7 @@ if os.path.exists(ff):
         print(f"  {m:5s} {s_:8s} {len(v):2d} {f('dF_rms'):12.3f} {100 * f('dF_rms') / f('F_rms'):8.1f}% {f('dF_max'):7.2f} {f('dP_GPa'):+8.2f} {f('dS_max_GPa'):14.2f}")
 tr = [r for r in rows if r.get("elapsed_s") not in (None, "", "None")]
 if tr:
-    print("timing per point (from the OUTCARs; core-s = elapsed x cores; per SCF step removes the effect of different SCF counts)")
+    print("timing per point (from the OUTCARs; s/SCF = elapsed per SCF step, which removes the effect of different SCF counts)")
     print(f"  {'mesh':5s} {'system':8s} {'n':>2s} {'atoms':>5s} {'nkpts':>5s} {'cores':>5s} {'elapsed s':>10s} {'SCF':>5s} {'s/SCF':>7s}")
     tg = collections.defaultdict(list)
     for r in tr: tg[(r["mesh"], r["system"])].append(r)
