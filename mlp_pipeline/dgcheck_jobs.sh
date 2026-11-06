@@ -10,7 +10,8 @@
 # env: RUNS (run dirs, default the two 500 GPa / 5000 K runs), PROXY, FRAMES (3), SEL (2), DEL (3), NDEL (2), NODES (jobs, 6), MINUTES (per job, 700), OUTD (runs/dgcheck), PY
 # EXE (vasp_gam): VASP executable; vasp_std for k-point meshes (kpt_relabel.sh)
 # slurm: ACCT (m3349), QOS (regular), CPT (cpus-per-task, 1 = the header of perlmutter_dft_pwidom.sbatch, which is known to submit), SBATCH_EXTRA (more args)
-#   TEST=1 runs `sbatch --test-only` on each job file instead of submitting (shows a policy rejection without queueing anything)
+#   TEST=1 runs `sbatch --test-only` on each job file instead of submitting. CAUTION (Perlmutter, 2026-11-06): --test-only answered "Job request does not match any supported
+#   policy" for job files that submit and run fine with a plain sbatch (dgchk_*, kpt222); so a test-only rejection is not conclusive: submit one job and check squeue.
 set -e; cd "$(dirname "$0")/.."; T=${TEMPLATE:?TEMPLATE=<your vasp template dir with INCAR KPOINTS POTCAR POSCAR>}; PY=${PY:-/pscratch/sd/v/victornr/grace-env/bin/python}
 export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline
 RUNS=${RUNS:-"runs/pwidom_endmem_new_500GPa_5000K runs/pwidom_xh_seed11_500GPa_5000K"}; PROXY=${PROXY:-runs/pwidom_fit/proxy_ice.json}
@@ -37,7 +38,7 @@ for ((j = 0; j < NODES; j++)); do
     'set -e; cd ${SLURM_SUBMIT_DIR:-.}; export PYTHONPATH=${PYTHONPATH:-}:$PWD/mlp_pipeline; export VASP_MODULE=${VASP_MODULE:-vasp/5.4.4-cpu}' \
     "bash mlp_pipeline/perlmutter_vasp_check.sh run $OUTD/points_$j --exe ${EXE:-vasp_gam} --ranks 32 --parallel 4 --minutes $MINUTES" > "$OUTD/job_$j.sbatch"
   echo "  job_$j: $(grep -c . "$OUTD/points_$j/dirs.txt") points -> $OUTD/job_$j.sbatch ($MINUTES min, 4 lanes x 32 ranks)"
-  if [ "${TEST:-0}" = 1 ]; then echo "    test-only: $(sbatch --test-only $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1 | tail -n 1)"
+  if [ "${TEST:-0}" = 1 ]; then echo "    test-only: $(sbatch --test-only $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1 | tr '\n' ' ')"
   elif [ "$SUBMIT" = 1 ]; then
     if out=$(sbatch --parsable $SBATCH_EXTRA "$OUTD/job_$j.sbatch" 2>&1); then echo "    submitted: $out"; ((nsub++)) || true
     else echo "    SBATCH FAILED: $out"; nfail=$((nfail + 1)); fi
