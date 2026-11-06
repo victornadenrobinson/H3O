@@ -253,10 +253,39 @@ def run_one(a, calc, vpa, tag):
                 for x, y, dd in zip(i_, j_, d_):
                     k_ = "".join(sorted(sym[x] + sym[y], reverse=True)); mins[k_] = min(mins.get(k_, 9.9), dd)
         contacts = dict(dmin_HH=round(mins.get("HH", 9.9), 3), dmin_OH=round(mins.get("OH", 9.9), 3), dmin_OO=round(mins.get("OO", 9.9), 3), frac_HH_below_0p5=round(ncl / max(nfr, 1), 3))
+    structure = {}
+    if len(pos) > 5:   # RDFs (Gaussian-smoothed) and coordination / species from every 2nd saved production frame; rdf.csv per volume
+        sym = np.array(at.get_chemical_symbols()); iO, iH = sym == "O", sym == "H"; V_ = at.get_volume(); rmax, dr = min(5.0, 0.49 * min(at.cell.lengths())), 0.01
+        edges = np.arange(0, rmax + dr, dr); hist = {k: np.zeros(len(edges) - 1) for k in ("OO", "OH", "HH")}; nf = 0
+        nOH, nHH, fH2, spec = [], [], [], np.zeros(6)
+        for P_ in pos[::2]:
+            fr = at.copy(); fr.positions = P_; i_, j_, d_ = neighbor_list("ijd", fr, rmax); nf += 1
+            si, sj = sym[i_], sym[j_]
+            for k, (x, y) in (("OO", ("O", "O")), ("OH", ("O", "H")), ("HH", ("H", "H"))):
+                m = (si == x) & (sj == y); hist[k] += np.histogram(d_[m], edges)[0]
+            if iO.any():
+                m = (si == "O") & (sj == "H") & (d_ < 1.2); cnt = np.bincount(i_[m], minlength=len(sym))[iO]; nOH.append(cnt.mean()); spec += np.bincount(np.minimum(cnt, 5), minlength=6)
+            if iH.any():
+                m = (si == "H") & (sj == "H"); nHH.append(np.sum(m & (d_ < 1.0)) / iH.sum())
+                nn = np.full(len(sym), -1); dn = np.full(len(sym), 9.9)       # mutual nearest H-H pairs closer than 0.85 A = H2-like
+                for a_, b_, dd in zip(i_[m], j_[m], d_[m]):
+                    if dd < dn[a_]: dn[a_], nn[a_] = dd, b_
+                hh = np.nonzero(iH)[0]; pair = [h for h in hh if nn[h] >= 0 and nn[nn[h]] == h and dn[h] < 0.85]; fH2.append(len(pair) / len(hh))
+        r = 0.5 * (edges[1:] + edges[:-1]); shell = 4 * np.pi * r ** 2 * dr; nO_, nH_ = int(iO.sum()), int(iH.sum())
+        norm = {"OO": nO_ * nO_ / V_, "OH": nO_ * nH_ / V_, "HH": nH_ * nH_ / V_}
+        g = {}
+        for k, h_ in hist.items():
+            if norm[k] > 0:
+                raw = h_ / (nf * shell * norm[k]); x = np.arange(-15, 16) * dr; ker = np.exp(-0.5 * (x / 0.03) ** 2); ker /= ker.sum(); g[k] = np.convolve(raw, ker, mode="same")
+        pd.DataFrame(dict(r_A=r, **{f"g_{k}": v for k, v in g.items()})).to_csv(os.path.join(d, "rdf.csv"), index=False)
+        pk = lambda k, lo, hi: float(r[(r > lo) & (r < hi)][np.argmax(g[k][(r > lo) & (r < hi)])]) if k in g else float("nan")
+        structure = dict(n_OH_1p2=float(np.mean(nOH)) if nOH else float("nan"), n_HH_1p0=float(np.mean(nHH)) if nHH else float("nan"), f_H2=float(np.mean(fH2)) if fH2 else float("nan"),
+                         r1_OH=pk("OH", 0.7, 1.4), r1_HH=pk("HH", 0.5, 1.6), r1_OO=pk("OO", 1.6, 3.2),
+                         **({f"fO_{n}H": float(spec[n] / spec.sum()) for n in range(6)} if spec.sum() else {}))
     drift = float(P_blocks[-1] - P_blocks[0]); drift_sig = float(np.std(P_blocks, ddof=1)) if len(P_blocks) > 1 else float("nan")
     row = dict(tag=tag, phase=a.phase, T_set=a.T, vpa=vpa, V=V, N=N, nO=nO, P_GPa=float(np.mean(P_blocks)), P_sem=float(np.std(P_blocks, ddof=1) / np.sqrt(5)),
                branch=a.branch, hper=a.hper, P_target=getattr(a, "p_target", float("nan")), T_mean=float(pr["T"].mean()), epot_per_atom=float(pr.epot.mean() / N), D_H_cm2s=msd.get("H", np.nan), D_O_cm2s=msd.get("O", np.nan),
-               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, **contacts, P_drift_GPa=drift, P_block_sd=drift_sig, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
+               msd_O_end=msd.get("msd_O_end", np.nan), msd_H_end=msd.get("msd_H_end", np.nan), **struct, **contacts, **structure, P_drift_GPa=drift, P_block_sd=drift_sig, ps=a.ps, hold_O_ps=a.hold_O_ps, ms_per_step=(time.time() - t0) / step[0] * 1000, thermostat=type(dyn).__name__)
     print("RESULT", {k: (float(f"{v:.5g}") if isinstance(v, float) else v) for k, v in row.items()}, flush=True)   # 5 significant digits (rounding to 4 decimals turned D ~1e-5 cm^2/s into 0)
     return row
 
