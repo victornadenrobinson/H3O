@@ -64,7 +64,7 @@ def alive(p):
     except OSError: return False
 def state(k):
     f = os.path.join(D, f"log_{k}.txt"); txt = open(f, errors="ignore").read() if os.path.exists(f) else ""
-    st = dict(stage="starting (TF/model load)", frac=0.0, T="", P="", Pe="", ms="", eta="")
+    st = dict(stage="loading", frac=0.0, T="", P="", Pe="", ms="", eta="")
     if "premelt" in txt: st["stage"] = "premelt"
     if "premelt done" in txt: st["stage"] = "equil"; st["frac"] = PM / (PM + EQ + PS)
     m = STEP.findall(txt)
@@ -118,6 +118,23 @@ def braille_plot(pts, cols=72, rows=18):
         x, y = X(math.log10(P)), Y(v); dd = np.array([-1, 0, 1]); gx, gy = np.meshgrid(dd, dd); cv.dots(x + gx.ravel(), y + gy.ravel(), col[m])
     leg = "  ".join(fg(PAL[col[m]], "● " + t) for m, t in (("+", "DFT"), ("o", "model done"), ("*", "model running"), ("x", "model, O froze")) if any(q[2] == m for q in good))
     return frame(cv, (xlo, xhi), (ylo, yhi), "log10 P (GPa)   [1 = 10, 2 = 100, 3 = 1000 GPa]", f"V per {NAME} (A^3)", f"{NAME} EOS at {TT} K: model vs DFT", legend=leg).split("\n")
+def proc_gpus():
+    """{pid: GPU index} from nvidia-smi (the GPU each MD process really runs on), {} if unavailable"""
+    try:
+        idx = {b.strip(): a.strip() for a, b in (l.split(",") for l in subprocess.run(["nvidia-smi", "--query-gpu=index,gpu_bus_id", "--format=csv,noheader"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines())}
+        apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_bus_id", "--format=csv,noheader"], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
+        return {int(a): idx.get(b.strip(), "?") for a, b in (l.split(",") for l in apps if l.strip())}
+    except Exception: return {}
+VIS = re.compile(r"\x1b\[[0-9;]*m")
+def fit(line, w):
+    """cut a line to w visible characters (ANSI colour codes do not count) so the terminal never wraps it (wrapping breaks the in-place refresh)"""
+    if len(VIS.sub("", line)) <= w: return line
+    out, n, i = "", 0, 0
+    while i < len(line) and n < w:
+        m = VIS.match(line, i)
+        if m: out += m.group(0); i = m.end(); continue
+        out += line[i]; n += 1; i += 1
+    return out + "\x1b[0m"
 def gpus():
     try:
         o = subprocess.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout
@@ -126,7 +143,7 @@ def gpus():
 while True:
     out = [f"{TAG}   elapsed {time.time() - t0:5.0f} s   {gpus()}",
            f"{'k':>2s} {'gpu':>3s} {'vpa':>6s}  {'progress':22s} {'stage':10s} {'T K':>6s} {'P GPa':>8s} {'+-':>5s} {'P_DFT':>7s} {'dP%':>6s} {'ms/st':>5s} {'ETA':>6s}"]
-    done = 0; pts = [(V, P, "+") for P, V in DFT]
+    done = 0; pts = [(V, P, "+") for P, V in DFT]; pg = proc_gpus()
     for k in sorted(runs):
         st = state(k)
         if k in res: r = res[k]; pts.append((FU * r["vpa"], r["P_GPa"], "x" if COMP != "h" and (r.get("D_O_cm2s") or 0) < 2e-6 else "o"))
@@ -135,10 +152,11 @@ while True:
         bar = "#" * int(20 * st["frac"]) + "." * (20 - int(20 * st["frac"]))
         pd_ = p_dft(FU * runs[k]["vpa"]); pn = res[k]["P_GPa"] if k in res else (float(st["P"]) if st["P"] else float("nan"))
         dps = f"{100 * (pn - pd_) / pd_:+6.1f}" if pd_ == pd_ and pn == pn else f"{'':>6s}"
-        out.append(f"{k:2d} {runs[k]['gpu']:>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
-                   + (f"   {st['stage'][10:]}" if len(st["stage"]) > 10 else ""))
+        out.append(f"{k:2d} {pg.get(runs[k]['pid'], runs[k]['gpu'] + '?' if pg else runs[k]['gpu']):>3s} {runs[k]['vpa']:6.3f}  [{bar}] {st['stage'][:10]:10s} {st['T']:>6s} {st['P']:>8s} {st['Pe']:>5s} {(f'{pd_:7.1f}' if pd_ == pd_ else f'{chr(45):>7s}')} {dps} {st['ms']:>5s} {st['eta']:>6s}"
+                   + (f"   {st['stage'][10:]}" if st["stage"].startswith(("FAILED", "DIED")) else ""))
     bp = braille_plot(pts) if os.environ.get("PLOT", "braille") == "braille" else None
     out += [""] + (bp or pv_plot(pts))
+    import shutil; tw = max(40, shutil.get_terminal_size((160, 50)).columns - 1); out = [fit(l, tw) for l in out]
     if lines_prev: sys.stdout.write(f"\x1b[{lines_prev}A")
     sys.stdout.write("\n".join(l + "\x1b[K" for l in out) + "\n"); sys.stdout.flush(); lines_prev = len(out)
     if done == len(runs): break
