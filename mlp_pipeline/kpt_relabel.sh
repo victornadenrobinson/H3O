@@ -13,7 +13,7 @@ mkdir -p $OUTD
 if [ ! -d $T ]; then
   cp -rL runs/kpt/template_k222 $T
   grep -viE "^\s*(KPAR|NPAR)\s*=" $T/INCAR > $T/INCAR.new || true
-  per=$((32 / KP)); nc=$(grep -iE "^\s*NCORE\s*=" $T/INCAR.new | head -1 | sed 's/.*=\s*//; s/[^0-9].*//')
+  per=$((32 / KP)); nc=$(grep -iE "^\s*NCORE\s*=" $T/INCAR.new | head -1 | sed -E 's/[#!].*//; s/^\s*NCORE\s*=\s*([0-9]+).*/\1/I')   # strip comments first (a comment can contain '=')
   if [ -n "$nc" ] && [ $((per % nc)) -ne 0 ]; then sed -i -E "s/^\s*NCORE\s*=.*/NCORE = $per/I" $T/INCAR.new; echo "NCORE $nc -> $per (must divide 32/KPAR)"; fi
   echo "KPAR = $KP" >> $T/INCAR.new; mv $T/INCAR.new $T/INCAR
 fi

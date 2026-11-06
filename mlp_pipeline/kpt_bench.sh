@@ -24,7 +24,7 @@ EOF
     kp=${v#*kpar}; mesh=${v%%_*}
     if [ "$mesh" = mp222 ]; then printf "MP 2x2x2 bench\n0\nMonkhorst-Pack\n2 2 2\n0 0 0\n" > $d/KPOINTS; fi
     grep -viE "^\s*(KPAR|NPAR)\s*=" $d/INCAR > $d/INCAR.new || true
-    nc=$(grep -iE "^\s*NCORE\s*=" $d/INCAR.new | head -1 | sed 's/.*=\s*//; s/[^0-9].*//'); per=$((32 / kp))
+    nc=$(grep -iE "^\s*NCORE\s*=" $d/INCAR.new | head -1 | sed -E 's/[#!].*//; s/^\s*NCORE\s*=\s*([0-9]+).*/\1/I'); per=$((32 / kp))   # comments stripped first (a comment can contain '=')
     if [ -n "$nc" ] && [ $((per % nc)) -ne 0 ]; then sed -i -E "s/^\s*NCORE\s*=.*/NCORE = $per/I" $d/INCAR.new; echo "  $v: NCORE $nc -> $per (must divide 32/KPAR)"; fi
     echo "KPAR = $kp" >> $d/INCAR.new; mv $d/INCAR.new $d/INCAR
     $PY mlp_pipeline/prepare_points.py $B/frames.extxyz --template $d --out $p --min-T 1000 | tail -n 1
