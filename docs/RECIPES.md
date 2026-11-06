@@ -51,6 +51,9 @@ Common keys: `model=` (a run name like `mfin_f_lr1e-2_e50` or a full `grace-ft:.
 `bash run.sh kpt n=300 outd=runs/kpt222mp submit=1`
 - MP 2x2x2 (4 k-points, 1.8x faster than Gamma-centred, as accurate), KPAR 1; keys `mesh` (mp222 | g222), `kpar`, `n`, `outd`, `nodes` (20), `minutes` (120), `submit`.
 - check before submitting: `python3 mlp_pipeline/kpt_sanity.py runs/kpt222mp runs/kpt222mp2 --ref runs/kpt222/frames.extxyz`.
+- after: collect `$PY mlp_pipeline/points_collect.py runs/kpt222mp/points_* runs/kpt222mp2/points_* --out runs/kpt222mp/labelled_mp222.extxyz --db-set K222`;
+  fit the correction `$PY mlp_pipeline/kpt_correct.py fit runs/kpt222mp/labelled_mp222.extxyz --gamma runs/kpt222/frames.extxyz` (residuals by group / composition, leave-one-group-out CV, dP consistency, coverage);
+  apply to tiers `$PY mlp_pipeline/kpt_correct.py apply runs/kpt222mp/kcorr.json runs/train_mfin.extxyz runs/valid_mfin.extxyz` (energy + stress shifted, forces unchanged, extrapolated frames counted).
 
 ## Not (yet) behind run.sh
 - PWidom chemical potentials: `mlp_pipeline/pwidom_states.sh` / `perlmutter_pwidom.sh` (headers and RUNNING.md).
