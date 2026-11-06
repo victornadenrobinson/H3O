@@ -14,9 +14,9 @@ Common keys: `model=` (a run name like `mfin_f_lr1e-2_e50` or a full `grace-ft:.
 - cells ~384 atoms (pure H 729); mixtures premelted at 9000 K for 0.25 ps; output `runs/eos_live/<model>_<comp>_<T>K_<N>at/`; finished volumes are skipped on rerun; flags FROZE / COLLAPSE / CLOSE-HH / T-off / P-drift; per volume `rdf.csv`, coordination, H2 fraction.
 
 ### eos_plot — all scans vs DFT (and French 2009 for H2O), P-T maps (login or GPU node, CPU only)
-`bash run.sh eos_plot T=7000`
+`bash run.sh eos_plot T=7000` (add `loglog=1` for log-log axes)
 - keys: `T`, `pmin` / `pmax`, `frames` (DFT-MD frames for the energy comparison; default train_mfin + valid_mfin).
-- writes `runs/eos_live/eos_all_<T>K_<model>.png` and `runs/eos_live/eos_maps_<model>.png`.
+- writes `runs/eos_live/eos_all_<T>K_<model>.png`, `runs/eos_live/eos_maps_<model>.png` and `eos_fits_<T>K_<model>.csv` (Vinet and BM3 fits per composition, least squares in log P, liquid points only; checks: monotonic, max residual > 3 %, K1 outside 2-10; over 10-1000 GPa Vinet is the form that works, BM3 misfits by ~2.5 % rms on synthetic Vinet data).
 
 ### tdi — full TDI free energy of one phase (GPU here, or one shared-GPU batch job)
 `bash run.sh tdi phase=fcc P=500 T=5000 hper=2 quad=gk17 npar=6 ps=2`

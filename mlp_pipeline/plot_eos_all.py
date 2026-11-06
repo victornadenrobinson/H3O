@@ -94,10 +94,43 @@ def french_isotherm(path, T):
     return np.array([(P, 18.015 / (rho * 0.60221)) for rho, P in pts])
 
 
+def vinet(V, V0, K0, K1):
+    x = (V / V0) ** (1 / 3); return 3 * K0 * (1 - x) / x ** 2 * np.exp(1.5 * (K1 - 1) * (1 - x))
+
+
+def bm3(V, V0, K0, K1):
+    f = (V0 / V) ** (2 / 3); return 1.5 * K0 * (f ** 3.5 - f ** 2.5) * (1 + 0.75 * (K1 - 4) * (f - 1))
+
+
+def fit_eos(V, P, Pe):
+    """Vinet and 3rd-order Birch-Murnaghan fits of P(V) at fixed T (V per formula unit), least squares in log P (relative residuals, so 10 GPa counts as much as 1000 GPa),
+    bounded (V0 > max V, K0 > 0, 1 < K1 < 15), several starting V0. Thermal pressure makes V0 / K0 effective parameters: the fits are smoothing / sanity tools.
+    Returns per form: params, rms / max % residual and where; plus monotonic (dP/dV < 0 everywhere)."""
+    from scipy.optimize import least_squares
+    V, P = np.asarray(V, float), np.asarray(P, float); o = np.argsort(V); V, P = V[o], P[o]
+    out = dict(monotonic=bool(np.all(np.diff(P) < 0)))
+    if (P <= 0).any(): out["note"] = "non-positive P left out of the log fit"
+    m = P > 0; V, P = V[m], P[m]
+    for name, f in (("vinet", vinet), ("bm3", bm3)):
+        best = None
+        for v0 in (1.2, 1.6, 2.5, 4.0):
+            for k1 in (4.0, 6.0):
+                try:
+                    r = least_squares(lambda q: np.log(np.maximum(f(V, *q), 1e-9)) - np.log(P), [V.max() * v0, max(P.min() / 2, 0.5), k1],
+                                      bounds=([V.max() * 1.0001, 1e-3, 1.0], [V.max() * 50, 1e5, 15.0]))
+                    if best is None or r.cost < best.cost: best = r
+                except Exception: pass
+        if best is None: out[name] = dict(error="no fit"); continue
+        res = 100 * (P - f(V, *best.x)) / P; k = int(np.argmax(np.abs(res)))
+        out[name] = dict(V0=float(best.x[0]), K0=float(best.x[1]), K1=float(best.x[2]), rms_pct=float(np.sqrt((res ** 2).mean())), max_pct=float(res[k]), at_P=float(P[k]))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("root", nargs="?", default="runs/eos_live"); ap.add_argument("--T", type=int, default=7000); ap.add_argument("--model", default="")
     ap.add_argument("--pmin", type=float, default=None); ap.add_argument("--pmax", type=float, default=None); ap.add_argument("-o", default=None)
     ap.add_argument("--lit", default="docs/data/french2009_h2o_eos.csv", help="H2O literature EOS (French et al. 2009, PBE DFT-MD); '' to leave out; interpolated linearly in T between isotherms")
+    ap.add_argument("--loglog", action="store_true", help="log P and log V axes (shows the whole 10-1000 GPa range evenly)")
     ap.add_argument("--dft-frames", nargs="*", default=[]); ap.add_argument("--dT", type=float, default=50.0)
     ap.add_argument("--all-runs", action="store_true", help="keep every run folder of a composition (default: only the run with the largest cell, e.g. not an old 162-atom test)"); a = ap.parse_args()
     data = {}
@@ -156,7 +189,33 @@ def main():
             if h and h > 2 and c in data: ax.plot(Pg, vw + (h - 2) * vh, "--", color=col, lw=1, alpha=0.8)
         ax.plot([], [], "--", color="gray", label="linear mix (model H$_2$O + H)")
     if a.pmin is not None or a.pmax is not None: ax.set_xlim(a.pmin, a.pmax)
-    ax.set_ylim(bottom=0); ax.set_ylabel("V (A$^3$ per formula unit)"); ax.grid(True, color="#eee"); ax.legend(fontsize=7, ncol=2, frameon=False); ax.set_title(f"{a.T} K: model (circles) vs DFT (squares)", loc="left")
+    fits = {}
+    print(f"\nEOS fits per composition (liquid points only; V per formula unit; Vinet and BM3; V0, K0 are effective at {a.T} K: thermal pressure is folded in):")
+    print(f"{'comp':6s} {'pts':>4s} {'form':6s} {'V0 A^3':>8s} {'K0 GPa':>8s} {'K1':>6s} {'rms %':>6s} {'max %':>7s} {'at P':>7s}  checks")
+    for (c, h, lab), col in zip(COMPS, COL):
+        pts = sorted([q for q in data.get(c, []) if not q["bad"]], key=lambda q: q["V"])
+        if len(pts) < 5: continue
+        F = fit_eos([q["V"] for q in pts], [q["P"] for q in pts], [q["Pe"] for q in pts]); fits[c] = F
+        for form in ("vinet", "bm3"):
+            d = F[form]
+            if "error" in d: print(f"{c:6s} {len(pts):4d} {form:6s}  fit failed: {d['error']}"); continue
+            chk = [] if F["monotonic"] else ["NOT MONOTONIC"]
+            if abs(d["max_pct"]) > 3: chk.append(f"outlier > 3 %")
+            if not (2 < d["K1"] < 10): chk.append("K1 unphysical")
+            print(f"{c:6s} {len(pts):4d} {form:6s} {d['V0']:8.2f} {d['K0']:8.1f} {d['K1']:6.2f} {d['rms_pct']:6.2f} {d['max_pct']:+7.2f} {d['at_P']:7.0f}  {', '.join(chk) or 'ok'}")
+        if "error" not in F["vinet"]:
+            Vg = np.linspace(min(q["V"] for q in pts), max(q["V"] for q in pts), 200); ax.plot(vinet(Vg, F["vinet"]["V0"], F["vinet"]["K0"], F["vinet"]["K1"]), Vg, ":", color=col, lw=1)
+    if fits:
+        with open(os.path.join(a.root, f"eos_fits_{a.T}K{('_' + a.model) if a.model else ''}.csv"), "w") as fh:
+            fh.write("comp,form,V0_A3_per_fu,K0_GPa,K1,rms_pct,max_pct,at_P_GPa,monotonic\n")
+            for c, F in fits.items():
+                for form in ("vinet", "bm3"):
+                    d = F[form]
+                    if "error" not in d: fh.write(f"{c},{form},{d['V0']:.4f},{d['K0']:.3f},{d['K1']:.4f},{d['rms_pct']:.3f},{d['max_pct']:.3f},{d['at_P']:.1f},{F['monotonic']}\n")
+        print(f"fit table: {os.path.join(a.root, f'eos_fits_{a.T}K' + (('_' + a.model) if a.model else '') + '.csv')}  (dotted lines in the plot: Vinet)")
+    if a.loglog: ax.set_xscale("log"); ax.set_yscale("log")
+    else: ax.set_ylim(bottom=0)
+    ax.set_ylabel("V (A$^3$ per formula unit)"); ax.grid(True, color="#eee"); ax.legend(fontsize=7, ncol=2, frameon=False); ax.set_title(f"{a.T} K: model (circles) vs DFT (squares)", loc="left")
     bx.axhline(0, color="gray", lw=0.8); bx.set_ylabel("P$_{model}$ - P$_{DFT}$ (%)"); bx.set_xlabel("P (GPa)"); bx.grid(True, color="#eee")
     if a.dft_frames: frame_compare(a, data, axs[2])
     out = a.o or os.path.join(a.root, f"eos_all_{a.T}K{('_' + a.model) if a.model else ''}.png")

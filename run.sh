@@ -27,7 +27,7 @@ eos)     # liquid / fluid EOS scans with the live dashboard (mlp_pipeline/eos_li
   run "MODEL=$MODEL COMP='$(g comp h2o)' T=$(g T 7000) NV=$(g nv 16) ${K[vmax]:+VMAX=${K[vmax]}} ${K[vmin]:+VMIN=${K[vmin]}} ${K[ps]:+PS=${K[ps]}} ${K[eq]:+EQ=${K[eq]}} PER_GPU=$(g per_gpu 4) PY=$PYP bash mlp_pipeline/eos_live.sh";;
 
 eos_plot) # all EOS scans vs DFT (+ French 2009 for H2O) and the P-T maps
-  run "$PYP mlp_pipeline/plot_eos_all.py --T $(g T 7000) --model $(basename ${MODEL#*:}) ${K[pmin]:+--pmin ${K[pmin]}} ${K[pmax]:+--pmax ${K[pmax]}} --dft-frames $(g frames 'runs/train_mfin.extxyz runs/valid_mfin.extxyz')"
+  run "$PYP mlp_pipeline/plot_eos_all.py --T $(g T 7000) --model $(basename ${MODEL#*:}) ${K[pmin]:+--pmin ${K[pmin]}} ${K[pmax]:+--pmax ${K[pmax]}} ${K[loglog]:+--loglog} --dft-frames $(g frames 'runs/train_mfin.extxyz runs/valid_mfin.extxyz')"
   run "$PYP mlp_pipeline/plot_eos_maps.py --model $(basename ${MODEL#*:}) --dft-frames $(g frames 'runs/train_mfin.extxyz runs/valid_mfin.extxyz')";;
 
 tdi)     # full TDI free energy of one phase (mlp_pipeline/young_tdi_par.sh): lambda values as processes on ONE GPU
